@@ -7,6 +7,7 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, 
 pub enum Error {
     NotFound = 404,
     Unauthorized = 401,
+    InvalidStatus = 400,
 }
 
 #[contracttype]
@@ -83,9 +84,17 @@ impl SubscriptionVault {
     }
 
     /// Billing engine (backend) calls this to charge one interval. Deducts from vault, pays merchant.
-    pub fn charge_subscription(_env: Env, _subscription_id: u32) -> Result<(), Error> {
+    pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
         // TODO: require_caller admin or authorized billing service
-        // TODO: load subscription, check interval and balance, transfer to merchant, update last_payment_timestamp and prepaid_balance
+        
+        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
+        
+        if sub.status == SubscriptionStatus::Paused {
+            return Err(Error::InvalidStatus);
+        }
+
+        // TODO: check interval and balance, transfer to merchant, update last_payment_timestamp and prepaid_balance
+        let _ = (env, sub);
         Ok(())
     }
 
@@ -96,8 +105,14 @@ impl SubscriptionVault {
         authorizer: Address,
     ) -> Result<(), Error> {
         authorizer.require_auth();
-        // TODO: load subscription, set status Cancelled, allow withdraw of prepaid_balance
-        let _ = (env, subscription_id);
+        
+        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
+
+        sub.status = SubscriptionStatus::Cancelled;
+        env.storage().instance().set(&subscription_id, &sub);
         Ok(())
     }
 
@@ -108,8 +123,40 @@ impl SubscriptionVault {
         authorizer: Address,
     ) -> Result<(), Error> {
         authorizer.require_auth();
-        // TODO: load subscription, set status Paused
-        let _ = (env, subscription_id);
+        
+        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
+
+        if sub.status != SubscriptionStatus::Active {
+            return Err(Error::InvalidStatus); // Only active subscriptions can be paused
+        }
+
+        sub.status = SubscriptionStatus::Paused;
+        env.storage().instance().set(&subscription_id, &sub);
+        Ok(())
+    }
+
+    /// Resume a paused subscription.
+    pub fn resume_subscription(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
+        authorizer.require_auth();
+
+        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
+
+        if sub.status != SubscriptionStatus::Paused {
+            return Err(Error::InvalidStatus); // Only paused subscriptions can be resumed
+        }
+
+        sub.status = SubscriptionStatus::Active;
+        env.storage().instance().set(&subscription_id, &sub);
         Ok(())
     }
 
