@@ -7,6 +7,7 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, 
 pub enum Error {
     NotFound = 404,
     Unauthorized = 401,
+    BelowMinimumTopup = 402,
 }
 
 #[contracttype]
@@ -37,10 +38,31 @@ pub struct SubscriptionVault;
 #[contractimpl]
 impl SubscriptionVault {
     /// Initialize the contract (e.g. set token and admin). Extend as needed.
-    pub fn init(env: Env, token: Address, admin: Address) -> Result<(), Error> {
+    pub fn init(env: Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
         env.storage().instance().set(&Symbol::new(&env, "token"), &token);
         env.storage().instance().set(&Symbol::new(&env, "admin"), &admin);
+        env.storage().instance().set(&Symbol::new(&env, "min_topup"), &min_topup);
         Ok(())
+    }
+
+    /// Update the minimum top-up threshold. Only callable by admin.
+    /// 
+    /// # Arguments
+    /// * `min_topup` - Minimum amount (in token base units) required for deposit_funds.
+    ///                 Prevents inefficient micro-deposits. Typical range: 1-10 USDC (1_000000 - 10_000000 for 6 decimals).
+    pub fn set_min_topup(env: Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&Symbol::new(&env, "admin")).ok_or(Error::NotFound)?;
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+        env.storage().instance().set(&Symbol::new(&env, "min_topup"), &min_topup);
+        Ok(())
+    }
+
+    /// Get the current minimum top-up threshold.
+    pub fn get_min_topup(env: Env) -> Result<i128, Error> {
+        env.storage().instance().get(&Symbol::new(&env, "min_topup")).ok_or(Error::NotFound)
     }
 
     /// Create a new subscription. Caller deposits initial USDC; contract stores agreement.
@@ -70,6 +92,11 @@ impl SubscriptionVault {
     }
 
     /// Subscriber deposits more USDC into their vault for this subscription.
+    /// 
+    /// # Minimum top-up enforcement
+    /// Rejects deposits below the configured minimum threshold to prevent inefficient
+    /// micro-transactions that waste gas and complicate accounting. The minimum is set
+    /// globally at contract initialization and adjustable by admin via `set_min_topup`.
     pub fn deposit_funds(
         env: Env,
         subscription_id: u32,
@@ -77,6 +104,12 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         subscriber.require_auth();
+        
+        let min_topup: i128 = env.storage().instance().get(&Symbol::new(&env, "min_topup")).ok_or(Error::NotFound)?;
+        if amount < min_topup {
+            return Err(Error::BelowMinimumTopup);
+        }
+        
         // TODO: transfer USDC from subscriber, increase prepaid_balance for subscription_id
         let _ = (env, subscription_id, amount);
         Ok(())

@@ -1,13 +1,11 @@
 {
   "generators": {
-    "address": 3,
+    "address": 4,
     "nonce": 0
   },
   "auth": [
     [],
-
     [],
-
     []
   ],
   "ledger": {
@@ -53,7 +51,6 @@
                       },
                       {
                         "key": {
-
                           "symbol": "min_topup"
                         },
                         "val": {
@@ -65,7 +62,6 @@
                       },
                       {
                         "key": {
-
                           "symbol": "token"
                         },
                         "val": {
