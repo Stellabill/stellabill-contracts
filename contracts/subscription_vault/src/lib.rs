@@ -10,6 +10,9 @@ pub enum Error {
     BelowMinimumTopup = 402,
     /// Charge attempt was made after the subscription's expiration timestamp.
     SubscriptionExpired = 410,
+    /// The contract has allocated [`MAX_SUBSCRIPTION_ID`] subscriptions and
+    /// cannot issue any more IDs. This prevents `u32` counter overflow.
+    SubscriptionLimitReached = 429,
 }
 
 #[contracttype]
@@ -36,6 +39,15 @@ pub struct Subscription {
     /// `None` means the subscription has no fixed end date and runs indefinitely.
     pub expiration: Option<u64>,
 }
+
+/// Maximum subscription ID this contract will ever allocate.
+///
+/// The internal counter is a `u32`. When the counter reaches this value
+/// [`SubscriptionVault::create_subscription`] returns
+/// [`Error::SubscriptionLimitReached`] instead of wrapping or panicking.
+/// This equals `u32::MAX` (4 294 967 295), providing a practical lifetime
+/// limit that no real deployment will ever approach.
+pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 
 #[contract]
 pub struct SubscriptionVault;
@@ -75,6 +87,10 @@ impl SubscriptionVault {
     /// # Arguments
     /// * `expiration` - Optional Unix timestamp (seconds). If `Some(ts)`, charges are blocked
     ///                  at or after `ts`. Pass `None` for an open-ended subscription.
+    ///
+    /// # Errors
+    /// Returns [`Error::SubscriptionLimitReached`] if the contract has already allocated
+    /// [`MAX_SUBSCRIPTION_ID`] subscriptions and can issue no more unique IDs.
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -85,6 +101,8 @@ impl SubscriptionVault {
         expiration: Option<u64>,
     ) -> Result<u32, Error> {
         subscriber.require_auth();
+        // Allocate a unique ID before touching any other state to fail fast.
+        let id = Self::_next_id(&env)?;
         // TODO: transfer initial deposit from subscriber to contract, then store subscription
         let sub = Subscription {
             subscriber: subscriber.clone(),
@@ -97,7 +115,6 @@ impl SubscriptionVault {
             usage_enabled,
             expiration,
         };
-        let id = Self::_next_id(&env);
         env.storage().instance().set(&id, &sub);
         Ok(id)
     }
@@ -195,11 +212,40 @@ impl SubscriptionVault {
             .ok_or(Error::NotFound)
     }
 
-    fn _next_id(env: &Env) -> u32 {
+    /// Return the total number of subscriptions ever created (i.e. the next ID that
+    /// would be allocated). This is a free storage read useful for off-chain indexers
+    /// and monitoring.
+    ///
+    /// Returns `0` before any subscription has been created.
+    pub fn get_subscription_count(env: Env) -> u32 {
+        let key = Symbol::new(&env, "next_id");
+        env.storage().instance().get(&key).unwrap_or(0u32)
+    }
+
+    /// Allocate the next unique subscription ID.
+    ///
+    /// # Guarantees
+    /// - IDs start at `0` and increment by exactly `1` on each successful call.
+    /// - IDs are **never reused**: the counter only moves forward.
+    /// - IDs are **bounded**: when the counter reaches [`MAX_SUBSCRIPTION_ID`]
+    ///   this function returns [`Error::SubscriptionLimitReached`] instead of
+    ///   wrapping or panicking.
+    ///
+    /// # Errors
+    /// [`Error::SubscriptionLimitReached`] — counter is at [`MAX_SUBSCRIPTION_ID`].
+    fn _next_id(env: &Env) -> Result<u32, Error> {
         let key = Symbol::new(env, "next_id");
-        let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-        env.storage().instance().set(&key, &(id + 1));
-        id
+        let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
+
+        // Guard: refuse to allocate when we are already at the ceiling.
+        // This makes the subsequent +1 infallible (current < u32::MAX).
+        if current == MAX_SUBSCRIPTION_ID {
+            return Err(Error::SubscriptionLimitReached);
+        }
+
+        // Safe: current < MAX_SUBSCRIPTION_ID == u32::MAX, so current + 1 cannot overflow.
+        env.storage().instance().set(&key, &(current + 1));
+        Ok(current)
     }
 }
 
