@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 3,
+    "address": 4,
     "nonce": 0
   },
   "auth": [
@@ -56,7 +56,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 1000000
+                            "lo": 5000000
                           }
                         }
                       },
