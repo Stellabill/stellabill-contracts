@@ -686,7 +686,7 @@ fn test_immediate_retry_at_same_timestamp_rejected() {
 
     // Retry at the same timestamp — must fail, storage stays at t1.
     let res = client.try_charge_subscription(&id);
-    assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
+    assert_eq!(res, Err(Ok(Error::Replay)));
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, t1);
@@ -711,7 +711,7 @@ fn test_repeated_charges_across_many_intervals() {
 
     // One more attempt without advancing time — must fail.
     let res = client.try_charge_subscription(&id);
-    assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
+    assert_eq!(res, Err(Ok(Error::Replay)));
 }
 
 /// Minimum interval (1 second): charge at creation time must fail,

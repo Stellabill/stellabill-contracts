@@ -5,6 +5,14 @@
 
 use soroban_sdk::{contracterror, contracttype, Address};
 
+/// Storage keys for secondary indices.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// Maps a merchant address to its list of subscription IDs.
+    MerchantSubs(Address),
+}
+
 #[contracterror]
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -21,6 +29,10 @@ pub enum Error {
     Overflow = 403,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
+    /// Replay: charge for this billing period or idempotency key already processed.
+    Replay = 1004,
+    /// One-off or other operation used an invalid amount (e.g. non-positive).
+    InvalidAmount = 1005,
 }
 
 impl Error {
@@ -35,6 +47,8 @@ impl Error {
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
             Error::InsufficientBalance => 1003,
+            Error::Replay => 1004,
+            Error::InvalidAmount => 1005,
         }
     }
 }
@@ -100,4 +114,69 @@ pub struct Subscription {
     pub status: SubscriptionStatus,
     pub prepaid_balance: i128,
     pub usage_enabled: bool,
+}
+
+// Event types
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCreatedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FundsDepositedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelledEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub refund_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantWithdrawalEvent {
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Emitted when a merchant-initiated one-off charge is applied to a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OneOffChargedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
 }
