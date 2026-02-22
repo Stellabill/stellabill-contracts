@@ -1188,7 +1188,8 @@ fn prop_balance_conservation_after_charge() {
         let delay = rng.next_u64_in(0, interval); // advance by interval + delay
         let now = t0 + interval + delay;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         client.charge_subscription(&id);
@@ -1218,7 +1219,8 @@ fn prop_no_double_charge_same_timestamp() {
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
         let now = t0 + interval; // exactly at the boundary
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         // First charge must succeed.
@@ -1264,7 +1266,8 @@ fn prop_status_becomes_insufficient_when_balance_low() {
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
         let now = t0 + interval;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         let result = client.try_charge_subscription(&id);
@@ -1292,7 +1295,8 @@ fn prop_status_stays_active_after_successful_charge() {
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
         let now = t0 + interval;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         client.charge_subscription(&id);
@@ -1325,7 +1329,8 @@ fn prop_timestamp_set_to_current_after_charge() {
         let extra = rng.next_u64_in(0, interval);
         let now = t0 + interval + extra;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         client.charge_subscription(&id);
@@ -1369,7 +1374,8 @@ fn prop_non_active_status_always_rejects_charge() {
         assert_eq!(
             result,
             Err(Ok(Error::NotActive)),
-            "P-06 iter {i}: expected NotActive for status {:?}", status
+            "P-06 iter {i}: expected NotActive for status {:?}",
+            status
         );
 
         // Storage must be completely unchanged.
@@ -1402,7 +1408,8 @@ fn prop_interval_guard_rejects_early_charge() {
         let amount = rng.next_i128_in(1, 1_000_000_000);
         let balance = amount * 100; // balance is never the limiting factor
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         let result = client.try_charge_subscription(&id);
@@ -1449,7 +1456,8 @@ fn prop_overflow_protection_timestamp_addition() {
         // now can be anything — the overflow is caught before the comparison.
         let now = rng.next_u64_in(0, u64::MAX / 2);
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         let result = client.try_charge_subscription(&id);
@@ -1488,7 +1496,8 @@ fn prop_balance_never_goes_negative_after_charge() {
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
         let now = t0 + interval;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         client.charge_subscription(&id);
@@ -1519,7 +1528,8 @@ fn prop_state_machine_only_makes_valid_transitions() {
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
         let now = t0 + interval;
 
-        let (env, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
         env.ledger().set_timestamp(now);
 
         let status_before = client.get_subscription(&id).status;
@@ -1595,7 +1605,11 @@ fn prop_batch_isolation_failure_does_not_contaminate() {
         env.ledger().set_timestamp(T0 + INTERVAL);
         let results = client.batch_charge(&ids);
 
-        assert_eq!(results.len() as usize, batch_size, "P-11 iter {i}: result count mismatch");
+        assert_eq!(
+            results.len() as usize,
+            batch_size,
+            "P-11 iter {i}: result count mismatch"
+        );
 
         for j in 0..batch_size {
             let res = results.get(j as u32).unwrap();
@@ -1648,7 +1662,8 @@ fn prop_estimate_topup_always_non_negative() {
         let interval = rng.next_u64_in(1, 86400);
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
 
-        let (_, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (_, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
 
         let topup = client.estimate_topup_for_intervals(&id, &num_intervals);
         assert!(
@@ -1675,7 +1690,8 @@ fn prop_estimate_topup_zero_when_balance_covers() {
         let interval = rng.next_u64_in(1, 86400);
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
 
-        let (_, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (_, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
 
         let topup = client.estimate_topup_for_intervals(&id, &num_intervals);
         assert_eq!(
@@ -1708,7 +1724,8 @@ fn prop_estimate_topup_equals_shortfall() {
         let interval = rng.next_u64_in(1, 86400);
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
 
-        let (_, client, id) = setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
+        let (_, client, id) =
+            setup_property_env(amount, balance, interval, t0, SubscriptionStatus::Active);
 
         let topup = client.estimate_topup_for_intervals(&id, &num_intervals);
         assert_eq!(
@@ -1736,7 +1753,13 @@ fn prop_multi_charge_cumulative_balance_reduction() {
         let interval = rng.next_u64_in(1, 86400);
         let t0 = rng.next_u64_in(1, u64::MAX / 4);
 
-        let (env, client, id) = setup_property_env(amount, initial_balance, interval, t0, SubscriptionStatus::Active);
+        let (env, client, id) = setup_property_env(
+            amount,
+            initial_balance,
+            interval,
+            t0,
+            SubscriptionStatus::Active,
+        );
 
         for charge_num in 1..=num_charges {
             let charge_time = t0 + charge_num as u64 * interval;
