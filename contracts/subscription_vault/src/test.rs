@@ -607,7 +607,10 @@ fn test_subscription_serialization_round_trip_all_statuses() {
         assert_eq!(decoded.merchant, original.merchant);
         assert_eq!(decoded.amount, original.amount);
         assert_eq!(decoded.interval_seconds, original.interval_seconds);
-        assert_eq!(decoded.last_payment_timestamp, original.last_payment_timestamp);
+        assert_eq!(
+            decoded.last_payment_timestamp,
+            original.last_payment_timestamp
+        );
         assert_eq!(decoded.status, original.status);
         assert_eq!(decoded.prepaid_balance, original.prepaid_balance);
         assert_eq!(decoded.usage_enabled, original.usage_enabled);
