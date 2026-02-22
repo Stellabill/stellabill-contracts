@@ -1729,3 +1729,131 @@ fn test_batch_charge_result_indices_match_input_order() {
     assert!(results.get(1).unwrap().success); // id0
     assert!(!results.get(2).unwrap().success); // id1
 }
+
+
+
+
+// =============================================================================
+// Batch Withdraw Merchant Funds Tests (Issue #34)
+// =============================================================================
+
+#[test]
+fn test_batch_withdraw_empty_list_returns_empty() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn test_batch_withdraw_single_valid_amount() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(1_000_000i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 1);
+    assert!(results.get(0).unwrap().success);
+    assert_eq!(results.get(0).unwrap().error_code, 0);
+}
+
+#[test]
+fn test_batch_withdraw_multiple_valid_amounts() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(1_000_000i128);
+    amounts.push_back(2_000_000i128);
+    amounts.push_back(3_000_000i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 3);
+    for i in 0..3 {
+        assert!(results.get(i).unwrap().success);
+        assert_eq!(results.get(i).unwrap().error_code, 0);
+    }
+}
+
+#[test]
+fn test_batch_withdraw_zero_amount_fails() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(0i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 1);
+    assert!(!results.get(0).unwrap().success);
+}
+
+#[test]
+fn test_batch_withdraw_negative_amount_fails() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(-1_000_000i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 1);
+    assert!(!results.get(0).unwrap().success);
+}
+
+#[test]
+fn test_batch_withdraw_mixed_valid_and_invalid_amounts() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(1_000_000i128);
+    amounts.push_back(0i128);
+    amounts.push_back(2_000_000i128);
+    amounts.push_back(-1i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 4);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success);
+    assert!(results.get(2).unwrap().success);
+    assert!(!results.get(3).unwrap().success);
+}
+
+#[test]
+fn test_batch_withdraw_result_order_matches_input() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(5_000_000i128);
+    amounts.push_back(0i128);
+    amounts.push_back(3_000_000i128);
+    let results = client.batch_withdraw_merchant_funds(&merchant, &amounts);
+    assert_eq!(results.len(), 3);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success);
+    assert!(results.get(2).unwrap().success);
+}
+
+#[test]
+#[should_panic]
+fn test_batch_withdraw_requires_merchant_auth() {
+    let env = Env::default();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    env.mock_all_auths();
+    client.init(&token, &admin, &1_000_000i128);
+
+    let merchant = Address::generate(&env);
+    let wrong = Address::generate(&env);
+
+    let mut amounts: SorobanVec<i128> = SorobanVec::new(&env);
+    amounts.push_back(1_000_000i128);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &wrong,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "batch_withdraw_merchant_funds",
+            args: (&merchant, amounts.clone()).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.batch_withdraw_merchant_funds(&merchant, &amounts);
+}
