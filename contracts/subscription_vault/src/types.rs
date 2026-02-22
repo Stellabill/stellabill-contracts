@@ -154,4 +154,12 @@ pub struct SubscriptionResumedEvent {
 pub struct MerchantWithdrawalEvent {
     pub merchant: Address,
     pub amount: i128,
+/// Result of a single withdrawal in a batch merchant withdrawal.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BatchWithdrawResult {
+    /// True if the withdrawal succeeded.
+    pub success: bool,
+    /// If success is false, the error code; otherwise 0.
+    pub error_code: u32,
 }
