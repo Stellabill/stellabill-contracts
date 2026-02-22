@@ -6,6 +6,18 @@ use crate::charge_core::charge_one;
 use crate::types::{BatchChargeResult, Error};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
+/// Returns the USDC token address stored during `init`.
+///
+/// # Errors
+///
+/// Returns `Error::NotFound` if the contract has not been initialized.
+pub fn get_token(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "token"))
+        .ok_or(Error::NotFound)
+}
+
 pub fn do_init(
     env: &Env,
     token: Address,

@@ -2,12 +2,12 @@
 //!
 //! **PRs that only change subscription lifecycle or billing should edit this file only.**
 
-use crate::admin::require_admin;
+use crate::admin::{get_token, require_admin};
 use crate::charge_core::charge_one;
 use crate::queries::get_subscription;
 use crate::state_machine::validate_status_transition;
 use crate::types::{Error, Subscription, SubscriptionStatus};
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{token, Address, Env, Symbol};
 
 pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
@@ -46,6 +46,7 @@ pub fn do_deposit_funds(
     subscriber: Address,
     amount: i128,
 ) -> Result<(), Error> {
+    // Invariant 2: no tokens move without require_auth() from the subscriber.
     subscriber.require_auth();
 
     let min_topup: i128 = crate::admin::get_min_topup(env)?;
@@ -54,10 +55,37 @@ pub fn do_deposit_funds(
     }
 
     let mut sub = get_subscription(env, subscription_id)?;
+
+    // Cancelled is a terminal state. Deposits are not permitted once a
+    // subscription has been permanently terminated.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+
+    // Transfer USDC from the subscriber's wallet to this vault contract.
+    // If the transfer fails (e.g. insufficient allowance or token balance),
+    // the entire transaction rolls back atomically, ensuring prepaid_balance
+    // is never incremented without the corresponding USDC movement.
+    let token_addr = get_token(env)?;
+    let token_client = token::Client::new(env, &token_addr);
+    token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
+
+    // Invariant 1: overflow-safe balance increment.
+    // prepaid_balance must always equal the sum of successful deposits minus
+    // fees charged via charge_subscription.
     sub.prepaid_balance = sub
         .prepaid_balance
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
+
+    // Auto-reactivate subscriptions that were suspended due to insufficient
+    // funds. This removes the need for a manual resume_subscription call
+    // after a successful top-up.
+    if sub.status == SubscriptionStatus::InsufficientBalance {
+        validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
+        sub.status = SubscriptionStatus::Active;
+    }
+
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())
 }
