@@ -66,3 +66,30 @@ pub fn do_charge_subscription(env: &Env, subscription_id: u32) -> Result<(), Err
     admin.require_auth();
     charge_one(env, subscription_id)
 }
+
+pub fn do_cancel_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+    authorizer.require_auth();
+    let mut sub = get_subscription(env, subscription_id)?;
+    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+    sub.status = SubscriptionStatus::Cancelled;
+    env.storage().instance().set(&subscription_id, &sub);
+    Ok(())
+}
+
+pub fn do_pause_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+    authorizer.require_auth();
+    let mut sub = get_subscription(env, subscription_id)?;
+    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
+    sub.status = SubscriptionStatus::Paused;
+    env.storage().instance().set(&subscription_id, &sub);
+    Ok(())
+}
+
+pub fn do_resume_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+    authorizer.require_auth();
+    let mut sub = get_subscription(env, subscription_id)?;
+    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
+    sub.status = SubscriptionStatus::Active;
+    env.storage().instance().set(&subscription_id, &sub);
+    Ok(())
+}

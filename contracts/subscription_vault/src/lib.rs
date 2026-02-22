@@ -6,18 +6,13 @@ mod queries;
 mod state_machine;
 mod subscription;
 mod types;
-
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
-
+use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
-pub use types::{BatchWithdrawResult, 
-    BatchChargeResult, Error, FundsDepositedEvent, MerchantWithdrawalEvent, Subscription,
-    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+pub use types::{
+    BatchChargeResult, BatchWithdrawResult, Error, FundsDepositedEvent, MerchantWithdrawalEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus,
 };
-
-pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
-pub use types::{BatchWithdrawResult, BatchChargeResult, BatchWithdrawResult, Error, Subscription, SubscriptionStatus};
 #[contract]
 pub struct SubscriptionVault;
 #[contractimpl]
@@ -40,12 +35,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
     ) -> Result<u32, Error> {
         subscription::do_create_subscription(
-            &env,
-            subscriber,
-            merchant,
-            amount,
-            interval_seconds,
-            usage_enabled,
+            &env, subscriber, merchant, amount, interval_seconds, usage_enabled,
         )
     }
     pub fn deposit_funds(
@@ -77,83 +67,21 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        authorizer.require_auth();
-        let mut sub: Subscription = env
-            .storage()
-            .instance()
-            .get(&subscription_id)
-            .ok_or(Error::NotFound)?;
-
-        validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-
-        let refund = sub.prepaid_balance;
-        sub.status = SubscriptionStatus::Cancelled;
-        env.storage().instance().set(&subscription_id, &sub);
-
-        env.events().publish(
-            (symbol_short!("cancelled"),),
-            SubscriptionCancelledEvent {
-                subscription_id,
-                authorizer,
-                refund_amount: refund,
-            },
-        );
-
-        Ok(())
+        subscription::do_cancel_subscription(&env, authorizer, subscription_id)
     }
     pub fn pause_subscription(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        authorizer.require_auth();
-        let mut sub: Subscription = env
-            .storage()
-            .instance()
-            .get(&subscription_id)
-            .ok_or(Error::NotFound)?;
-
-        validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
-
-        sub.status = SubscriptionStatus::Paused;
-        env.storage().instance().set(&subscription_id, &sub);
-
-        env.events().publish(
-            (symbol_short!("paused"),),
-            SubscriptionPausedEvent {
-                subscription_id,
-                authorizer,
-            },
-        );
-
-        Ok(())
+        subscription::do_pause_subscription(&env, authorizer, subscription_id)
     }
     pub fn resume_subscription(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        authorizer.require_auth();
-        let mut sub: Subscription = env
-            .storage()
-            .instance()
-            .get(&subscription_id)
-            .ok_or(Error::NotFound)?;
-
-        validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-
-        sub.status = SubscriptionStatus::Active;
-        env.storage().instance().set(&subscription_id, &sub);
-
-        env.events().publish(
-            (symbol_short!("resumed"),),
-            SubscriptionResumedEvent {
-                subscription_id,
-                authorizer,
-            },
-        );
-
-        Ok(())
+        subscription::do_resume_subscription(&env, authorizer, subscription_id)
     }
     pub fn withdraw_merchant_funds(
         env: Env,
