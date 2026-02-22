@@ -1,20 +1,9 @@
 use crate::{
-    can_transition, get_allowed_transitions, validate_status_transition, Error,
-    FundsDepositedEvent, MerchantWithdrawalEvent, Subscription, SubscriptionCancelledEvent,
-    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
-    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    can_transition, get_allowed_transitions, validate_status_transition, Error, Subscription,
+    SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
-use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{symbol_short, vec as soroban_vec, Address, Env, IntoVal, TryFromVal, Val, Vec};
-
-// ---------------------------------------------------------------------------
-// Helper: decode the event data payload (3rd element of event tuple)
-// ---------------------------------------------------------------------------
-fn last_event_data<T: TryFromVal<Env, Val>>(env: &Env) -> T {
-    let events = env.events().all();
-    let last = events.last().unwrap();
-    T::try_from_val(env, &last.2).unwrap()
-}
+use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::{Address, Env, IntoVal, Vec};
 
 // =============================================================================
 // State Machine Helper Tests
