@@ -3,7 +3,7 @@ use crate::{
     SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{symbol_short, vec, Address, Env, IntoVal, Symbol, Vec as SorobanVec};
+use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
 
 // =============================================================================
 // State Machine Helper Tests
@@ -454,7 +454,7 @@ fn test_all_valid_transitions_coverage() {
     // 3. Active -> InsufficientBalance (simulated via direct storage manipulation)
     {
         let (env, client, _, _) = setup_test_env();
-        let (id, subscriber, _) =
+        let (id, _subscriber, _) =
             create_test_subscription(&env, &client, SubscriptionStatus::Active);
 
         // Simulate transition by updating storage directly
@@ -965,7 +965,7 @@ fn test_estimate_topup_no_balance_returns_full_required() {
 
 #[test]
 fn test_estimate_topup_subscription_not_found() {
-    let (env, client, _, _) = setup_test_env();
+    let (_env, client, _, _) = setup_test_env();
     let result = client.try_estimate_topup_for_intervals(&9999, &1);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }

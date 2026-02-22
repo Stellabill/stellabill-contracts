@@ -87,10 +87,8 @@ pub fn do_cancel_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     sub.status = SubscriptionStatus::Cancelled;
     env.storage().instance().set(&subscription_id, &sub);
-    env.events().publish(
-        (Symbol::new(env, "cancelled"), subscription_id),
-        authorizer,
-    );
+    env.events()
+        .publish((Symbol::new(env, "cancelled"), subscription_id), authorizer);
     Ok(())
 }
 
@@ -105,10 +103,8 @@ pub fn do_pause_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
     sub.status = SubscriptionStatus::Paused;
     env.storage().instance().set(&subscription_id, &sub);
-    env.events().publish(
-        (Symbol::new(env, "paused"), subscription_id),
-        authorizer,
-    );
+    env.events()
+        .publish((Symbol::new(env, "paused"), subscription_id), authorizer);
     Ok(())
 }
 
@@ -123,9 +119,7 @@ pub fn do_resume_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
     sub.status = SubscriptionStatus::Active;
     env.storage().instance().set(&subscription_id, &sub);
-    env.events().publish(
-        (Symbol::new(env, "resumed"), subscription_id),
-        authorizer,
-    );
+    env.events()
+        .publish((Symbol::new(env, "resumed"), subscription_id), authorizer);
     Ok(())
 }

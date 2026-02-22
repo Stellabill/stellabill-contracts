@@ -6,12 +6,7 @@ use crate::charge_core::charge_one;
 use crate::types::{BatchChargeResult, Error};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-pub fn do_init(
-    env: &Env,
-    token: Address,
-    admin: Address,
-    min_topup: i128,
-) -> Result<(), Error> {
+pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
     env.storage()
         .instance()
         .set(&Symbol::new(env, "token"), &token);
@@ -44,10 +39,8 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     env.storage()
         .instance()
         .set(&Symbol::new(env, "min_topup"), &min_topup);
-    env.events().publish(
-        (Symbol::new(env, "min_topup_updated"),),
-        min_topup,
-    );
+    env.events()
+        .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
     Ok(())
 }
 
