@@ -9,7 +9,7 @@ pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription,
     env.storage()
         .instance()
         .get(&subscription_id)
-        .ok_or(Error::NotFound)
+        .ok_or(Error::SubscriptionNotFound)
 }
 
 pub fn estimate_topup_for_intervals(

@@ -23,6 +23,12 @@ pub fn do_create_subscription(
     usage_enabled: bool,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    if interval_seconds == 0 {
+        return Err(Error::InvalidInterval);
+    }
     let sub = Subscription {
         subscriber: subscriber.clone(),
         merchant: merchant.clone(),

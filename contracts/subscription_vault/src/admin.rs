@@ -27,14 +27,17 @@ pub fn require_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
         .get(&Symbol::new(env, "admin"))
-        .ok_or(Error::Unauthorized)
+        .ok_or(Error::ConfigNotFound)
 }
 
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
     admin.require_auth();
     let stored = require_admin(env)?;
     if admin != stored {
-        return Err(Error::Unauthorized);
+        return Err(Error::NotAdmin);
+    }
+    if min_topup < 0 {
+        return Err(Error::InvalidConfig);
     }
     env.storage()
         .instance()
@@ -48,7 +51,7 @@ pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
     env.storage()
         .instance()
         .get(&Symbol::new(env, "min_topup"))
-        .ok_or(Error::NotFound)
+        .ok_or(Error::ConfigNotFound)
 }
 
 pub fn do_batch_charge(
