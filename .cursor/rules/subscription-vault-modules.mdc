@@ -1,0 +1,31 @@
+---
+description: Subscription vault module map — edit only the file for your feature to avoid merge conflicts
+globs: contracts/subscription_vault/**/*.rs
+alwaysApply: false
+---
+
+# Subscription Vault — Module Map (Avoid Merge Conflicts)
+
+The contract is split so **each feature area lives in one file**. For any PR, **edit only the module that owns that feature** (and add a single delegation line in `lib.rs` if adding a new entrypoint). Do not refactor or touch other modules in the same PR.
+
+## Module → File → When to edit
+
+| Area | File | Edit when |
+|------|------|-----------|
+| **Types & errors** | `src/types.rs` | Adding/changing errors, `Subscription`, `SubscriptionStatus`, `BatchChargeResult`. |
+| **State machine** | `src/state_machine.rs` | Changing allowed status transitions, `validate_status_transition`, `get_allowed_transitions`, `can_transition`. |
+| **Admin & batch** | `src/admin.rs` | Init, min_topup, admin auth, **batch_charge**. |
+| **Single charge logic** | `src/charge_core.rs` | How one subscription is charged (interval, balance, status). |
+| **Subscription lifecycle** | `src/subscription.rs` | Create, deposit, single charge entrypoint, cancel, pause, resume. |
+| **Read-only / queries** | `src/queries.rs` | `get_subscription`, **estimate_topup_for_intervals**. |
+| **Merchant** | `src/merchant.rs` | Merchant withdraw / payouts. |
+| **Contract wiring** | `src/lib.rs` | Only add a new entrypoint delegation (one method calling into the module above). Keep impl thin. |
+
+## Rules
+
+1. **One feature per PR → one module per PR.** Do not mix “add batch” with “change state machine” in the same PR.
+2. **New entrypoint:** implement logic in the correct module (e.g. `queries.rs` for a new read), then add a single method in `lib.rs` that delegates to it.
+3. **Do not move code between modules** unless the feature clearly belongs to another area (then do it in a dedicated refactor PR).
+4. **Tests** for a feature live in `src/test.rs`; group tests by feature and keep new tests next to existing ones for that area.
+
+This layout keeps PRs touching different files so merge conflicts stay rare.
