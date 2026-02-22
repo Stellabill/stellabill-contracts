@@ -5,8 +5,8 @@
 use crate::admin::require_admin;
 use crate::charge_core::charge_one;
 use crate::queries::get_subscription;
-use crate::types::{Error, OneOffChargedEvent, Subscription, SubscriptionStatus};
-use soroban_sdk::{symbol_short, Address, Env, Symbol};
+use crate::types::{DataKey, Error, OneOffChargedEvent, Subscription, SubscriptionStatus};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
@@ -36,6 +36,13 @@ pub fn do_create_subscription(
     };
     let id = next_id(env);
     env.storage().instance().set(&id, &sub);
+
+    // Maintain merchant → subscription-ID index
+    let key = DataKey::MerchantSubs(sub.merchant.clone());
+    let mut ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+    ids.push_back(id);
+    env.storage().instance().set(&key, &ids);
+
     Ok(id)
 }
 
