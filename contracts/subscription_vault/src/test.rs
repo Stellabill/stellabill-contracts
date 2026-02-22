@@ -359,6 +359,86 @@ fn test_resume_subscription_from_cancelled_should_fail() {
 }
 
 #[test]
+fn test_pause_subscription_by_merchant() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, _, merchant) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Merchant should be allowed to pause
+    client.pause_subscription(&id, &merchant);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.status, SubscriptionStatus::Paused);
+}
+
+#[test]
+fn test_resume_subscription_by_merchant() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // subscriber pauses
+    client.pause_subscription(&id, &subscriber);
+
+    // Merchant should be allowed to resume
+    client.resume_subscription(&id, &merchant);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #401)")]
+fn test_pause_subscription_unauthorized() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    let random_user = Address::generate(&env);
+    
+    // Random user should NOT be allowed to pause
+    client.pause_subscription(&id, &random_user);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #401)")]
+fn test_resume_subscription_unauthorized() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    client.pause_subscription(&id, &subscriber);
+
+    let random_user = Address::generate(&env);
+    
+    // Random user should NOT be allowed to resume
+    client.resume_subscription(&id, &random_user);
+}
+
+#[test]
+fn test_charge_subscription_paused_should_fail() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Pause subscription
+    client.pause_subscription(&id, &subscriber);
+
+    // Attempt to charge (should return NotActive #1002 error)
+    let result = client.try_charge_subscription(&id);
+    assert_eq!(result, Err(Ok(Error::NotActive)));
+}
+
+#[test]
+fn test_pause_resume_status_transitions() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // 1. Test Pause 
+    client.pause_subscription(&id, &subscriber);
+    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Paused);
+    
+    // 2. Test Resume
+    client.resume_subscription(&id, &subscriber);
+    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Active);
+}
+
+#[test]
 fn test_state_transition_idempotent_same_status() {
     let (env, client, _, _) = setup_test_env();
     let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
