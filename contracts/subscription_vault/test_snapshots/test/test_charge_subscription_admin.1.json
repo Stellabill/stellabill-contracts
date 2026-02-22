@@ -80,7 +80,8 @@
               "args": [
                 {
                   "u32": 0
-                }
+                },
+                "void"
               ]
             }
           },
@@ -234,6 +235,40 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "MerchantSubs"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "u32": 0
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "cp"
+                            },
+                            {
+                              "u32": 0
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1
                         }
                       }
                     ]
@@ -411,27 +446,36 @@
             "topics": [
               {
                 "symbol": "charged"
-              },
-              {
-                "u32": 0
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 1000
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
+                    }
                   }
                 },
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 9999000
+                  "key": {
+                    "symbol": "merchant"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                   }
                 },
                 {
-                  "u64": 3600
+                  "key": {
+                    "symbol": "subscription_id"
+                  },
+                  "val": {
+                    "u32": 0
+                  }
                 }
               ]
             }

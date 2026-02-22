@@ -60,7 +60,7 @@ pub fn do_batch_charge(
 
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
-        let r = charge_one(env, id);
+        let r = charge_one(env, id, None);
         let res = match &r {
             Ok(()) => BatchChargeResult {
                 success: true,
