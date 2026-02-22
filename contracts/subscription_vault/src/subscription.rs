@@ -70,7 +70,7 @@ pub fn do_deposit_funds(
 
     // Invariant 1: verify the addition will not overflow before transferring
     // any tokens. This ensures a subscriber never loses funds due to a
-    // balance-cap edge case — if the deposit would overflow i128, the
+    // balance-cap edge case -- if the deposit would overflow i128, the
     // transaction is rejected before the token call fires.
     let new_balance = sub
         .prepaid_balance

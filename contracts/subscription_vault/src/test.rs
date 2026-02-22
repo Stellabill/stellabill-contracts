@@ -657,7 +657,7 @@ fn test_charge_rejected_before_interval() {
     let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
-    // Storage unchanged — last_payment_timestamp still equals creation time.
+    // Storage unchanged -- last_payment_timestamp still equals creation time.
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0);
 }
@@ -698,7 +698,7 @@ fn test_charge_succeeds_after_interval() {
 // Assumptions about ledger time monotonicity:
 //   Soroban ledger timestamps are set by validators and are expected to be
 //   non-decreasing across ledger closes (~5-6 s on mainnet). The contract
-//   does NOT assume strict monotonicity — it only requires
+//   does NOT assume strict monotonicity -- it only requires
 //   `now >= last_payment_timestamp + interval_seconds`. If a validator were
 //   to produce a timestamp equal to the previous ledger's (same second), the
 //   charge would simply be rejected as the interval cannot have elapsed in
@@ -716,7 +716,7 @@ fn test_immediate_retry_at_same_timestamp_rejected() {
     env.ledger().set_timestamp(t1);
     client.charge_subscription(&id);
 
-    // Retry at the same timestamp — must fail, storage stays at t1.
+    // Retry at the same timestamp -- must fail, storage stays at t1.
     let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
@@ -741,7 +741,7 @@ fn test_repeated_charges_across_many_intervals() {
         assert_eq!(sub.last_payment_timestamp, charge_time);
     }
 
-    // One more attempt without advancing time — must fail.
+    // One more attempt without advancing time -- must fail.
     let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 }
@@ -754,12 +754,12 @@ fn test_one_second_interval_boundary() {
     env.mock_all_auths();
     let (client, id) = setup(&env, 1);
 
-    // At creation time — 0 seconds elapsed, interval is 1 s → too early.
+    // At creation time -- 0 seconds elapsed, interval is 1 s -> too early.
     env.ledger().set_timestamp(T0);
     let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
-    // Exactly 1 second later — boundary, should succeed.
+    // Exactly 1 second later -- boundary, should succeed.
     env.ledger().set_timestamp(T0 + 1);
     client.charge_subscription(&id);
 
@@ -1150,7 +1150,7 @@ fn test_deposit_overflow() {
         env.storage().instance().set(&id, &sub);
     });
 
-    // Depositing 2 would require i128::MAX + 1 — must return Overflow.
+    // Depositing 2 would require i128::MAX + 1 -- must return Overflow.
     let result = client.try_deposit_funds(&id, &subscriber, &2i128);
     assert_eq!(result, Err(Ok(Error::Overflow)));
 }
