@@ -1218,3 +1218,62 @@ fn test_withdraw_invalid_amount() {
     let res_neg = client.try_withdraw_merchant_funds(&merchant, &-100i128);
     assert_eq!(res_neg, Err(Ok(Error::InvalidAmount)));
 }
+
+// =============================================================================
+// E2E Lifecycle Integrations
+// =============================================================================
+
+#[test]
+fn test_integration_deposit_charge_withdraw_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let token = create_token_and_mint(&env, &subscriber, 100_000_000i128);
+    client.init(&token, &admin, &1_000_000i128);
+
+    // 1. Create a subscription and Deposit 100 USDC
+    let amount = 10_000_000i128;
+    let interval = 86_400u64;
+    let deposit = 100_000_000i128;
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval, &false);
+    client.deposit_funds(&id, &subscriber, &deposit);
+
+    // MINT directly to vault to simulate what the missing frontend token transfer would do
+    // (since our contract deposit_funds() only updates internal ledgers, it relies
+    // on the user signing a real token transfer beforehand)
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin_client.mint(&contract_id, &deposit);
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&contract_id), deposit);
+
+    // 2. Advance time using the robust `interval + 1` bound pattern relative to current
+    let current_time = env.ledger().timestamp();
+    env.ledger().set_timestamp(current_time + interval + 1);
+
+    // 3. Charge the subscription
+    client.charge_subscription(&id);
+
+    // Validate storage ledgers shifted internally
+    assert_eq!(client.get_merchant_balance(&merchant), amount);
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, deposit - amount);
+
+    // 4. Withdraw the Merchant Funds
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&contract_id);
+
+    client.withdraw_merchant_funds(&merchant, &amount);
+
+    // 5. Assert final external state
+    assert_eq!(token_client.balance(&merchant), merchant_before + amount);
+    assert_eq!(token_client.balance(&contract_id), vault_before - amount);
+    assert_eq!(client.get_merchant_balance(&merchant), 0);
+}
