@@ -1,4 +1,4 @@
-//! Merchant payout entrypoints.
+//! Merchant payout and accumulated USDC tracking entrypoints.
 
 use crate::types::Error;
 use soroban_sdk::{token, Address, Env, Symbol};
@@ -17,6 +17,7 @@ fn set_merchant_balance(env: &Env, merchant: &Address, balance: &i128) {
     env.storage().instance().set(&key, balance);
 }
 
+/// Credit merchant balance (used when subscription charges process).
 pub fn credit_merchant_balance(env: &Env, merchant: &Address, amount: i128) -> Result<(), Error> {
     if amount <= 0 {
         return Err(Error::InvalidAmount);
@@ -27,6 +28,7 @@ pub fn credit_merchant_balance(env: &Env, merchant: &Address, amount: i128) -> R
     Ok(())
 }
 
+/// Withdraw accumulated USDC from prior subscription charges to the merchant address.
 pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Result<(), Error> {
     merchant.require_auth();
 

@@ -1057,93 +1057,164 @@ fn test_batch_charge_partial_failure() {
 // =============================================================================
 
 #[test]
-fn test_merchant_withdrawal_full_and_partial() {
+#[should_panic] // Soroban panic on require_auth failure
+fn test_withdraw_requires_auth() {
     let env = Env::default();
-    env.mock_all_auths();
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let subscriber = Address::generate(&env);
-    let token = create_token_and_mint(&env, &subscriber, 100_000_000i128);
-    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
-    token_admin_client.mint(&contract_id, &100_000_000i128);
-    let admin = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    client.init(&token, &admin, &1_000_000i128);
-    let id =
-        client.create_subscription(&subscriber, &merchant, &10_000_000i128, &86_400u64, &false);
-    client.deposit_funds(&id, &subscriber, &30_000_000i128);
-
-    // Charge twice to accrue 20_000_000i128 to merchant
-    env.ledger().set_timestamp(86_400);
-    client.charge_subscription(&id);
-    env.ledger().set_timestamp(86_400 * 2);
-    client.charge_subscription(&id);
-
-    // Merchant balance should be 20_000_000 USDC
-    // Withdraw partial (5_000_000)
-    client.withdraw_merchant_funds(&merchant, &5_000_000i128);
-
-    // Check token balance
-    let token_client = soroban_sdk::token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&merchant), 5_000_000i128);
-
-    // Withdraw remainder (15_000_000)
-    client.withdraw_merchant_funds(&merchant, &15_000_000i128);
-    assert_eq!(token_client.balance(&merchant), 20_000_000i128);
+    // Auth is NOT mocked, so require_auth() will panic
+    client.withdraw_merchant_funds(&merchant, &100i128);
 }
 
 #[test]
-fn test_merchant_withdrawal_zero_or_negative() {
+fn test_withdraw_merchant_funds_not_found_when_no_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    // Init vault with a real token contract address
+    let token = create_token_and_mint(&env, &Address::generate(&env), 1_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &admin, &min_topup);
+
+    // Merchant has never been credited -> NotFound
+    let res = client.try_withdraw_merchant_funds(&merchant, &1_000000i128);
+    assert_eq!(res, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_withdraw_merchant_funds_exact_balance_succeeds_and_transfers() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    // Create token, and mint enough to the VAULT (contract) so it can pay out
+    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &admin, &min_topup);
+
+    // Credit merchant balance directly.
+    crate::merchant::credit_merchant_balance(&env, &merchant, 3_000000i128).unwrap();
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&env.current_contract_address());
+
+    // Withdraw exactly the owed balance
+    client.withdraw_merchant_funds(&merchant, &3_000000i128);
+
+    let merchant_after = token_client.balance(&merchant);
+    let vault_after = token_client.balance(&env.current_contract_address());
+
+    assert_eq!(merchant_after - merchant_before, 3_000000i128);
+    assert_eq!(vault_before - vault_after, 3_000000i128);
+
+    // Merchant balance should now be zero
+    assert_eq!(
+        crate::merchant::get_merchant_balance(&env, &merchant),
+        0i128
+    );
+}
+
+#[test]
+fn test_withdraw_merchant_funds_partial_succeeds_and_leaves_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &admin, &min_topup);
+
+    crate::merchant::credit_merchant_balance(&env, &merchant, 5_000000i128).unwrap();
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let merchant_before = token_client.balance(&merchant);
+
+    client.withdraw_merchant_funds(&merchant, &2_000000i128);
+
+    let merchant_after = token_client.balance(&merchant);
+    assert_eq!(merchant_after - merchant_before, 2_000000i128);
+
+    // Remaining owed should be 3 USDC
+    assert_eq!(
+        crate::merchant::get_merchant_balance(&env, &merchant),
+        3_000000i128
+    );
+}
+
+#[test]
+fn test_withdraw_merchant_funds_overdraft_fails_and_does_not_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &admin, &min_topup);
+
+    crate::merchant::credit_merchant_balance(&env, &merchant, 1_000000i128).unwrap();
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&env.current_contract_address());
+
+    // Attempt to withdraw more than owed
+    let res = client.try_withdraw_merchant_funds(&merchant, &2_000000i128);
+    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
+
+    // Ensure no token movement
+    let merchant_after = token_client.balance(&merchant);
+    let vault_after = token_client.balance(&env.current_contract_address());
+    assert_eq!(merchant_after, merchant_before);
+    assert_eq!(vault_after, vault_before);
+
+    // Ensure ledger balance unchanged
+    assert_eq!(
+        crate::merchant::get_merchant_balance(&env, &merchant),
+        1_000000i128
+    );
+}
+
+#[test]
+fn test_withdraw_invalid_amount() {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
     let merchant = Address::generate(&env);
+
+    // Init with token just in case validations run far enough
+    let token = create_token_and_mint(&env, &env.current_contract_address(), 1_000000i128);
+    client.init(&token, &Address::generate(&env), &1_000000i128);
 
     let res_zero = client.try_withdraw_merchant_funds(&merchant, &0i128);
     assert_eq!(res_zero, Err(Ok(Error::InvalidAmount)));
 
     let res_neg = client.try_withdraw_merchant_funds(&merchant, &-100i128);
     assert_eq!(res_neg, Err(Ok(Error::InvalidAmount)));
-}
-
-#[test]
-fn test_merchant_withdrawal_overdraft() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let subscriber = Address::generate(&env);
-    let token = create_token_and_mint(&env, &subscriber, 100_000_000i128);
-    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
-    token_admin_client.mint(&contract_id, &100_000_000i128);
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
-    client.init(&token, &admin, &1_000_000i128);
-    let id =
-        client.create_subscription(&subscriber, &merchant, &10_000_000i128, &86_400u64, &false);
-    client.deposit_funds(&id, &subscriber, &30_000_000i128);
-
-    // Charge once
-    env.ledger().set_timestamp(86_400);
-    client.charge_subscription(&id);
-
-    // Merchant has 10_000_000. Try to withdraw 10_000_001.
-    let res = client.try_withdraw_merchant_funds(&merchant, &10_000_001i128);
-    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
-}
-
-#[test]
-fn test_merchant_withdrawal_not_found_on_zero_balance() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let merchant = Address::generate(&env);
-
-    // Try to withdraw 10 on a fresh contract with no balance
-    let res = client.try_withdraw_merchant_funds(&merchant, &10i128);
-    assert_eq!(res, Err(Ok(Error::NotFound)));
 }

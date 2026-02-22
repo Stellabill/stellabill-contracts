@@ -1,14 +1,14 @@
 # Merchant Withdrawals
 
-Merchants can withdraw their accrued USDC balance from the Subscription Vault using the `withdraw_merchant_funds` entrypoint. 
-Funds accrue to a merchant's balance each time a subscription for that merchant is successfully charged.
+Merchants can withdraw their accumulated USDC balance from the Subscription Vault using the `withdraw_merchant_funds` entrypoint. 
+Funds accumulate to a merchant's balance each time a subscription for that merchant is successfully charged.
 
 ## Process and Requirements
 
 1. **Authorization**: The merchant must authorize the withdrawal transaction. The contract enforces this using `merchant.require_auth()`.
 2. **Valid Amounts**: The `amount` to withdraw must be strictly positive (`> 0`). An attempt to withdraw `0` or a negative amount will result in `Error::InvalidAmount` (`405`).
-3. **No Overdrafts**: A merchant cannot withdraw more than their currently accrued balance. Overdraft attempts are rejected with `Error::InsufficientBalance` (`1003`).
-4. **Zero Balance**: If a merchant has no recorded accrued balance (e.g., no subscriptions have been charged yet), withdrawal attempts will return `Error::NotFound` (`404`).
+3. **No Overdrafts**: A merchant cannot withdraw more than their currently accumulated balance. Overdraft attempts are rejected with `Error::InsufficientBalance` (`1003`).
+4. **Zero Balance**: If a merchant has no recorded accumulated balance (e.g., no subscriptions have been charged yet), withdrawal attempts will return `Error::NotFound` (`404`).
 
 ## Security Guarantees
 

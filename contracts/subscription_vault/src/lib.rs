@@ -104,6 +104,10 @@ impl SubscriptionVault {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
+    pub fn get_merchant_balance(env: Env, merchant: Address) -> i128 {
+        merchant::get_merchant_balance(&env, &merchant)
+    }
+
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
     }
