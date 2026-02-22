@@ -27,7 +27,7 @@ pub fn do_create_subscription(
     subscriber.require_auth();
     let sub = Subscription {
         subscriber: subscriber.clone(),
-        merchant,
+        merchant: merchant.clone(),
         amount,
         interval_seconds,
         last_payment_timestamp: env.ledger().timestamp(),
@@ -37,6 +37,10 @@ pub fn do_create_subscription(
     };
     let id = next_id(env);
     env.storage().instance().set(&id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "created"), id),
+        (subscriber, merchant, amount, interval_seconds),
+    );
     Ok(id)
 }
 
@@ -59,6 +63,10 @@ pub fn do_deposit_funds(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "deposited"), subscription_id),
+        (subscriber, amount, sub.prepaid_balance),
+    );
     Ok(())
 }
 
@@ -79,6 +87,10 @@ pub fn do_cancel_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     sub.status = SubscriptionStatus::Cancelled;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "cancelled"), subscription_id),
+        authorizer,
+    );
     Ok(())
 }
 
@@ -93,6 +105,10 @@ pub fn do_pause_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
     sub.status = SubscriptionStatus::Paused;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "paused"), subscription_id),
+        authorizer,
+    );
     Ok(())
 }
 
@@ -107,5 +123,9 @@ pub fn do_resume_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
     sub.status = SubscriptionStatus::Active;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "resumed"), subscription_id),
+        authorizer,
+    );
     Ok(())
 }

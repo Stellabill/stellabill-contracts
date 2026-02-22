@@ -5,7 +5,7 @@
 use crate::queries::get_subscription;
 use crate::state_machine::validate_status_transition;
 use crate::types::{Error, SubscriptionStatus};
-use soroban_sdk::Env;
+use soroban_sdk::{Env, Symbol};
 
 pub fn charge_one(env: &Env, subscription_id: u32) -> Result<(), Error> {
     let mut sub = get_subscription(env, subscription_id)?;
@@ -36,5 +36,9 @@ pub fn charge_one(env: &Env, subscription_id: u32) -> Result<(), Error> {
         .ok_or(Error::Overflow)?;
     sub.last_payment_timestamp = now;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "charged"), subscription_id),
+        (sub.amount, sub.prepaid_balance, now),
+    );
     Ok(())
 }
