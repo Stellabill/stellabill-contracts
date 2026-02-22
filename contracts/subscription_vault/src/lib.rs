@@ -1,5 +1,8 @@
 #![no_std]
 
+//! Prepaid subscription vault for recurring USDC billing.
+//! For subscription lifecycle, status transitions, and on-chain representation see `docs/subscription_lifecycle.md`.
+
 mod admin;
 mod charge_core;
 mod merchant;

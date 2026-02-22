@@ -1,5 +1,8 @@
 //! Single charge logic (no auth). Used by charge_subscription and batch_charge.
 //!
+//! Charge runs only when status is Active; on insufficient balance the subscription
+//! transitions to InsufficientBalance. See `docs/subscription_lifecycle.md` for details.
+//!
 //! **PRs that only change how one subscription is charged should edit this file only.**
 
 use crate::queries::get_subscription;

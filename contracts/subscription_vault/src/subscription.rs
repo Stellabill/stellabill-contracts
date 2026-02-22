@@ -1,5 +1,7 @@
 //! Subscription lifecycle: create, deposit, charge, cancel, pause, resume.
 //!
+//! See `docs/subscription_lifecycle.md` for the full lifecycle and state machine.
+//!
 //! **PRs that only change subscription lifecycle or billing should edit this file only.**
 
 use crate::admin::require_admin;

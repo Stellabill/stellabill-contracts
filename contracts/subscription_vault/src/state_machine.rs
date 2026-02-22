@@ -1,5 +1,7 @@
 //! Subscription status state machine and transition validation.
 //!
+//! Full subscription lifecycle and on-chain representation are described in `docs/subscription_lifecycle.md`.
+//!
 //! Kept in a separate module so PRs touching state transitions do not conflict
 //! with PRs touching billing, batch charge, or top-up estimation.
 

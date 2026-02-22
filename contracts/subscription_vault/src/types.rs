@@ -54,6 +54,8 @@ pub struct BatchChargeResult {
 
 /// Represents the lifecycle state of a subscription.
 ///
+/// See `docs/subscription_lifecycle.md` for how each status is entered and exited and for invariants.
+///
 /// # State Machine
 ///
 /// The subscription status follows a defined state machine with specific allowed transitions:
@@ -89,6 +91,7 @@ pub enum SubscriptionStatus {
 ///
 /// The `status` field is managed by the state machine. Use the provided
 /// transition helpers to modify status, never set it directly.
+/// See `docs/subscription_lifecycle.md` for lifecycle and on-chain representation.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Subscription {
