@@ -166,6 +166,17 @@
                       },
                       {
                         "key": {
+                          "symbol": "min_topup"
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000000
+                          }
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "next_id"
                         },
                         "val": {

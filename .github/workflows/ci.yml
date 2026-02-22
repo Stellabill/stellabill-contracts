@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Add WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy -p subscription_vault -- -D warnings
+
+      - name: Test
+        run: cargo test -p subscription_vault
+
+      - name: Build release (native)
+        run: cargo build -p subscription_vault --release
+
+      - name: Build WASM
+        run: cargo build -p subscription_vault --target wasm32-unknown-unknown --release
