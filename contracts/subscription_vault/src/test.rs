@@ -1231,49 +1231,79 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
+    let admin = Address::generate(&env);
 
-    let token = create_token_and_mint(&env, &subscriber, 100_000_000i128);
-    client.init(&token, &admin, &1_000_000i128);
-
-    // 1. Create a subscription and Deposit 100 USDC
-    let amount = 10_000_000i128;
-    let interval = 86_400u64;
-    let deposit = 100_000_000i128;
-    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval, &false);
-    client.deposit_funds(&id, &subscriber, &deposit);
-
-    // MINT directly to vault to simulate what the missing frontend token transfer would do
-    // (since our contract deposit_funds() only updates internal ledgers, it relies
-    // on the user signing a real token transfer beforehand)
-    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
-    token_admin_client.mint(&contract_id, &deposit);
+    // Real token and mint to subscriber for deposit
+    let token = create_token_and_mint(&env, &subscriber, 100_000000i128);
+    let min_topup = 1_000000i128;
+    client.init(&token, &admin, &min_topup);
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&contract_id), deposit);
 
-    // 2. Advance time using the robust `interval + 1` bound pattern relative to current
-    let current_time = env.ledger().timestamp();
-    env.ledger().set_timestamp(current_time + interval + 1);
-
-    // 3. Charge the subscription
-    client.charge_subscription(&id);
-
-    // Validate storage ledgers shifted internally
-    assert_eq!(client.get_merchant_balance(&merchant), amount);
-    let sub = client.get_subscription(&id);
-    assert_eq!(sub.prepaid_balance, deposit - amount);
-
-    // 4. Withdraw the Merchant Funds
+    let subscriber_before = token_client.balance(&subscriber);
     let merchant_before = token_client.balance(&merchant);
     let vault_before = token_client.balance(&contract_id);
 
-    client.withdraw_merchant_funds(&merchant, &amount);
+    let sub_amount = 1_000000i128; // 1 USDC
+    let interval_seconds = 86_400u64;
+    let usage_enabled = false;
 
-    // 5. Assert final external state
-    assert_eq!(token_client.balance(&merchant), merchant_before + amount);
-    assert_eq!(token_client.balance(&contract_id), vault_before - amount);
-    assert_eq!(client.get_merchant_balance(&merchant), 0);
+    // Create subscription at timestamp t0
+    let t0 = env.ledger().timestamp();
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &sub_amount,
+        &interval_seconds,
+        &usage_enabled,
+    );
+
+    // Deposit 10 USDC
+    let deposit_amount = 10_000000i128;
+    client.deposit_funds(&id, &subscriber, &deposit_amount);
+
+    // Simulate front-end actual token transfer over to vault
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin_client.mint(&contract_id, &deposit_amount);
+
+    let subscriber_after_deposit = token_client.balance(&subscriber);
+    let merchant_after_deposit = token_client.balance(&merchant);
+    let vault_after_deposit = token_client.balance(&contract_id);
+
+    // advance vault manually (since actual subtract mocked in isolated function test logic)
+    assert_eq!(vault_after_deposit - vault_before, deposit_amount);
+    assert_eq!(merchant_after_deposit, merchant_before);
+
+    // Advance time so now >= t0 + interval_seconds
+    env.ledger().set_timestamp(t0 + interval_seconds + 1);
+
+    // Charge once
+    client.charge_subscription(&id);
+
+    // Merchant ledger balance credited by one charge
+    assert_eq!(client.get_merchant_balance(&merchant), sub_amount);
+
+    // Charging doesn't move tokens out of the vault
+    let subscriber_after_charge = token_client.balance(&subscriber);
+    let merchant_after_charge = token_client.balance(&merchant);
+    let vault_after_charge = token_client.balance(&contract_id);
+    assert_eq!(subscriber_after_charge, subscriber_after_deposit);
+    assert_eq!(merchant_after_charge, merchant_after_deposit);
+    assert_eq!(vault_after_charge, vault_after_deposit);
+
+    // Withdraw merchant funds
+    client.withdraw_merchant_funds(&merchant, &sub_amount);
+
+    assert_eq!(client.get_merchant_balance(&merchant), 0i128);
+
+    let merchant_after_withdraw = token_client.balance(&merchant);
+    let vault_after_withdraw = token_client.balance(&contract_id);
+
+    assert_eq!(merchant_after_withdraw - merchant_after_charge, sub_amount);
+    assert_eq!(vault_after_charge - vault_after_withdraw, sub_amount);
+
+    // Subscriber unchanged after charge/withdraw (already paid at deposit)
+    assert_eq!(token_client.balance(&subscriber), subscriber_after_charge);
 }
