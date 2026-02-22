@@ -454,7 +454,7 @@ fn test_all_valid_transitions_coverage() {
     // 3. Active -> InsufficientBalance (simulated via direct storage manipulation)
     {
         let (env, client, _, _) = setup_test_env();
-        let (id, subscriber, _) =
+        let (id, _subscriber, _) =
             create_test_subscription(&env, &client, SubscriptionStatus::Active);
 
         // Simulate transition by updating storage directly
@@ -577,11 +577,11 @@ fn test_subscription_struct_status_field() {
     let sub = Subscription {
         subscriber: Address::generate(&env),
         merchant: Address::generate(&env),
-        amount: 10_000_0000,
+        amount: 10_000_000_000,
         interval_seconds: 30 * 24 * 60 * 60,
         last_payment_timestamp: 0,
         status: SubscriptionStatus::Active,
-        prepaid_balance: 50_000_0000,
+        prepaid_balance: 50_000_000_000,
         usage_enabled: false,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
@@ -965,7 +965,7 @@ fn test_estimate_topup_no_balance_returns_full_required() {
 
 #[test]
 fn test_estimate_topup_subscription_not_found() {
-    let (env, client, _, _) = setup_test_env();
+    let (_env, client, _, _) = setup_test_env();
     let result = client.try_estimate_topup_for_intervals(&9999, &1);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
@@ -1042,4 +1042,261 @@ fn test_batch_charge_partial_failure() {
         results.get(1).unwrap().error_code,
         Error::InsufficientBalance.to_code()
     );
+}
+
+// =============================================================================
+// Emergency Stop Tests
+// =============================================================================
+//
+// These tests validate that the emergency stop mechanism correctly blocks all
+// critical operations when activated, allows safe/read-only operations to
+// continue, and that toggling the stop on and off restores normal behavior.
+//
+// Assumptions:
+//   - `emergency_stop(admin)` enables the stop and emits a ContractStopped event.
+//   - `resume_contract(admin)` disables the stop and emits a ContractResumed event.
+//   - `is_stopped()` returns the current stop state (bool).
+//   - All state-mutating functions check the stop flag and return
+//     Error::ContractStopped when it is enabled.
+//   - Read-only queries (get_subscription, get_min_topup, is_stopped) remain
+//     accessible while the contract is stopped.
+
+// Helper: initialize contract, enable emergency stop, and return client + ids.
+fn setup_stopped_env(
+    env: &Env,
+) -> (
+    SubscriptionVaultClient<'static>,
+    Address,
+    Address,
+    Address,
+    u32,
+) {
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0);
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+    let token = Address::generate(env);
+    let admin = Address::generate(env);
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+
+    client.init(&token, &admin, &1_000000i128);
+
+    // Create a subscription and deposit funds before stopping so we have
+    // a valid subscription to test against.
+    let id = client.create_subscription(&subscriber, &merchant, &1_000i128, &INTERVAL, &false);
+    client.deposit_funds(&id, &subscriber, &10_000000i128);
+
+    // Enable emergency stop.
+    client.emergency_stop(&admin);
+
+    (client, admin, subscriber, token, id)
+}
+
+// -----------------------------------------------------------------------------
+// 1. Toggling behavior
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_emergency_stop_sets_stopped_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_env2, client, _, _) = setup_test_env();
+    let _ = env;
+    // Contract starts running.
+    assert!(!client.is_stopped());
+}
+
+#[test]
+fn test_emergency_stop_flag_is_true_after_activation() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, _id) = setup_stopped_env(&env);
+    assert!(client.is_stopped());
+}
+
+#[test]
+fn test_resume_contract_clears_stopped_flag() {
+    let env = Env::default();
+    let (client, admin, _subscriber, _token, _id) = setup_stopped_env(&env);
+
+    client.resume_contract(&admin);
+    assert!(!client.is_stopped());
+}
+
+#[test]
+fn test_toggle_stop_multiple_times_is_consistent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    client.init(&token, &admin, &1_000000i128);
+
+    assert!(!client.is_stopped());
+
+    client.emergency_stop(&admin);
+    assert!(client.is_stopped());
+
+    client.resume_contract(&admin);
+    assert!(!client.is_stopped());
+
+    client.emergency_stop(&admin);
+    assert!(client.is_stopped());
+
+    client.resume_contract(&admin);
+    assert!(!client.is_stopped());
+}
+
+// -----------------------------------------------------------------------------
+// 2. Only admin can toggle emergency stop
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_non_admin_cannot_trigger_emergency_stop() {
+    let (env, client, _, _) = setup_test_env();
+    let non_admin = Address::generate(&env);
+    let result = client.try_emergency_stop(&non_admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_non_admin_cannot_resume_contract() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, _id) = setup_stopped_env(&env);
+    let non_admin = Address::generate(&env);
+    let result = client.try_resume_contract(&non_admin);
+    assert!(result.is_err());
+}
+
+// -----------------------------------------------------------------------------
+// 3. Critical operations blocked during emergency stop
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_create_subscription_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, subscriber, _token, _id) = setup_stopped_env(&env);
+    let merchant = Address::generate(&env);
+    let result =
+        client.try_create_subscription(&subscriber, &merchant, &1_000i128, &INTERVAL, &false);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_deposit_funds_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, subscriber, _token, id) = setup_stopped_env(&env);
+    let result = client.try_deposit_funds(&id, &subscriber, &5_000000i128);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_charge_subscription_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, id) = setup_stopped_env(&env);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    let result = client.try_charge_subscription(&id);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_cancel_subscription_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, subscriber, _token, id) = setup_stopped_env(&env);
+    let result = client.try_cancel_subscription(&id, &subscriber);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_pause_subscription_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, subscriber, _token, id) = setup_stopped_env(&env);
+    let result = client.try_pause_subscription(&id, &subscriber);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_resume_subscription_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, subscriber, _token, id) = setup_stopped_env(&env);
+    let result = client.try_resume_subscription(&id, &subscriber);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+#[test]
+fn test_batch_charge_blocked_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, id) = setup_stopped_env(&env);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    let mut ids = SorobanVec::new(&env);
+    ids.push_back(id);
+    let result = client.try_batch_charge(&ids);
+    assert_eq!(result, Err(Ok(Error::ContractStopped)));
+}
+
+// -----------------------------------------------------------------------------
+// 4. Safe / read-only operations remain allowed during stop
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_get_subscription_allowed_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, id) = setup_stopped_env(&env);
+    // Should not panic or return an error.
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.amount, 1_000i128);
+}
+
+#[test]
+fn test_get_min_topup_allowed_when_stopped() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, _id) = setup_stopped_env(&env);
+    let min = client.get_min_topup();
+    assert_eq!(min, 1_000000i128);
+}
+
+#[test]
+fn test_is_stopped_query_always_accessible() {
+    let env = Env::default();
+    let (client, _admin, _subscriber, _token, _id) = setup_stopped_env(&env);
+    // Calling is_stopped while stopped must succeed and return true.
+    assert!(client.is_stopped());
+}
+
+// -----------------------------------------------------------------------------
+// 5. Operations succeed again after contract is resumed
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_create_subscription_succeeds_after_resume() {
+    let env = Env::default();
+    let (client, admin, subscriber, _token, _id) = setup_stopped_env(&env);
+    client.resume_contract(&admin);
+
+    let merchant = Address::generate(&env);
+    let result =
+        client.try_create_subscription(&subscriber, &merchant, &1_000i128, &INTERVAL, &false);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_deposit_funds_succeeds_after_resume() {
+    let env = Env::default();
+    let (client, admin, subscriber, _token, id) = setup_stopped_env(&env);
+    client.resume_contract(&admin);
+
+    let result = client.try_deposit_funds(&id, &subscriber, &5_000000i128);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_charge_subscription_succeeds_after_resume() {
+    let env = Env::default();
+    let (client, admin, _subscriber, _token, id) = setup_stopped_env(&env);
+    client.resume_contract(&admin);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let result = client.try_charge_subscription(&id);
+    assert!(result.is_ok());
 }

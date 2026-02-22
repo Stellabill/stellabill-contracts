@@ -6,12 +6,7 @@ use crate::charge_core::charge_one;
 use crate::types::{BatchChargeResult, Error};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-pub fn do_init(
-    env: &Env,
-    token: Address,
-    admin: Address,
-    min_topup: i128,
-) -> Result<(), Error> {
+pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
     env.storage()
         .instance()
         .set(&Symbol::new(env, "token"), &token);
@@ -54,6 +49,7 @@ pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
 ) -> Result<Vec<BatchChargeResult>, Error> {
+    require_not_stopped(env)?;
     let auth_admin = require_admin(env)?;
     auth_admin.require_auth();
 
@@ -73,4 +69,59 @@ pub fn do_batch_charge(
         results.push_back(res);
     }
     Ok(results)
+}
+
+// =============================================================================
+// Emergency Stop
+// =============================================================================
+
+/// Returns true if the contract is currently in emergency stop mode.
+pub fn is_stopped(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get::<_, bool>(&Symbol::new(env, "stopped"))
+        .unwrap_or(false)
+}
+
+/// Asserts the contract is not stopped. Returns `Error::ContractStopped` if it is.
+/// Call this at the top of every guarded function.
+pub fn require_not_stopped(env: &Env) -> Result<(), Error> {
+    if is_stopped(env) {
+        Err(Error::ContractStopped)
+    } else {
+        Ok(())
+    }
+}
+
+/// Enables emergency stop. Only callable by the stored admin.
+///
+/// All guarded contract functions will return `Error::ContractStopped`
+/// until `do_resume_contract` is called.
+pub fn do_emergency_stop(env: &Env, admin: Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Unauthorized);
+    }
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "stopped"), &true);
+    env.events().publish(("emergency_stop", "activated"), admin);
+    Ok(())
+}
+
+/// Disables emergency stop and restores normal contract operation.
+/// Only callable by the stored admin.
+pub fn do_resume_contract(env: &Env, admin: Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Unauthorized);
+    }
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "stopped"), &false);
+    env.events()
+        .publish(("emergency_stop", "deactivated"), admin);
+    Ok(())
 }
