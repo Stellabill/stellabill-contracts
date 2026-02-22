@@ -12,6 +12,8 @@ pub enum Error {
     BelowMinimumTopup = 402,
     RecoveryNotAllowed = 403,
     InvalidRecoveryAmount = 405,
+    /// Subscription is not Active (e.g. Paused, Cancelled).
+    NotActive = 1002,
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -109,6 +111,22 @@ pub struct Subscription {
     pub status: SubscriptionStatus,
     pub prepaid_balance: i128,
     pub usage_enabled: bool,
+}
+
+/// Emitted when a subscription is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+}
+
+/// Emitted when a subscription is resumed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
 }
 
 /// Validates if a status transition is allowed by the state machine.
@@ -522,7 +540,7 @@ impl SubscriptionVault {
                 || sub.status == SubscriptionStatus::Paused
             {
                 // Cannot charge cancelled or paused subscriptions
-                return Err(Error::InvalidStatusTransition);
+                return Err(Error::NotActive);
             }
 
             // Simulate charge logic - on insufficient balance, transition to InsufficientBalance
@@ -569,6 +587,7 @@ impl SubscriptionVault {
     /// Allowed from: `Active`
     /// - Transitions to: `Paused`
     ///
+    /// Only the subscriber or merchant can pause.
     /// Cannot pause a subscription that is already `Paused`, `Cancelled`, or in `InsufficientBalance`.
     pub fn pause_subscription(
         env: Env,
@@ -579,11 +598,26 @@ impl SubscriptionVault {
 
         let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
 
+        // Only subscriber or merchant can pause
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
+
         // Validate and apply status transition
         validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
         sub.status = SubscriptionStatus::Paused;
 
         env.storage().instance().set(&subscription_id, &sub);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "subscription_paused"), subscription_id),
+            SubscriptionPausedEvent {
+                subscription_id,
+                authorizer,
+            },
+        );
+
         Ok(())
     }
 
@@ -593,6 +627,7 @@ impl SubscriptionVault {
     /// Allowed from: `Paused`, `InsufficientBalance`
     /// - Transitions to: `Active`
     ///
+    /// Only the subscriber or merchant can resume.
     /// Cannot resume a `Cancelled` subscription.
     pub fn resume_subscription(
         env: Env,
@@ -603,11 +638,26 @@ impl SubscriptionVault {
 
         let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
 
+        // Only subscriber or merchant can resume
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
+
         // Validate and apply status transition
         validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
         sub.status = SubscriptionStatus::Active;
 
         env.storage().instance().set(&subscription_id, &sub);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "subscription_resumed"), subscription_id),
+            SubscriptionResumedEvent {
+                subscription_id,
+                authorizer,
+            },
+        );
+
         Ok(())
     }
 
