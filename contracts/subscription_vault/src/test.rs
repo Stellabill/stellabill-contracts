@@ -3,7 +3,7 @@ use crate::{
     Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val};
 
 // =============================================================================
 // State Machine Helper Tests
@@ -571,6 +571,55 @@ fn test_subscription_struct_status_field() {
         usage_enabled: false,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_subscription_serialization_round_trip_all_statuses() {
+    let env = Env::default();
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let statuses = [
+        SubscriptionStatus::Active,
+        SubscriptionStatus::Paused,
+        SubscriptionStatus::Cancelled,
+        SubscriptionStatus::InsufficientBalance,
+    ];
+
+    for status in statuses {
+        let original = Subscription {
+            subscriber: subscriber.clone(),
+            merchant: merchant.clone(),
+            amount: 10_000_000i128,
+            interval_seconds: 30 * 24 * 60 * 60,
+            last_payment_timestamp: 1_234_567u64,
+            status: status.clone(),
+            prepaid_balance: 42_000_000i128,
+            usage_enabled: true,
+        };
+
+        let encoded: Val = original.clone().into_val(&env);
+        let decoded =
+            Subscription::try_from_val(&env, &encoded).expect("subscription should deserialize");
+
+        assert_eq!(decoded.subscriber, original.subscriber);
+        assert_eq!(decoded.merchant, original.merchant);
+        assert_eq!(decoded.amount, original.amount);
+        assert_eq!(decoded.interval_seconds, original.interval_seconds);
+        assert_eq!(decoded.last_payment_timestamp, original.last_payment_timestamp);
+        assert_eq!(decoded.status, original.status);
+        assert_eq!(decoded.prepaid_balance, original.prepaid_balance);
+        assert_eq!(decoded.usage_enabled, original.usage_enabled);
+    }
+}
+
+#[test]
+fn test_subscription_status_discriminant_values_are_stable() {
+    assert_eq!(SubscriptionStatus::Active as u32, 0);
+    assert_eq!(SubscriptionStatus::Paused as u32, 1);
+    assert_eq!(SubscriptionStatus::Cancelled as u32, 2);
+    assert_eq!(SubscriptionStatus::InsufficientBalance as u32, 3);
 }
 
 #[test]

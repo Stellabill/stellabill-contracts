@@ -98,6 +98,13 @@ pub enum SubscriptionStatus {
 
 /// Stores subscription details and current state.
 ///
+/// The serialized layout of this struct is part of the on-chain storage
+/// schema:
+/// - Field order must remain stable across versions.
+/// - Existing field types must not change.
+/// - New fields must be appended at the end and should be optional
+///   (e.g. `Option<u64>`) so that old records continue to deserialize.
+///
 /// The `status` field is managed by the state machine. Use the provided
 /// transition helpers to modify status, never set it directly.
 #[contracttype]
@@ -109,8 +116,20 @@ pub struct Subscription {
     pub interval_seconds: u64,
     pub last_payment_timestamp: u64,
     /// Current lifecycle state. Modified only through state machine transitions.
+    ///
+    /// The numeric discriminants of [`SubscriptionStatus`] are written
+    /// to storage and are validated by serialization tests. Do not
+    /// reorder existing variants or change their values.
     pub status: SubscriptionStatus,
+    /// Prepaid vault balance backing this subscription.
+    ///
+    /// Changing this field's type or removing it is a breaking storage
+    /// change and will cause old records to fail deserialization.
     pub prepaid_balance: i128,
+    /// Indicates whether usage-based billing features are enabled.
+    ///
+    /// This flag is stored per-subscription and must remain stable
+    /// across upgrades to avoid misinterpreting stored records.
     pub usage_enabled: bool,
 }
 
