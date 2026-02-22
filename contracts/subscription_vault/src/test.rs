@@ -3020,13 +3020,7 @@ fn test_export_subscription_summary_fields() {
     let amount = 12_000_000i128;
     let interval_seconds = 14 * 24 * 60 * 60;
 
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &amount,
-        &interval_seconds,
-        &false,
-    );
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
 
     let summary = client.export_subscription_summary(&admin, &id);
     assert_eq!(summary.subscription_id, id);
