@@ -198,13 +198,25 @@ pub struct MerchantWithdrawalEvent {
     pub amount: i128,
 }
 
-/// Emitted when a merchant-initiated one-off charge is applied to a subscription.
+/// Result of computing next charge information for a subscription.
+///
+/// Contains the estimated next charge timestamp and a flag indicating
+/// whether the charge is expected to occur based on the subscription status.
 #[contracttype]
-#[derive(Clone, Debug)]
-pub struct OneOffChargedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub amount: i128,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NextChargeInfo {
+    /// Estimated timestamp for the next charge attempt.
+    /// For Active and InsufficientBalance states, this is `last_payment_timestamp + interval_seconds`.
+    /// For Paused and Cancelled states, this represents when the charge *would* occur if the
+    /// subscription were Active, but `is_charge_expected` will be `false`.
+    pub next_charge_timestamp: u64,
+
+    /// Whether a charge is actually expected based on the subscription status.
+    /// - `true` for Active subscriptions (charge will be attempted)
+    /// - `true` for InsufficientBalance (charge will be retried after funding)
+    /// - `false` for Paused subscriptions (no charges until resumed)
+    /// - `false` for Cancelled subscriptions (terminal state, no future charges)
+    pub is_charge_expected: bool,
 }
 
 /// Represents the reason for stranded funds that can be recovered by admin.
@@ -233,14 +245,4 @@ pub struct RecoveryEvent {
     pub reason: RecoveryReason,
     /// Timestamp when recovery was executed
     pub timestamp: u64,
-}
-
-/// Result of computing next charge information for a subscription.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NextChargeInfo {
-    /// Estimated timestamp for the next charge attempt.
-    pub next_charge_timestamp: u64,
-    /// Whether a charge is actually expected based on the subscription status.
-    pub is_charge_expected: bool,
 }

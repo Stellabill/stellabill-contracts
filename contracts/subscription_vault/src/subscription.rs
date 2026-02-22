@@ -26,7 +26,7 @@ pub fn do_create_subscription(
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
-    if interval_seconds == 0 {
+    if interval_seconds == 0 && !usage_enabled {
         return Err(Error::InvalidInterval);
     }
     let sub = Subscription {
