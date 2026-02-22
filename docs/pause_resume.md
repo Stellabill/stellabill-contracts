@@ -13,7 +13,11 @@ Subscriptions can be temporarily suspended using the `pause_subscription` entryp
    - Both the **Subscriber** and the **Merchant** have the authority to resume a subscription.
    - Unauthorized addresses will receive an `Unauthorized` (401) error.
 
-2. **Charging Paused Subscriptions**:
+2. **Idempotency**:
+   - Repeated calls to `pause_subscription` for an already paused subscription are allowed and perform no operation.
+   - Repeated calls to `resume_subscription` for an already active subscription are allowed and perform no operation.
+
+3. **Charging Paused Subscriptions**:
    - Charges are strictly prohibited while a subscription is in the `Paused` state.
    - Any attempt to charge a paused subscription will return a `NotActive` (1002) error.
 
@@ -21,9 +25,15 @@ Subscriptions can be temporarily suspended using the `pause_subscription` entryp
    - `Active` -> `Paused`: Allowed.
    - `Paused` -> `Active`: Allowed.
    - `InsufficientBalance` -> `Active`: Allowed (equivalent to resuming/retrying).
+   - `InsufficientBalance` -> `Paused`: **Blocked** (must be Active first or transition to Cancelled).
    - `Cancelled`: Terminal state; no transitions to `Paused` or `Active` are allowed.
 
-4. **Billing Consistency**:
+4. **Invariants**:
+   - A subscription can only be in one state at a time.
+   - Status transitions are strictly enforced via `validate_status_transition`.
+   - Pre-conditions for charging: Status must be `Active`.
+
+5. **Billing Consistency**:
    - Pausing a subscription does not automatically shift the billing interval or `last_payment_timestamp`.
    - If a subscription is resumed after its next scheduled billing date has passed, it may be eligible for charging immediately upon resumption.
 

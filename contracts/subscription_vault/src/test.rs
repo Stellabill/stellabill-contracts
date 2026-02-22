@@ -450,6 +450,36 @@ fn test_state_transition_idempotent_same_status() {
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
 }
 
+#[test]
+fn test_resume_subscription_from_active_is_idempotent() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Resuming from Active should be idempotent (no-op)
+    client.resume_subscription(&id, &subscriber);
+    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_resume_subscription_from_insufficient_balance() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::InsufficientBalance);
+
+    // Should be allowed to resume from InsufficientBalance if user refills or just wants to retry
+    client.resume_subscription(&id, &subscriber);
+    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Active);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #400)")]
+fn test_pause_subscription_from_insufficient_balance_should_fail() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::InsufficientBalance);
+
+    // Cannot pause from InsufficientBalance according to state machine rules
+    client.pause_subscription(&id, &subscriber);
+}
+
 // =============================================================================
 // Complex State Transition Sequences
 // =============================================================================
