@@ -57,8 +57,42 @@ impl SubscriptionVault {
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
+    /// Billing engine (backend) calls this to charge one interval.
+    ///
+    /// Enforces strict interval timing: the current ledger timestamp must be
+    /// >= `last_payment_timestamp + interval_seconds`. If the interval has not
+    /// elapsed, returns `Error::IntervalNotElapsed` and leaves storage unchanged.
+    /// On success, `last_payment_timestamp` is advanced to the current ledger
+    /// timestamp.
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
-        subscription::do_charge_subscription(&env, subscription_id)
+        // TODO: require_caller admin or authorized billing service
+
+        let mut sub: Subscription = env
+            .storage()
+            .instance()
+            .get(&subscription_id)
+            .ok_or(Error::NotFound)?;
+
+        if sub.status != SubscriptionStatus::Active {
+            return Err(Error::NotActive);
+        }
+
+        let now = env.ledger().timestamp();
+        let next_charge_at = sub
+            .last_payment_timestamp
+            .checked_add(sub.interval_seconds)
+            .expect("interval overflow");
+
+        if now < next_charge_at {
+            return Err(Error::IntervalNotElapsed);
+        }
+
+        sub.last_payment_timestamp = now;
+
+        // TODO: deduct sub.amount from sub.prepaid_balance, transfer to merchant
+
+        env.storage().instance().set(&subscription_id, &sub);
+        Ok(())
     }
 
     pub fn estimate_topup_for_intervals(
