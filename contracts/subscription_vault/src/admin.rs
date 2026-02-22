@@ -18,12 +18,7 @@ pub fn get_token(env: &Env) -> Result<Address, Error> {
         .ok_or(Error::NotFound)
 }
 
-pub fn do_init(
-    env: &Env,
-    token: Address,
-    admin: Address,
-    min_topup: i128,
-) -> Result<(), Error> {
+pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
     env.storage()
         .instance()
         .set(&Symbol::new(env, "token"), &token);

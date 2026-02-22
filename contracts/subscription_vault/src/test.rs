@@ -258,7 +258,8 @@ fn create_test_subscription(
 #[test]
 fn test_pause_subscription_from_active() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Pause from Active should succeed
     client.pause_subscription(&id, &subscriber);
@@ -271,7 +272,8 @@ fn test_pause_subscription_from_active() {
 #[should_panic(expected = "Error(Contract, #400)")]
 fn test_pause_subscription_from_cancelled_should_fail() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First cancel
     client.cancel_subscription(&id, &subscriber);
@@ -298,7 +300,8 @@ fn test_init_with_min_topup() {
 fn test_pause_subscription_from_paused_is_idempotent() {
     // Idempotent transition: Paused -> Paused should succeed (no-op)
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First pause
     client.pause_subscription(&id, &subscriber);
@@ -318,7 +321,8 @@ fn test_pause_subscription_from_paused_is_idempotent() {
 #[test]
 fn test_cancel_subscription_from_active() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Cancel from Active should succeed
     client.cancel_subscription(&id, &subscriber);
@@ -330,7 +334,8 @@ fn test_cancel_subscription_from_active() {
 #[test]
 fn test_cancel_subscription_from_paused() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First pause
     client.pause_subscription(&id, &subscriber);
@@ -346,7 +351,8 @@ fn test_cancel_subscription_from_paused() {
 fn test_cancel_subscription_from_cancelled_is_idempotent() {
     // Idempotent transition: Cancelled -> Cancelled should succeed (no-op)
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First cancel
     client.cancel_subscription(&id, &subscriber);
@@ -366,7 +372,8 @@ fn test_cancel_subscription_from_cancelled_is_idempotent() {
 #[test]
 fn test_resume_subscription_from_paused() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First pause
     client.pause_subscription(&id, &subscriber);
@@ -382,7 +389,8 @@ fn test_resume_subscription_from_paused() {
 #[should_panic(expected = "Error(Contract, #400)")]
 fn test_resume_subscription_from_cancelled_should_fail() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // First cancel
     client.cancel_subscription(&id, &subscriber);
@@ -394,7 +402,8 @@ fn test_resume_subscription_from_cancelled_should_fail() {
 #[test]
 fn test_state_transition_idempotent_same_status() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Cancelling from already cancelled should fail (but we need to set it first)
     // First cancel
@@ -410,7 +419,8 @@ fn test_state_transition_idempotent_same_status() {
 #[test]
 fn test_full_lifecycle_active_pause_resume() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Active -> Paused
     client.pause_subscription(&id, &subscriber);
@@ -431,7 +441,8 @@ fn test_full_lifecycle_active_pause_resume() {
 #[test]
 fn test_full_lifecycle_active_cancel() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Active -> Cancelled (terminal)
     client.cancel_subscription(&id, &subscriber);
@@ -566,7 +577,8 @@ fn test_all_valid_transitions_coverage() {
 #[should_panic(expected = "Error(Contract, #400)")]
 fn test_invalid_cancelled_to_active() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     client.cancel_subscription(&id, &subscriber);
     client.resume_subscription(&id, &subscriber);
@@ -576,7 +588,8 @@ fn test_invalid_cancelled_to_active() {
 #[should_panic(expected = "Error(Contract, #400)")]
 fn test_invalid_insufficient_balance_to_paused() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
 
     // Set to InsufficientBalance
     let mut sub = client.get_subscription(&id);
@@ -955,7 +968,8 @@ fn test_estimate_topup_zero_intervals_returns_zero() {
 #[test]
 fn test_estimate_topup_balance_already_covers_returns_zero() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
     // 10 USDC per interval, deposit 30 USDC, ask for 3 intervals -> required 30, balance 30, topup 0
     client.deposit_funds(&id, &subscriber, &30_000000i128);
     let sub = client.get_subscription(&id);
@@ -967,7 +981,8 @@ fn test_estimate_topup_balance_already_covers_returns_zero() {
 #[test]
 fn test_estimate_topup_insufficient_balance_returns_shortfall() {
     let (env, client, token, _) = setup_test_env();
-    let (id, subscriber, _) = create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
+    let (id, subscriber, _) =
+        create_test_subscription(&env, &client, &token, SubscriptionStatus::Active);
     // amount 10_000_000, 3 intervals = 30_000_000 required; deposit 10_000_000 -> topup 20_000_000
     client.deposit_funds(&id, &subscriber, &10_000000i128);
     let topup = client.estimate_topup_for_intervals(&id, &3);
@@ -1068,7 +1083,6 @@ fn test_batch_charge_partial_failure() {
 // =============================================================================
 // deposit_funds tests
 // =============================================================================
-
 
 /// Repeated top-ups: three sequential deposits must accumulate correctly.
 #[test]
