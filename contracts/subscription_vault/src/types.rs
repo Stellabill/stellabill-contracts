@@ -5,6 +5,14 @@
 
 use soroban_sdk::{contracterror, contracttype, Address};
 
+/// Storage keys for secondary indices.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// Maps a merchant address to its list of subscription IDs.
+    MerchantSubs(Address),
+}
+
 #[contracterror]
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]

@@ -409,6 +409,31 @@ impl SubscriptionVault {
         }
         Ok(())
     }
+
+    /// Returns subscriptions for a merchant, paginated by offset.
+    ///
+    /// * `merchant` – the merchant address to query.
+    /// * `start`    – 0-based offset into the merchant's subscription list.
+    /// * `limit`    – maximum number of subscriptions to return.
+    ///
+    /// Results are ordered chronologically (insertion order).
+    /// Returns an empty `Vec` when the merchant has no subscriptions or
+    /// `start` is beyond the end of the list.
+    pub fn get_subscriptions_by_merchant(
+        env: Env,
+        merchant: Address,
+        start: u32,
+        limit: u32,
+    ) -> Vec<Subscription> {
+        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
+    }
+
+    /// Returns the number of subscriptions for a given merchant.
+    ///
+    /// Useful for dashboards and pagination metadata.
+    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
+        queries::get_merchant_subscription_count(&env, merchant)
+    }
 }
 
 #[cfg(test)]
