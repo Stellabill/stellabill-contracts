@@ -222,7 +222,10 @@ impl SubscriptionVault {
     }
 
     /// Batch charge multiple subscriptions in one call. Admin-only.
-    pub fn batch_charge(env: Env, subscription_ids: Vec<u32>) -> Result<Vec<BatchChargeResult>, Error> {
+    pub fn batch_charge(
+        env: Env,
+        subscription_ids: Vec<u32>,
+    ) -> Result<Vec<BatchChargeResult>, Error> {
         admin::do_batch_charge(&env, &subscription_ids)
     }
 
