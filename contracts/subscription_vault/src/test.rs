@@ -1,9 +1,20 @@
 use crate::{
-    can_transition, get_allowed_transitions, validate_status_transition, Error, Subscription,
-    SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    can_transition, get_allowed_transitions, validate_status_transition, Error,
+    FundsDepositedEvent, MerchantWithdrawalEvent, Subscription, SubscriptionCancelledEvent,
+    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
+    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
-use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
+use soroban_sdk::{symbol_short, vec as soroban_vec, Address, Env, IntoVal, TryFromVal, Val, Vec};
+
+// ---------------------------------------------------------------------------
+// Helper: decode the event data payload (3rd element of event tuple)
+// ---------------------------------------------------------------------------
+fn last_event_data<T: TryFromVal<Env, Val>>(env: &Env) -> T {
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    T::try_from_val(env, &last.2).unwrap()
+}
 
 // =============================================================================
 // State Machine Helper Tests
@@ -996,7 +1007,7 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
 fn test_batch_charge_empty_list_returns_empty() {
     let env = Env::default();
     let (client, _admin, _, _) = setup_batch_env(&env);
-    let ids = SorobanVec::new(&env);
+    let ids = Vec::new(&env);
     let results = client.batch_charge(&ids);
     assert_eq!(results.len(), 0);
 }
@@ -1005,7 +1016,7 @@ fn test_batch_charge_empty_list_returns_empty() {
 fn test_batch_charge_all_success() {
     let env = Env::default();
     let (client, _admin, id0, id1) = setup_batch_env(&env);
-    let mut ids = SorobanVec::new(&env);
+    let mut ids = Vec::new(&env);
     ids.push_back(id0);
     ids.push_back(id1);
     let results = client.batch_charge(&ids);
@@ -1031,7 +1042,7 @@ fn test_batch_charge_partial_failure() {
     let id1 = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
     // id1 has no deposit -> charge will fail with InsufficientBalance
     env.ledger().set_timestamp(T0 + INTERVAL);
-    let mut ids = SorobanVec::new(&env);
+    let mut ids = Vec::new(&env);
     ids.push_back(id0);
     ids.push_back(id1);
     let results = client.batch_charge(&ids);

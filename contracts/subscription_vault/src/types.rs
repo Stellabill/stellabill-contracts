@@ -99,3 +99,59 @@ pub struct Subscription {
     pub prepaid_balance: i128,
     pub usage_enabled: bool,
 }
+
+// Event types
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCreatedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FundsDepositedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelledEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub refund_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantWithdrawalEvent {
+    pub merchant: Address,
+    pub amount: i128,
+}

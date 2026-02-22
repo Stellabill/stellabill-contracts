@@ -5,7 +5,6 @@
 use crate::admin::require_admin;
 use crate::charge_core::charge_one;
 use crate::queries::get_subscription;
-use crate::state_machine::validate_status_transition;
 use crate::types::{Error, Subscription, SubscriptionStatus};
 use soroban_sdk::{Address, Env, Symbol};
 
@@ -66,46 +65,4 @@ pub fn do_charge_subscription(env: &Env, subscription_id: u32) -> Result<(), Err
     let admin = require_admin(env)?;
     admin.require_auth();
     charge_one(env, subscription_id)
-}
-
-pub fn do_cancel_subscription(
-    env: &Env,
-    subscription_id: u32,
-    authorizer: Address,
-) -> Result<(), Error> {
-    authorizer.require_auth();
-
-    let mut sub = get_subscription(env, subscription_id)?;
-    validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-    sub.status = SubscriptionStatus::Cancelled;
-    env.storage().instance().set(&subscription_id, &sub);
-    Ok(())
-}
-
-pub fn do_pause_subscription(
-    env: &Env,
-    subscription_id: u32,
-    authorizer: Address,
-) -> Result<(), Error> {
-    authorizer.require_auth();
-
-    let mut sub = get_subscription(env, subscription_id)?;
-    validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
-    sub.status = SubscriptionStatus::Paused;
-    env.storage().instance().set(&subscription_id, &sub);
-    Ok(())
-}
-
-pub fn do_resume_subscription(
-    env: &Env,
-    subscription_id: u32,
-    authorizer: Address,
-) -> Result<(), Error> {
-    authorizer.require_auth();
-
-    let mut sub = get_subscription(env, subscription_id)?;
-    validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-    sub.status = SubscriptionStatus::Active;
-    env.storage().instance().set(&subscription_id, &sub);
-    Ok(())
 }
