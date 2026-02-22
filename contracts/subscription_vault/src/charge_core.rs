@@ -34,6 +34,7 @@ pub fn charge_one(env: &Env, subscription_id: u32) -> Result<(), Error> {
         .prepaid_balance
         .checked_sub(sub.amount)
         .ok_or(Error::Overflow)?;
+    crate::merchant::credit_merchant_balance(env, &sub.merchant, sub.amount)?;
     sub.last_payment_timestamp = now;
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())

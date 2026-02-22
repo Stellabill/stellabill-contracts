@@ -6,12 +6,7 @@ use crate::charge_core::charge_one;
 use crate::types::{BatchChargeResult, Error};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-pub fn do_init(
-    env: &Env,
-    token: Address,
-    admin: Address,
-    min_topup: i128,
-) -> Result<(), Error> {
+pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
     env.storage()
         .instance()
         .set(&Symbol::new(env, "token"), &token);
