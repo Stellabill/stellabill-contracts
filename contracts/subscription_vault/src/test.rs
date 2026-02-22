@@ -1426,6 +1426,128 @@ fn test_recover_stranded_funds_edge_case_max_i128() {
     let result = client.try_recover_stranded_funds(&admin, &recipient, &amount, &reason);
     assert!(result.is_ok());
 }
+
+// =============================================================================
+// Migration Export Hooks Tests
+// =============================================================================
+
+#[test]
+fn test_export_contract_snapshot_admin_only() {
+    let (env, client, token, admin) = setup_test_env();
+
+    let snapshot = client.export_contract_snapshot(&admin);
+    assert_eq!(snapshot.admin, admin);
+    assert_eq!(snapshot.token, token);
+    assert_eq!(snapshot.min_topup, 1_000000i128);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_export_contract_snapshot(&non_admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_export_subscription_summary_fields() {
+    let (env, client, _, admin) = setup_test_env();
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let amount = 12_000_000i128;
+    let interval_seconds = 14 * 24 * 60 * 60;
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval_seconds,
+        &false,
+    );
+
+    let summary = client.export_subscription_summary(&admin, &id);
+    assert_eq!(summary.subscription_id, id);
+    assert_eq!(summary.subscriber, subscriber);
+    assert_eq!(summary.merchant, merchant);
+    assert_eq!(summary.amount, amount);
+    assert_eq!(summary.interval_seconds, interval_seconds);
+    assert_eq!(summary.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_export_subscription_summaries_pagination() {
+    let (env, client, _, admin) = setup_test_env();
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let id1 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1_000_000i128,
+        &(24 * 60 * 60),
+        &false,
+    );
+    let id2 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &2_000_000i128,
+        &(7 * 24 * 60 * 60),
+        &false,
+    );
+    let id3 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &3_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &true,
+    );
+
+    let page1 = client.export_subscription_summaries(&admin, &id1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().subscription_id, id1);
+    assert_eq!(page1.get(1).unwrap().subscription_id, id2);
+
+    let page2 = client.export_subscription_summaries(&admin, &id3, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().subscription_id, id3);
+}
+
+#[test]
+fn test_export_subscription_summaries_limit_enforced() {
+    let (env, client, _, admin) = setup_test_env();
+
+    let result = client.try_export_subscription_summaries(&admin, &0, &101);
+    assert!(result.is_err());
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_export_subscription_summaries(&non_admin, &0, &1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_export_subscription_does_not_mutate_state() {
+    let (env, client, _, admin) = setup_test_env();
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &5_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &false,
+    );
+
+    let before = client.get_subscription(&id);
+    let _summary = client.export_subscription_summary(&admin, &id);
+    let after = client.get_subscription(&id);
+
+    assert_eq!(before.subscriber, after.subscriber);
+    assert_eq!(before.merchant, after.merchant);
+    assert_eq!(before.amount, after.amount);
+    assert_eq!(before.interval_seconds, after.interval_seconds);
+    assert_eq!(before.status, after.status);
+    assert_eq!(before.prepaid_balance, after.prepaid_balance);
+    assert_eq!(before.usage_enabled, after.usage_enabled);
+}
 // =============================================================================
 // Usage Enabled Feature Tests
 // =============================================================================

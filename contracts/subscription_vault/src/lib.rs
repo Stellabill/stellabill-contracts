@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
+};
 
 #[contracterror]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -12,6 +14,7 @@ pub enum Error {
     BelowMinimumTopup = 402,
     RecoveryNotAllowed = 403,
     InvalidRecoveryAmount = 405,
+    InvalidExportLimit = 406,
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -90,6 +93,52 @@ pub struct RecoveryEvent {
     /// The documented reason for recovery
     pub reason: RecoveryReason,
     /// Timestamp when recovery was executed
+    pub timestamp: u64,
+}
+
+/// Exported snapshot of contract-level configuration.
+///
+/// This is intended for controlled, admin-only migration tooling and should be
+/// treated as read-only metadata for future upgrades.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ContractSnapshot {
+    pub admin: Address,
+    pub token: Address,
+    pub min_topup: i128,
+    pub next_id: u32,
+    pub storage_version: u32,
+    pub timestamp: u64,
+}
+
+/// Exported summary of a subscription for migration purposes.
+///
+/// This is a read-only projection of the subscription state; exporting does not
+/// mutate contract storage or balances.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionSummary {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub last_payment_timestamp: u64,
+    pub status: SubscriptionStatus,
+    pub prepaid_balance: i128,
+    pub usage_enabled: bool,
+}
+
+/// Event emitted when a migration export is requested.
+///
+/// This creates an audit trail for any export operation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MigrationExportEvent {
+    pub admin: Address,
+    pub start_id: u32,
+    pub limit: u32,
+    pub exported: u32,
     pub timestamp: u64,
 }
 
@@ -225,6 +274,22 @@ pub struct NextChargeInfo {
     pub is_charge_expected: bool,
 }
 
+const STORAGE_VERSION: u32 = 1;
+const MAX_EXPORT_LIMIT: u32 = 100;
+
+fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&Symbol::new(env, "admin"))
+        .ok_or(Error::NotFound)?;
+    if admin != &stored_admin {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
 /// Computes the estimated next charge timestamp for a subscription.
 ///
 /// This is a readonly helper that does not mutate contract state. It provides
@@ -320,15 +385,7 @@ impl SubscriptionVault {
     /// * `min_topup` - Minimum amount (in token base units) required for deposit_funds.
     ///                 Prevents inefficient micro-deposits. Typical range: 1-10 USDC (1_000000 - 10_000000 for 6 decimals).
     pub fn set_min_topup(env: Env, admin: Address, min_topup: i128) -> Result<(), Error> {
-        admin.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .ok_or(Error::NotFound)?;
-        if admin != stored_admin {
-            return Err(Error::Unauthorized);
-        }
+        require_admin_auth(&env, &admin)?;
         env.storage()
             .instance()
             .set(&Symbol::new(&env, "min_topup"), &min_topup);
@@ -395,18 +452,7 @@ impl SubscriptionVault {
     /// - Timestamp of rotation
     pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
         // 1. Require current admin authorization
-        current_admin.require_auth();
-
-        // 2. Verify caller is the stored admin
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .ok_or(Error::NotFound)?;
-
-        if current_admin != stored_admin {
-            return Err(Error::Unauthorized);
-        }
+        require_admin_auth(&env, &current_admin)?;
 
         // 3. Update admin to new address
         env.storage()
@@ -720,18 +766,7 @@ impl SubscriptionVault {
         reason: RecoveryReason,
     ) -> Result<(), Error> {
         // 1. Require admin authorization
-        admin.require_auth();
-
-        // 2. Verify caller is the stored admin
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, "admin"))
-            .ok_or(Error::NotFound)?;
-
-        if admin != stored_admin {
-            return Err(Error::Unauthorized);
-        }
+        require_admin_auth(&env, &admin)?;
 
         // 3. Validate recovery amount
         if amount <= 0 {
@@ -758,6 +793,141 @@ impl SubscriptionVault {
         // token_client.transfer(&env.current_contract_address(), &recipient, &amount);
 
         Ok(())
+    }
+
+    /// **ADMIN ONLY**: Export contract-level configuration for migration tooling.
+    ///
+    /// This is a read-only snapshot intended for carefully managed upgrades.
+    /// It does not mutate contract state or move funds.
+    pub fn export_contract_snapshot(env: Env, admin: Address) -> Result<ContractSnapshot, Error> {
+        require_admin_auth(&env, &admin)?;
+
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "token"))
+            .ok_or(Error::NotFound)?;
+        let min_topup: i128 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "min_topup"))
+            .ok_or(Error::NotFound)?;
+        let next_id: u32 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0);
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_contract_snapshot"),),
+            (admin.clone(), env.ledger().timestamp()),
+        );
+
+        Ok(ContractSnapshot {
+            admin,
+            token,
+            min_topup,
+            next_id,
+            storage_version: STORAGE_VERSION,
+            timestamp: env.ledger().timestamp(),
+        })
+    }
+
+    /// **ADMIN ONLY**: Export a single subscription summary for migration tooling.
+    ///
+    /// This is a read-only projection and cannot change balances or status.
+    pub fn export_subscription_summary(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+    ) -> Result<SubscriptionSummary, Error> {
+        require_admin_auth(&env, &admin)?;
+        let sub = Self::get_subscription(env.clone(), subscription_id)?;
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin: admin.clone(),
+                start_id: subscription_id,
+                limit: 1,
+                exported: 1,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(SubscriptionSummary {
+            subscription_id,
+            subscriber: sub.subscriber,
+            merchant: sub.merchant,
+            amount: sub.amount,
+            interval_seconds: sub.interval_seconds,
+            last_payment_timestamp: sub.last_payment_timestamp,
+            status: sub.status,
+            prepaid_balance: sub.prepaid_balance,
+            usage_enabled: sub.usage_enabled,
+        })
+    }
+
+    /// **ADMIN ONLY**: Export a paginated list of subscription summaries.
+    ///
+    /// `limit` is capped by an internal maximum to keep exports bounded.
+    pub fn export_subscription_summaries(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<Vec<SubscriptionSummary>, Error> {
+        require_admin_auth(&env, &admin)?;
+        if limit > MAX_EXPORT_LIMIT {
+            return Err(Error::InvalidExportLimit);
+        }
+        if limit == 0 {
+            return Ok(Vec::new(&env));
+        }
+
+        let next_id: u32 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0);
+        if start_id >= next_id {
+            return Ok(Vec::new(&env));
+        }
+
+        let end_id = start_id.saturating_add(limit).min(next_id);
+        let mut out = Vec::new(&env);
+        let mut exported = 0u32;
+        let mut id = start_id;
+        while id < end_id {
+            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+                out.push_back(SubscriptionSummary {
+                    subscription_id: id,
+                    subscriber: sub.subscriber,
+                    merchant: sub.merchant,
+                    amount: sub.amount,
+                    interval_seconds: sub.interval_seconds,
+                    last_payment_timestamp: sub.last_payment_timestamp,
+                    status: sub.status,
+                    prepaid_balance: sub.prepaid_balance,
+                    usage_enabled: sub.usage_enabled,
+                });
+                exported += 1;
+            }
+            id += 1;
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin,
+                start_id,
+                limit,
+                exported,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(out)
     }
 
     /// Read subscription by id (for indexing and UI).
