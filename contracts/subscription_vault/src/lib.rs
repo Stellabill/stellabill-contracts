@@ -180,8 +180,15 @@ pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> boo
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
+
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
-pub use types::{BatchChargeResult, Error, Subscription, SubscriptionStatus};
+pub use types::{
+    BatchChargeResult, Error, FundsDepositedEvent, MerchantWithdrawalEvent, OneOffChargedEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+    SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus,
+};
 
 
 
@@ -320,6 +327,16 @@ impl SubscriptionVault {
 
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
         subscription::do_charge_subscription(&env, subscription_id)
+
+    /// Charge one subscription for the current billing interval. Optional `idempotency_key` enables
+    /// safe retries: repeated calls with the same key return success without double-charging.
+    pub fn charge_subscription(
+        env: Env,
+        subscription_id: u32,
+        idempotency_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        subscription::do_charge_subscription(&env, subscription_id, idempotency_key)
+
     }
 
     pub fn estimate_topup_for_intervals(
@@ -356,7 +373,29 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_cancel_subscription(&env, subscription_id, authorizer)
+        authorizer.require_auth();
+        let mut sub: Subscription = env
+            .storage()
+            .instance()
+            .get(&subscription_id)
+            .ok_or(Error::NotFound)?;
+
+        validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+
+        let refund = sub.prepaid_balance;
+        sub.status = SubscriptionStatus::Cancelled;
+        env.storage().instance().set(&subscription_id, &sub);
+
+        env.events().publish(
+            (symbol_short!("cancelled"),),
+            SubscriptionCancelledEvent {
+                subscription_id,
+                authorizer,
+                refund_amount: refund,
+            },
+        );
+
+        Ok(())
     }
 
     pub fn pause_subscription(
@@ -364,7 +403,27 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_pause_subscription(&env, subscription_id, authorizer)
+        authorizer.require_auth();
+        let mut sub: Subscription = env
+            .storage()
+            .instance()
+            .get(&subscription_id)
+            .ok_or(Error::NotFound)?;
+
+        validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
+
+        sub.status = SubscriptionStatus::Paused;
+        env.storage().instance().set(&subscription_id, &sub);
+
+        env.events().publish(
+            (symbol_short!("paused"),),
+            SubscriptionPausedEvent {
+                subscription_id,
+                authorizer,
+            },
+        );
+
+        Ok(())
     }
 
     pub fn resume_subscription(
@@ -372,14 +431,42 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_resume_subscription(&env, subscription_id, authorizer)
+        authorizer.require_auth();
+        let mut sub: Subscription = env
+            .storage()
+            .instance()
+            .get(&subscription_id)
+            .ok_or(Error::NotFound)?;
+
+        validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
+
+        sub.status = SubscriptionStatus::Active;
+        env.storage().instance().set(&subscription_id, &sub);
+
+        env.events().publish(
+            (symbol_short!("resumed"),),
+            SubscriptionResumedEvent {
+                subscription_id,
+                authorizer,
+            },
+        );
+
+        Ok(())
     }
 
-    pub fn withdraw_merchant_funds(
+    /// Merchant-initiated one-off charge: debits `amount` from the subscription's prepaid balance.
+    /// Caller must be the subscription's merchant (requires auth). Amount must not exceed
+    /// prepaid_balance; subscription must be Active or Paused.
+    pub fn charge_one_off(
         env: Env,
+        subscription_id: u32,
         merchant: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
+    }
+
+    pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
