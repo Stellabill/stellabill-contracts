@@ -17,48 +17,67 @@ pub enum DataKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    NotFound = 404,
+    // --- Auth & Access Control (401-403) ---
+    /// The caller is not authorized to perform this action.
     Unauthorized = 401,
-    /// Charge attempted before `last_payment_timestamp + interval_seconds`.
+    /// Action requires administrative privileges.
+    NotAdmin = 403,
+
+    // --- Not Found (404-406) ---
+    /// Generic resource not found.
+    NotFound = 404,
+    /// The specific subscription ID does not exist in storage.
+    SubscriptionNotFound = 405,
+    /// Contract configuration (admin, token, etc.) has not been initialized.
+    ConfigNotFound = 406,
+
+    // --- Invalid Input & Arguments (400, 407-409) ---
+    /// A provided argument is malformed or invalid.
+    InvalidArguments = 400,
+    /// Amount must be greater than zero and valid.
+    InvalidAmount = 407,
+    /// Billing interval must be within allowed bounds.
+    InvalidInterval = 408,
+    /// The requested status transition is not allowed by the state machine.
+    InvalidStatusTransition = 409,
+
+    // --- Financial & Funds (402, 410-412) ---
+    /// The subscription vault has insufficient funds to cover the charge.
+    InsufficientBalance = 402,
+    /// Deposit amount is below the required minimum threshold.
+    BelowMinimumTopup = 410,
+    /// Withdrawal failed due to insufficient merchant balance.
+    InsufficientMerchantBalance = 411,
+
+    // --- Timing & Lifecycle (1001-1008) ---
+    /// Charge attempted before the billing interval has elapsed.
     IntervalNotElapsed = 1001,
-    /// Subscription is not Active (e.g. Paused, Cancelled).
+    /// Subscription is not in an Active state (e.g. Paused, Cancelled).
     NotActive = 1002,
-    InvalidStatusTransition = 400,
-    BelowMinimumTopup = 402,
-    /// Arithmetic overflow in computation (e.g. amount * intervals).
-    Overflow = 403,
-    /// Charge failed due to insufficient prepaid balance.
-    InsufficientBalance = 1003,
+    /// Subscription has reached its end date or max cycles.
+    SubscriptionExpired = 1003,
+    /// Replay: charge for this billing period or idempotency key already processed.
+    Replay = 1004,
     /// Usage-based charge attempted on a subscription with `usage_enabled = false`.
-    UsageNotEnabled = 1004,
+    UsageNotEnabled = 1005,
     /// Usage-based charge amount exceeds the available prepaid balance.
-    InsufficientPrepaidBalance = 1005,
-    /// The provided amount is zero or negative.
-    InvalidAmount = 1006,
-    /// Charge already processed for this billing period.
-    Replay = 1007,
+    InsufficientPrepaidBalance = 1006,
     /// Recovery amount is zero or negative.
-    InvalidRecoveryAmount = 1008,
+    InvalidRecoveryAmount = 1007,
+
+    // --- Configuration (1101-1103) ---
+    /// The contract has not been properly initialized or configured.
+    NotConfigured = 1101,
+    /// Provided configuration values (e.g. min_topup) are invalid.
+    InvalidConfig = 1102,
+    /// Arithmetic overflow in computation (e.g. amount * intervals).
+    Overflow = 1103,
 }
 
 impl Error {
     /// Returns the numeric code for this error (for batch result reporting).
     pub const fn to_code(self) -> u32 {
-        match self {
-            Error::NotFound => 404,
-            Error::Unauthorized => 401,
-            Error::IntervalNotElapsed => 1001,
-            Error::NotActive => 1002,
-            Error::InvalidStatusTransition => 400,
-            Error::BelowMinimumTopup => 402,
-            Error::Overflow => 403,
-            Error::InsufficientBalance => 1003,
-            Error::UsageNotEnabled => 1004,
-            Error::InsufficientPrepaidBalance => 1005,
-            Error::InvalidAmount => 1006,
-            Error::Replay => 1007,
-            Error::InvalidRecoveryAmount => 1008,
-        }
+        self as u32
     }
 }
 
@@ -110,7 +129,7 @@ pub enum SubscriptionStatus {
 /// The `status` field is managed by the state machine. Use the provided
 /// transition helpers to modify status, never set it directly.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Subscription {
     pub subscriber: Address,
     pub merchant: Address,
