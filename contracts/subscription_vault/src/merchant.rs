@@ -46,11 +46,7 @@ pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Re
 
     let new_balance = current.checked_sub(amount).ok_or(Error::Overflow)?;
 
-    let token_addr: Address = env
-        .storage()
-        .instance()
-        .get(&Symbol::new(env, "token"))
-        .ok_or(Error::NotFound)?;
+    let token_addr = crate::admin::get_token(env)?;
 
     let token_client = token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &merchant, &amount);
