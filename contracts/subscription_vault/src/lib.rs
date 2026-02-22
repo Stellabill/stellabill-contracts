@@ -23,6 +23,7 @@ impl SubscriptionVault {
     }
 
     pub fn set_min_topup(env: Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         admin::do_set_min_topup(&env, admin, min_topup)
     }
 
@@ -38,6 +39,7 @@ impl SubscriptionVault {
         interval_seconds: u64,
         usage_enabled: bool,
     ) -> Result<u32, Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_create_subscription(
             &env,
             subscriber,
@@ -54,10 +56,12 @@ impl SubscriptionVault {
         subscriber: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_charge_subscription(&env, subscription_id)
     }
 
@@ -81,6 +85,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
@@ -89,6 +94,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_pause_subscription(&env, subscription_id, authorizer)
     }
 
@@ -97,19 +103,29 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer)
     }
 
-    pub fn withdraw_merchant_funds(
-        env: Env,
-        merchant: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
+    pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
+        admin::require_not_stopped(&env)?;
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
+    }
+
+    pub fn emergency_stop(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_emergency_stop(&env, admin)
+    }
+
+    pub fn resume_contract(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_resume_contract(&env, admin)
+    }
+
+    pub fn is_stopped(env: Env) -> bool {
+        admin::is_stopped(&env)
     }
 }
 

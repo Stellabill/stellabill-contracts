@@ -21,6 +21,8 @@ pub enum Error {
     Overflow = 403,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
+    /// Operation rejected because the contract is in emergency stop mode.
+    ContractStopped = 1004,
 }
 
 impl Error {
@@ -35,6 +37,7 @@ impl Error {
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
             Error::InsufficientBalance => 1003,
+            Error::ContractStopped => 1004,
         }
     }
 }
