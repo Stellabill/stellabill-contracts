@@ -12,8 +12,8 @@ use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
 
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    BatchChargeResult, Error, FundsDepositedEvent, MerchantWithdrawalEvent, Subscription,
-    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+    BatchChargeResult, Error, FundsDepositedEvent, MerchantWithdrawalEvent, OneOffChargedEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus,
 };
 
@@ -61,8 +61,14 @@ impl SubscriptionVault {
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
-    pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
-        subscription::do_charge_subscription(&env, subscription_id)
+    /// Charge one subscription for the current billing interval. Optional `idempotency_key` enables
+    /// safe retries: repeated calls with the same key return success without double-charging.
+    pub fn charge_subscription(
+        env: Env,
+        subscription_id: u32,
+        idempotency_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        subscription::do_charge_subscription(&env, subscription_id, idempotency_key)
     }
 
     pub fn estimate_topup_for_intervals(
@@ -164,6 +170,18 @@ impl SubscriptionVault {
         );
 
         Ok(())
+    }
+
+    /// Merchant-initiated one-off charge: debits `amount` from the subscription's prepaid balance.
+    /// Caller must be the subscription's merchant (requires auth). Amount must not exceed
+    /// prepaid_balance; subscription must be Active or Paused.
+    pub fn charge_one_off(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
     }
 
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {

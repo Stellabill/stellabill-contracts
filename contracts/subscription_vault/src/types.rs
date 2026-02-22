@@ -21,6 +21,10 @@ pub enum Error {
     Overflow = 403,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
+    /// Replay: charge for this billing period or idempotency key already processed.
+    Replay = 1004,
+    /// One-off or other operation used an invalid amount (e.g. non-positive).
+    InvalidAmount = 1005,
 }
 
 impl Error {
@@ -35,6 +39,8 @@ impl Error {
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
             Error::InsufficientBalance => 1003,
+            Error::Replay => 1004,
+            Error::InvalidAmount => 1005,
         }
     }
 }
@@ -152,6 +158,15 @@ pub struct SubscriptionResumedEvent {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantWithdrawalEvent {
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Emitted when a merchant-initiated one-off charge is applied to a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OneOffChargedEvent {
+    pub subscription_id: u32,
     pub merchant: Address,
     pub amount: i128,
 }

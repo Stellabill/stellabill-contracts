@@ -1,15 +1,14 @@
 use crate::{
-    can_transition, get_allowed_transitions, validate_status_transition, Error,
-    FundsDepositedEvent, MerchantWithdrawalEvent, Subscription, SubscriptionCancelledEvent,
-    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
-    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    can_transition, get_allowed_transitions, validate_status_transition, Error, Subscription,
+    SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{symbol_short, vec as soroban_vec, Address, Env, IntoVal, TryFromVal, Val, Vec};
+use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val, Vec};
 
 // ---------------------------------------------------------------------------
 // Helper: decode the event data payload (3rd element of event tuple)
 // ---------------------------------------------------------------------------
+#[allow(dead_code)]
 fn last_event_data<T: TryFromVal<Env, Val>>(env: &Env) -> T {
     let events = env.events().all();
     let last = events.last().unwrap();
@@ -465,7 +464,7 @@ fn test_all_valid_transitions_coverage() {
     // 3. Active -> InsufficientBalance (simulated via direct storage manipulation)
     {
         let (env, client, _, _) = setup_test_env();
-        let (id, subscriber, _) =
+        let (id, _subscriber, _) =
             create_test_subscription(&env, &client, SubscriptionStatus::Active);
 
         // Simulate transition by updating storage directly
@@ -632,7 +631,7 @@ fn test_charge_rejected_before_interval() {
     // 1 second too early.
     env.ledger().set_timestamp(T0 + INTERVAL - 1);
 
-    let res = client.try_charge_subscription(&id);
+    let res = client.try_charge_subscription(&id, &None);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
     // Storage unchanged — last_payment_timestamp still equals creation time.
@@ -649,7 +648,7 @@ fn test_charge_succeeds_at_exact_interval() {
     let (client, id) = setup(&env, INTERVAL);
 
     env.ledger().set_timestamp(T0 + INTERVAL);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + INTERVAL);
@@ -665,7 +664,7 @@ fn test_charge_succeeds_after_interval() {
 
     let charge_time = T0 + 2 * INTERVAL;
     env.ledger().set_timestamp(charge_time);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, charge_time);
@@ -692,11 +691,11 @@ fn test_immediate_retry_at_same_timestamp_rejected() {
 
     let t1 = T0 + INTERVAL;
     env.ledger().set_timestamp(t1);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None);
 
-    // Retry at the same timestamp — must fail, storage stays at t1.
-    let res = client.try_charge_subscription(&id);
-    assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
+    // Retry at the same timestamp — must fail (replay protection), storage stays at t1.
+    let res = client.try_charge_subscription(&id, &None);
+    assert_eq!(res, Err(Ok(Error::Replay)));
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, t1);
@@ -713,15 +712,108 @@ fn test_repeated_charges_across_many_intervals() {
     for i in 1..=6u64 {
         let charge_time = T0 + i * INTERVAL;
         env.ledger().set_timestamp(charge_time);
-        client.charge_subscription(&id);
+        client.charge_subscription(&id, &None);
 
         let sub = client.get_subscription(&id);
         assert_eq!(sub.last_payment_timestamp, charge_time);
     }
 
-    // One more attempt without advancing time — must fail.
-    let res = client.try_charge_subscription(&id);
-    assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
+    // One more attempt without advancing time — must fail (replay protection).
+    let res = client.try_charge_subscription(&id, &None);
+    assert_eq!(res, Err(Ok(Error::Replay)));
+}
+
+// =============================================================================
+// Replay protection and idempotency tests (#24)
+// =============================================================================
+
+fn idempotency_key(env: &Env, seed: u8) -> soroban_sdk::BytesN<32> {
+    let mut arr = [0u8; 32];
+    arr[0] = seed;
+    soroban_sdk::BytesN::from_array(env, &arr)
+}
+
+/// First charge with an idempotency key succeeds and debits once.
+#[test]
+fn test_replay_first_charge_with_idempotency_key_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup(&env, INTERVAL);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let key = idempotency_key(&env, 1);
+    client.charge_subscription(&id, &Some(key.clone()));
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.last_payment_timestamp, T0 + INTERVAL);
+    assert_eq!(sub.prepaid_balance, 10_000000i128 - 1000i128);
+}
+
+/// Repeating the same call with the same idempotency key returns Ok without double-debit.
+#[test]
+fn test_replay_same_idempotency_key_returns_ok_no_double_debit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup(&env, INTERVAL);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let key = idempotency_key(&env, 2);
+    client.charge_subscription(&id, &Some(key.clone()));
+    let balance_after_first = client.get_subscription(&id).prepaid_balance;
+
+    client.charge_subscription(&id, &Some(key));
+    let balance_after_second = client.get_subscription(&id).prepaid_balance;
+
+    assert_eq!(balance_after_first, balance_after_second);
+}
+
+/// Same period, different idempotency key: second call is rejected as Replay.
+#[test]
+fn test_replay_different_key_same_period_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup(&env, INTERVAL);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let key1 = idempotency_key(&env, 10);
+    client.charge_subscription(&id, &Some(key1));
+
+    let key2 = idempotency_key(&env, 20);
+    let res = client.try_charge_subscription(&id, &Some(key2));
+    assert_eq!(res, Err(Ok(Error::Replay)));
+}
+
+/// New period with new idempotency key succeeds.
+#[test]
+fn test_replay_new_period_new_key_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup(&env, INTERVAL);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    let key1 = idempotency_key(&env, 1);
+    client.charge_subscription(&id, &Some(key1));
+
+    env.ledger().set_timestamp(T0 + 2 * INTERVAL);
+    let key2 = idempotency_key(&env, 2);
+    client.charge_subscription(&id, &Some(key2));
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.last_payment_timestamp, T0 + 2 * INTERVAL);
+    assert_eq!(sub.prepaid_balance, 10_000000i128 - 2000i128);
+}
+
+/// Charge without idempotency key still protected by period-based replay.
+#[test]
+fn test_replay_no_key_still_rejected_same_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup(&env, INTERVAL);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    client.charge_subscription(&id, &None);
+    let res = client.try_charge_subscription(&id, &None);
+    assert_eq!(res, Err(Ok(Error::Replay)));
 }
 
 /// Minimum interval (1 second): charge at creation time must fail,
@@ -734,12 +826,12 @@ fn test_one_second_interval_boundary() {
 
     // At creation time — 0 seconds elapsed, interval is 1 s → too early.
     env.ledger().set_timestamp(T0);
-    let res = client.try_charge_subscription(&id);
+    let res = client.try_charge_subscription(&id, &None);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
     // Exactly 1 second later — boundary, should succeed.
     env.ledger().set_timestamp(T0 + 1);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + 1);
@@ -784,7 +876,7 @@ fn test_charge_subscription_auth() {
     client.deposit_funds(&0, &subscriber, &10_000000i128);
     env.ledger().set_timestamp(3600); // interval elapsed so charge is allowed
 
-    client.charge_subscription(&0);
+    client.charge_subscription(&0, &None);
 }
 
 #[test]
@@ -807,18 +899,19 @@ fn test_charge_subscription_unauthorized() {
 
     let non_admin = Address::generate(&env);
 
-    // Mock auth for the non_admin address
+    // Mock auth for the non_admin address (args: subscription_id, idempotency_key)
+    let none_key: Option<soroban_sdk::BytesN<32>> = None;
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &non_admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "charge_subscription",
-            args: (0u32,).into_val(&env),
+            args: (0u32, none_key).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.charge_subscription(&0);
+    client.charge_subscription(&0, &None);
 }
 
 #[test]
@@ -840,18 +933,19 @@ fn test_charge_subscription_admin() {
     client.deposit_funds(&0, &subscriber, &10_000000i128);
     env.ledger().set_timestamp(3600); // interval elapsed so charge is allowed
 
-    // Mock auth for the admin address
+    // Mock auth for the admin address (args: subscription_id, idempotency_key)
+    let none_key: Option<soroban_sdk::BytesN<32>> = None;
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "charge_subscription",
-            args: (0u32,).into_val(&env),
+            args: (0u32, none_key).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.charge_subscription(&0);
+    client.charge_subscription(&0, &None);
 }
 
 #[test]
@@ -976,7 +1070,7 @@ fn test_estimate_topup_no_balance_returns_full_required() {
 
 #[test]
 fn test_estimate_topup_subscription_not_found() {
-    let (env, client, _, _) = setup_test_env();
+    let (_env, client, _, _) = setup_test_env();
     let result = client.try_estimate_topup_for_intervals(&9999, &1);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
@@ -1053,4 +1147,292 @@ fn test_batch_charge_partial_failure() {
         results.get(1).unwrap().error_code,
         Error::InsufficientBalance.to_code()
     );
+}
+
+// =============================================================================
+// Merchant-initiated one-off charge tests (#30)
+// =============================================================================
+
+#[test]
+fn test_oneoff_charge_valid_debits_balance() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &20_000000i128);
+    let before = client.get_subscription(&id).prepaid_balance;
+
+    client.charge_one_off(&id, &merchant, &5_000000i128);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, before - 5_000000i128);
+}
+
+#[test]
+fn test_oneoff_charge_exceeds_balance_fails() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &3_000000i128);
+
+    let res = client.try_charge_one_off(&id, &merchant, &5_000000i128);
+    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_oneoff_charge_wrong_merchant_unauthorized() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, _merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &10_000000i128);
+    let other_merchant = Address::generate(&env);
+
+    let res = client.try_charge_one_off(&id, &other_merchant, &1_000000i128);
+    assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_oneoff_charge_cancelled_subscription_fails() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &10_000000i128);
+    client.cancel_subscription(&id, &subscriber);
+
+    let res = client.try_charge_one_off(&id, &merchant, &1_000000i128);
+    assert_eq!(res, Err(Ok(Error::NotActive)));
+}
+
+#[test]
+fn test_oneoff_charge_paused_subscription_succeeds() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &20_000000i128);
+    client.pause_subscription(&id, &subscriber);
+
+    client.charge_one_off(&id, &merchant, &2_000000i128);
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, 20_000000i128 - 2_000000i128);
+}
+
+#[test]
+fn test_oneoff_charge_zero_amount_fails() {
+    let (env, client, _, _) = setup_test_env();
+    let (id, subscriber, merchant) =
+        create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    client.deposit_funds(&id, &subscriber, &10_000000i128);
+
+    let res = client.try_charge_one_off(&id, &merchant, &0i128);
+    assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_oneoff_and_recurring_charge_coexist() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0);
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    client.init(&token, &admin, &1_000000i128);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+    client.deposit_funds(&id, &subscriber, &15_000000i128);
+
+    client.charge_one_off(&id, &merchant, &3_000000i128);
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 12_000000i128);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id, &None);
+    assert_eq!(
+        client.get_subscription(&id).prepaid_balance,
+        12_000000i128 - 1000i128
+    );
+}
+
+// =============================================================================
+// Multi-merchant and multi-subscriber scenario tests (#40)
+// =============================================================================
+
+/// Setup: 2 merchants, 3 subscribers, 5 subscriptions (mixed pairs). All active with deposits.
+fn setup_multi_actor(
+    env: &Env,
+) -> (
+    SubscriptionVaultClient<'static>,
+    Address,
+    [Address; 3],
+    [Address; 2],
+    Vec<u32>,
+) {
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0);
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+    let token = Address::generate(env);
+    let admin = Address::generate(env);
+    client.init(&token, &admin, &1_000000i128);
+
+    let merchants = [Address::generate(env), Address::generate(env)];
+    let subscribers = [
+        Address::generate(env),
+        Address::generate(env),
+        Address::generate(env),
+    ];
+    let amount = 1000i128;
+    let interval = INTERVAL;
+    let mut ids = Vec::new(env);
+
+    // Sub0 -> M0, Sub0 -> M1, Sub1 -> M0, Sub1 -> M1, Sub2 -> M0
+    let pairs = [(0usize, 0usize), (0, 1), (1, 0), (1, 1), (2, 0)];
+    for (si, mi) in pairs {
+        let id = client.create_subscription(
+            &subscribers[si],
+            &merchants[mi],
+            &amount,
+            &interval,
+            &false,
+        );
+        client.deposit_funds(&id, &subscribers[si], &20_000000i128);
+        ids.push_back(id);
+    }
+    (client, admin, subscribers, merchants, ids)
+}
+
+#[test]
+fn test_multi_actor_balances_and_statuses_after_setup() {
+    let env = Env::default();
+    let (client, _admin, subscribers, merchants, ids) = setup_multi_actor(&env);
+
+    assert_eq!(ids.len(), 5);
+    for (i, id) in ids.iter().enumerate() {
+        let sub = client.get_subscription(&id);
+        assert_eq!(sub.status, SubscriptionStatus::Active);
+        assert_eq!(sub.prepaid_balance, 20_000000i128);
+        assert_eq!(sub.amount, 1000i128);
+        if i < 2 {
+            assert_eq!(sub.subscriber, subscribers[0]);
+        } else if i < 4 {
+            assert_eq!(sub.subscriber, subscribers[1]);
+        } else {
+            assert_eq!(sub.subscriber, subscribers[2]);
+        }
+        assert!(sub.merchant == merchants[0] || sub.merchant == merchants[1]);
+    }
+}
+
+#[test]
+fn test_multi_actor_batch_charge_all_then_verify() {
+    let env = Env::default();
+    let (client, _admin, _subscribers, _merchants, ids) = setup_multi_actor(&env);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let results = client.batch_charge(&ids);
+    assert_eq!(results.len(), 5);
+    for i in 0..5 {
+        assert!(results.get(i).unwrap().success);
+    }
+
+    for id in ids.iter() {
+        let sub = client.get_subscription(&id);
+        assert_eq!(sub.prepaid_balance, 20_000000i128 - 1000i128);
+        assert_eq!(sub.last_payment_timestamp, T0 + INTERVAL);
+    }
+}
+
+#[test]
+fn test_multi_actor_oneoff_and_recurring_mixed() {
+    let env = Env::default();
+    let (client, _admin, _subscribers, merchants, ids) = setup_multi_actor(&env);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+
+    let id0 = ids.get(0).unwrap();
+    let id1 = ids.get(1).unwrap();
+    let id2 = ids.get(2).unwrap();
+    client.charge_one_off(&id0, &merchants[0], &5_000000i128);
+    client.charge_one_off(&id2, &merchants[0], &3_000000i128);
+
+    client.batch_charge(&ids);
+
+    let sub0 = client.get_subscription(&id0);
+    assert_eq!(
+        sub0.prepaid_balance,
+        20_000000i128 - 5_000000i128 - 1000i128
+    );
+    let sub2 = client.get_subscription(&id2);
+    assert_eq!(
+        sub2.prepaid_balance,
+        20_000000i128 - 3_000000i128 - 1000i128
+    );
+    let sub1 = client.get_subscription(&id1);
+    assert_eq!(sub1.prepaid_balance, 20_000000i128 - 1000i128);
+}
+
+#[test]
+fn test_multi_actor_pause_and_resume_subset() {
+    let env = Env::default();
+    let (client, _admin, subscribers, _merchants, ids) = setup_multi_actor(&env);
+
+    let id0 = ids.get(0).unwrap();
+    let id1 = ids.get(1).unwrap();
+    let id3 = ids.get(3).unwrap();
+    client.pause_subscription(&id0, &subscribers[0]);
+    client.pause_subscription(&id3, &subscribers[1]);
+
+    assert_eq!(
+        client.get_subscription(&id0).status,
+        SubscriptionStatus::Paused
+    );
+    assert_eq!(
+        client.get_subscription(&id3).status,
+        SubscriptionStatus::Paused
+    );
+    assert_eq!(
+        client.get_subscription(&id1).status,
+        SubscriptionStatus::Active
+    );
+
+    client.resume_subscription(&id0, &subscribers[0]);
+    assert_eq!(
+        client.get_subscription(&id0).status,
+        SubscriptionStatus::Active
+    );
+}
+
+#[test]
+fn test_multi_actor_cancel_one_subscription_others_unchanged() {
+    let env = Env::default();
+    let (client, _admin, subscribers, _merchants, ids) = setup_multi_actor(&env);
+
+    let id_cancel = ids.get(2).unwrap();
+    client.cancel_subscription(&id_cancel, &subscribers[1]);
+
+    assert_eq!(
+        client.get_subscription(&id_cancel).status,
+        SubscriptionStatus::Cancelled
+    );
+    for (i, id) in ids.iter().enumerate() {
+        if i != 2 {
+            assert_eq!(
+                client.get_subscription(&id).status,
+                SubscriptionStatus::Active
+            );
+        }
+    }
+}
+
+#[test]
+fn test_multi_actor_view_helpers_consistent() {
+    let env = Env::default();
+    let (client, _admin, _subscribers, _merchants, ids) = setup_multi_actor(&env);
+
+    for id in ids.iter() {
+        let sub = client.get_subscription(&id);
+        let topup_0 = client.estimate_topup_for_intervals(&id, &0);
+        assert_eq!(topup_0, 0);
+        let topup_2 = client.estimate_topup_for_intervals(&id, &2);
+        let expected = (2 * 1000i128 - sub.prepaid_balance).max(0);
+        assert_eq!(topup_2, expected);
+    }
 }
