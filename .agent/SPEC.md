@@ -1,4 +1,4 @@
-# Coding Standards — DRiPS Protocol
+# Coding Standards
 
 ## Strict Requirements
 

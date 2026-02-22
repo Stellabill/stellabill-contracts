@@ -49,6 +49,12 @@ pub fn do_deposit_funds(
     // Invariant 2: no tokens move without require_auth() from the subscriber.
     subscriber.require_auth();
 
+    // Reject zero and negative amounts before any storage access or token
+    // interaction. i128 is signed; a negative value must never reach the token.
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
     let min_topup: i128 = crate::admin::get_min_topup(env)?;
     if amount < min_topup {
         return Err(Error::BelowMinimumTopup);
@@ -62,25 +68,29 @@ pub fn do_deposit_funds(
         return Err(Error::InvalidStatusTransition);
     }
 
-    // Transfer USDC from the subscriber's wallet to this vault contract.
-    // If the transfer fails (e.g. insufficient allowance or token balance),
-    // the entire transaction rolls back atomically, ensuring prepaid_balance
-    // is never incremented without the corresponding USDC movement.
-    let token_addr = get_token(env)?;
-    let token_client = token::Client::new(env, &token_addr);
-    token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
-    // Invariant 1: overflow-safe balance increment.
-    // prepaid_balance must always equal the sum of successful deposits minus
-    // fees charged via charge_subscription.
-    sub.prepaid_balance = sub
+    // Invariant 1: verify the addition will not overflow before transferring
+    // any tokens. This ensures a subscriber never loses funds due to a
+    // balance-cap edge case — if the deposit would overflow i128, the
+    // transaction is rejected before the token call fires.
+    let new_balance = sub
         .prepaid_balance
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
 
+    // Transfer USDC from the subscriber's wallet to this vault contract.
+    // Soroban's token::Client::transfer requires the `from` address to have
+    // authorised the call; the require_auth() above satisfies that requirement.
+    // No separate allowance step is needed (this is not an ERC-20 transferFrom).
+    let token_addr = get_token(env)?;
+    let token_client = token::Client::new(env, &token_addr);
+    token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
+
+    sub.prepaid_balance = new_balance;
+
     // Auto-reactivate subscriptions that were suspended due to insufficient
-    // funds. This removes the need for a manual resume_subscription call
-    // after a successful top-up.
+    // funds. This reactivation fires only after both the amount > 0 check and
+    // the min_topup check above have passed, so the deposit is guaranteed to
+    // be a meaningful addition to the prepaid balance.
     if sub.status == SubscriptionStatus::InsufficientBalance {
         validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
         sub.status = SubscriptionStatus::Active;

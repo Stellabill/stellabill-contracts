@@ -21,6 +21,8 @@ pub enum Error {
     Overflow = 403,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
+    /// A monetary amount was zero or negative.
+    InvalidAmount = 405,
 }
 
 impl Error {
@@ -35,6 +37,7 @@ impl Error {
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
             Error::InsufficientBalance => 1003,
+            Error::InvalidAmount => 405,
         }
     }
 }

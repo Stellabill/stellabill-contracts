@@ -1237,3 +1237,54 @@ fn test_deposit_requires_subscriber_auth() {
     // This must panic because subscriber has not signed the invocation.
     client.deposit_funds(&id, &subscriber, &5_000_000i128);
 }
+
+/// Zero amount: depositing 0 must be rejected regardless of min_topup setting.
+#[test]
+fn test_deposit_zero_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let subscriber = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let token = create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let merchant = Address::generate(&env);
+    client.init(&token, &admin, &1_000_000i128);
+    let id = client.create_subscription(&subscriber, &merchant, &1_000_000i128, &86_400u64, &false);
+
+    let result = client.try_deposit_funds(&id, &subscriber, &0i128);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+/// Negative amount: depositing a negative value must be rejected. i128 is signed and
+/// a naive caller could pass -1; the guard must catch this before token interaction.
+#[test]
+fn test_deposit_negative_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let subscriber = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let token = create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let merchant = Address::generate(&env);
+    client.init(&token, &admin, &1_000_000i128);
+    let id = client.create_subscription(&subscriber, &merchant, &1_000_000i128, &86_400u64, &false);
+
+    let result = client.try_deposit_funds(&id, &subscriber, &-1i128);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+/// Init rejects zero min_topup: a zero floor would allow deposits of any size.
+#[test]
+fn test_init_rejects_zero_min_topup() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let result = client.try_init(&token, &admin, &0i128);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}

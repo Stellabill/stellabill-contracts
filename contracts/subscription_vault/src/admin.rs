@@ -19,6 +19,9 @@ pub fn get_token(env: &Env) -> Result<Address, Error> {
 }
 
 pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
+    if min_topup <= 0 {
+        return Err(Error::InvalidAmount);
+    }
     env.storage()
         .instance()
         .set(&Symbol::new(env, "token"), &token);
@@ -39,6 +42,9 @@ pub fn require_admin(env: &Env) -> Result<Address, Error> {
 }
 
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+    if min_topup <= 0 {
+        return Err(Error::InvalidAmount);
+    }
     admin.require_auth();
     let stored = require_admin(env)?;
     if admin != stored {
