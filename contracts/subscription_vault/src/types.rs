@@ -29,10 +29,16 @@ pub enum Error {
     Overflow = 403,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
-    /// Replay: charge for this billing period or idempotency key already processed.
-    Replay = 1004,
-    /// One-off or other operation used an invalid amount (e.g. non-positive).
-    InvalidAmount = 1005,
+    /// Usage-based charge attempted on a subscription with `usage_enabled = false`.
+    UsageNotEnabled = 1004,
+    /// Usage-based charge amount exceeds the available prepaid balance.
+    InsufficientPrepaidBalance = 1005,
+    /// The provided amount is zero or negative.
+    InvalidAmount = 1006,
+    /// Charge already processed for this billing period.
+    Replay = 1007,
+    /// Recovery amount is zero or negative.
+    InvalidRecoveryAmount = 1008,
 }
 
 impl Error {
@@ -47,8 +53,11 @@ impl Error {
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
             Error::InsufficientBalance => 1003,
-            Error::Replay => 1004,
-            Error::InvalidAmount => 1005,
+            Error::UsageNotEnabled => 1004,
+            Error::InsufficientPrepaidBalance => 1005,
+            Error::InvalidAmount => 1006,
+            Error::Replay => 1007,
+            Error::InvalidRecoveryAmount => 1008,
         }
     }
 }
@@ -177,4 +186,42 @@ pub struct OneOffChargedEvent {
     pub subscription_id: u32,
     pub merchant: Address,
     pub amount: i128,
+}
+
+/// Represents the reason for stranded funds that can be recovered by admin.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecoveryReason {
+    /// Funds sent to contract address by mistake (no associated subscription).
+    AccidentalTransfer = 0,
+    /// Funds from deprecated contract flows or logic errors.
+    DeprecatedFlow = 1,
+    /// Funds from cancelled subscriptions with unreachable addresses.
+    UnreachableSubscriber = 2,
+}
+
+/// Event emitted when admin recovers stranded funds.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RecoveryEvent {
+    /// The admin who authorized the recovery
+    pub admin: Address,
+    /// The destination address receiving the recovered funds
+    pub recipient: Address,
+    /// The amount of funds recovered
+    pub amount: i128,
+    /// The documented reason for recovery
+    pub reason: RecoveryReason,
+    /// Timestamp when recovery was executed
+    pub timestamp: u64,
+}
+
+/// Result of computing next charge information for a subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NextChargeInfo {
+    /// Estimated timestamp for the next charge attempt.
+    pub next_charge_timestamp: u64,
+    /// Whether a charge is actually expected based on the subscription status.
+    pub is_charge_expected: bool,
 }
