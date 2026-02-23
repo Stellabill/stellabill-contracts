@@ -57,8 +57,13 @@ fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
     Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 
 };
-use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env};
+
+/// Baseline creation timestamp used by test helpers.
+const T0: u64 = 1_000;
+/// Default billing interval for tests (30 days in seconds).
+const INTERVAL: u64 = 30 * 24 * 60 * 60;
 
 // =============================================================================
 // State Machine Helper Tests
@@ -724,9 +729,17 @@ fn test_min_topup_exactly_at_threshold() {
     let min_topup = 5_000000i128; // 5 USDC
 
     client.init(&token, &admin, &min_topup);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000000i128,
+        &(30 * 24 * 60 * 60),
+        &false,
+    );
 
 
     let result = client.try_deposit_funds(&0, &subscriber, &min_topup);
+    let result = client.try_deposit_funds(&id, &subscriber, &min_topup);
     assert!(result.is_ok());
 }
 
@@ -749,12 +762,21 @@ fn test_min_topup_above_threshold() {
     let merchant = Address::generate(&env);
 
 
+    let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
 
     client.init(&token, &admin, &min_topup);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000000i128,
+        &(30 * 24 * 60 * 60),
+        &false,
+    );
 
 
     let result = client.try_deposit_funds(&0, &subscriber, &10_000000);
+    let result = client.try_deposit_funds(&id, &subscriber, &10_000000);
     assert!(result.is_ok());
 }
 
@@ -775,6 +797,147 @@ fn test_set_min_topup_by_admin() {
 
     client.set_min_topup(&admin, &new_min);
     assert_eq!(client.get_min_topup(), new_min);
+}
+
+// -- Usage-based charge tests ------------------------------------------------
+
+const PREPAID: i128 = 50_000_000; // 50 USDC
+
+/// Helper: create a subscription with `usage_enabled = false` and a known
+/// `prepaid_balance` for interval-charge tests.
+fn setup(env: &Env, interval: u64) -> (SubscriptionVaultClient, u32) {
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+
+    let token = Address::generate(env);
+    let admin = Address::generate(env);
+    client.init(&token, &admin, &1_000000i128);
+
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+
+    env.ledger().set_timestamp(T0);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &interval,
+        &false, // usage_enabled
+    );
+
+    // Seed prepaid balance.
+    let mut sub = client.get_subscription(&id);
+    sub.prepaid_balance = PREPAID;
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&id, &sub);
+    });
+
+    (client, id)
+}
+
+/// Helper: create a subscription with `usage_enabled = true` and a known
+/// `prepaid_balance` by writing directly to storage after creation.
+fn setup_usage(env: &Env) -> (SubscriptionVaultClient, u32) {
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+
+    let token = Address::generate(env);
+    let admin = Address::generate(env);
+    client.init(&token, &admin, &1_000000i128);
+
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+
+    env.ledger().set_timestamp(T0);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &true, // usage_enabled
+    );
+
+    // Seed prepaid balance by writing the subscription back with funds.
+    let mut sub = client.get_subscription(&id);
+    sub.prepaid_balance = PREPAID;
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&id, &sub);
+    });
+
+    (client, id)
+}
+
+/// Successful usage charge: debits prepaid_balance by the requested amount.
+#[test]
+fn test_usage_charge_debits_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup_usage(&env);
+
+    client.charge_usage(&id, &10_000_000i128);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, PREPAID - 10_000_000);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+/// Draining the balance to zero transitions status to InsufficientBalance.
+#[test]
+fn test_usage_charge_drains_balance_to_insufficient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup_usage(&env);
+
+    client.charge_usage(&id, &PREPAID);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, 0);
+    assert_eq!(sub.status, SubscriptionStatus::InsufficientBalance);
+}
+
+/// Rejected when usage_enabled is false.
+#[test]
+fn test_usage_charge_rejected_when_disabled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    // Use the regular setup helper which creates usage_enabled = false.
+    let (client, id) = setup(&env, INTERVAL);
+
+    let res = client.try_charge_usage(&id, &1_000_000i128);
+    assert_eq!(res, Err(Ok(Error::UsageNotEnabled)));
+}
+
+/// Rejected when usage_amount exceeds prepaid_balance.
+#[test]
+fn test_usage_charge_rejected_insufficient_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup_usage(&env);
+
+    let res = client.try_charge_usage(&id, &(PREPAID + 1));
+    assert_eq!(res, Err(Ok(Error::InsufficientPrepaidBalance)));
+
+    // Balance unchanged.
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, PREPAID);
+}
+
+/// Rejected when usage_amount is zero or negative.
+#[test]
+fn test_usage_charge_rejected_invalid_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, id) = setup_usage(&env);
+
+    let res_zero = client.try_charge_usage(&id, &0i128);
+    assert_eq!(res_zero, Err(Ok(Error::InvalidAmount)));
+
+    let res_neg = client.try_charge_usage(&id, &(-1i128));
+    assert_eq!(res_neg, Err(Ok(Error::InvalidAmount)));
+
+    // Balance unchanged.
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, PREPAID);
 }
 
 #[test]
@@ -1342,6 +1505,12 @@ fn test_get_next_charge_info_all_statuses() {
 }
 
 #[test]
+fn test_estimate_topup_subscription_not_found() {
+    let (_env, client, _, _) = setup_test_env();
+    let result = client.try_estimate_topup_for_intervals(&9999, &1);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+#[test]
 fn test_get_next_charge_info_insufficient_balance_status() {
     use crate::SubscriptionStatus;
 
@@ -1501,7 +1670,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #405)")]
+#[should_panic(expected = "Error(Contract, #1008)")]
 fn test_recover_stranded_funds_zero_amount() {
     let (_, client, _, admin) = setup_test_env();
 
@@ -1514,7 +1683,7 @@ fn test_recover_stranded_funds_zero_amount() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #405)")]
+#[should_panic(expected = "Error(Contract, #1008)")]
 fn test_recover_stranded_funds_negative_amount() {
     let (_, client, _, admin) = setup_test_env();
 

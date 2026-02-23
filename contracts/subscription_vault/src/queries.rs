@@ -2,7 +2,7 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-use crate::types::{DataKey, Error, Subscription};
+use crate::types::{DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
 use soroban_sdk::{Address, Env, Vec};
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
@@ -84,4 +84,26 @@ pub fn get_merchant_subscription_count(env: &Env, merchant: Address) -> u32 {
     let key = DataKey::MerchantSubs(merchant);
     let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
     ids.len()
+}
+
+/// Computes the estimated next charge timestamp for a subscription.
+///
+/// This is a readonly helper that does not mutate contract state. It provides
+/// information for off-chain scheduling systems and UX displays.
+pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
+    let next_charge_timestamp = subscription
+        .last_payment_timestamp
+        .saturating_add(subscription.interval_seconds);
+
+    let is_charge_expected = match subscription.status {
+        SubscriptionStatus::Active => true,
+        SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::Paused => false,
+        SubscriptionStatus::Cancelled => false,
+    };
+
+    NextChargeInfo {
+        next_charge_timestamp,
+        is_charge_expected,
+    }
 }
