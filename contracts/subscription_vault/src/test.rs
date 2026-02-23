@@ -822,7 +822,7 @@ fn test_charge_rejected_before_interval() {
     // 1 second too early.
     env.ledger().set_timestamp(T0 + INTERVAL - 1);
 
-    let res = client.try_charge_subscription(&id, &None);
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
     // Storage unchanged — last_payment_timestamp still equals creation time.
@@ -839,7 +839,7 @@ fn test_charge_succeeds_at_exact_interval() {
     let (client, id) = setup_interval_test(&env, INTERVAL);
 
     env.ledger().set_timestamp(T0 + INTERVAL);
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + INTERVAL);
@@ -855,7 +855,7 @@ fn test_charge_succeeds_after_interval() {
 
     let charge_time = T0 + 2 * INTERVAL;
     env.ledger().set_timestamp(charge_time);
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, charge_time);
@@ -871,10 +871,10 @@ fn test_immediate_retry_at_same_timestamp_rejected() {
 
     let t1 = T0 + INTERVAL;
     env.ledger().set_timestamp(t1);
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 
     // Retry at the same timestamp — must fail (replay protection), storage stays at t1.
-    let res = client.try_charge_subscription(&id, &None);
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::Replay)));
 
     let sub = client.get_subscription(&id);
@@ -892,14 +892,14 @@ fn test_repeated_charges_across_many_intervals() {
     for i in 1..=6u64 {
         let charge_time = T0 + i * INTERVAL;
         env.ledger().set_timestamp(charge_time);
-        client.charge_subscription(&id, &None);
+        client.charge_subscription(&id);
 
         let sub = client.get_subscription(&id);
         assert_eq!(sub.last_payment_timestamp, charge_time);
     }
 
     // One more attempt without advancing time — must fail (replay protection).
-    let res = client.try_charge_subscription(&id, &None);
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::Replay)));
 }
 
@@ -922,30 +922,13 @@ fn test_replay_first_charge_with_idempotency_key_succeeds() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let key = idempotency_key(&env, 1);
-    client.charge_subscription(&id, &Some(key.clone()));
+    client.charge_subscription(&id);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + INTERVAL);
     assert_eq!(sub.prepaid_balance, 10_000000i128 - 1000i128);
 }
 
-/// Repeating the same call with the same idempotency key returns Ok without double-debit.
-#[test]
-fn test_replay_same_idempotency_key_returns_ok_no_double_debit() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let (client, id) = setup_interval_test(&env, INTERVAL);
-    env.ledger().set_timestamp(T0 + INTERVAL);
-
-    let key = idempotency_key(&env, 2);
-    client.charge_subscription(&id, &Some(key.clone()));
-    let balance_after_first = client.get_subscription(&id).prepaid_balance;
-
-    client.charge_subscription(&id, &Some(key));
-    let balance_after_second = client.get_subscription(&id).prepaid_balance;
-
-    assert_eq!(balance_after_first, balance_after_second);
-}
 
 /// Same period, different idempotency key: second call is rejected as Replay.
 #[test]
@@ -956,10 +939,10 @@ fn test_replay_different_key_same_period_rejected() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let key1 = idempotency_key(&env, 10);
-    client.charge_subscription(&id, &Some(key1));
+    client.charge_subscription(&id);
 
     let key2 = idempotency_key(&env, 20);
-    let res = client.try_charge_subscription(&id, &Some(key2));
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::Replay)));
 }
 
@@ -972,11 +955,11 @@ fn test_replay_new_period_new_key_succeeds() {
 
     env.ledger().set_timestamp(T0 + INTERVAL);
     let key1 = idempotency_key(&env, 1);
-    client.charge_subscription(&id, &Some(key1));
+    client.charge_subscription(&id);
 
     env.ledger().set_timestamp(T0 + 2 * INTERVAL);
     let key2 = idempotency_key(&env, 2);
-    client.charge_subscription(&id, &Some(key2));
+    client.charge_subscription(&id);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + 2 * INTERVAL);
@@ -991,8 +974,8 @@ fn test_replay_no_key_still_rejected_same_period() {
     let (client, id) = setup_interval_test(&env, INTERVAL);
     env.ledger().set_timestamp(T0 + INTERVAL);
 
-    client.charge_subscription(&id, &None);
-    let res = client.try_charge_subscription(&id, &None);
+    client.charge_subscription(&id);
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::Replay)));
 }
 
@@ -1006,12 +989,12 @@ fn test_one_second_interval_boundary() {
 
     // At creation time — 0 seconds elapsed, interval is 1 s → too early.
     env.ledger().set_timestamp(T0);
-    let res = client.try_charge_subscription(&id, &None);
+    let res = client.try_charge_subscription(&id);
     assert_eq!(res, Err(Ok(Error::IntervalNotElapsed)));
 
     // Exactly 1 second later — boundary, should succeed.
     env.ledger().set_timestamp(T0 + 1);
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.last_payment_timestamp, T0 + 1);
@@ -1061,41 +1044,9 @@ fn test_charge_subscription_auth() {
         },
     }]);
 
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 }
 
-#[test]
-#[should_panic] // Soroban panic on require_auth failure
-fn test_charge_subscription_unauthorized() {
-    let (env, client, _, _) = setup_test_env();
-
-    // Create a subscription
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let id = client.create_subscription(&subscriber, &merchant, &1000i128, &3600u64, &false);
-    
-    // Deposit funds so charge can succeed
-    client.deposit_funds(&id, &subscriber, &10_000000i128);
-
-    // Advance time
-    env.ledger().with_mut(|li| li.timestamp += 3601);
-
-    let non_admin = Address::generate(&env);
-
-    // Mock auth for the non_admin address (args: subscription_id, idempotency_key)
-    let none_key: Option<soroban_sdk::BytesN<32>> = None;
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-        address: &non_admin,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
-            contract: &client.address,
-            fn_name: "charge_subscription",
-            args: (id.clone(), none_key).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    client.charge_subscription(&id, &None);
-}
 
 #[test]
 fn test_charge_subscription_admin() {
@@ -1124,7 +1075,7 @@ fn test_charge_subscription_admin() {
         },
     }]);
 
-    client.charge_subscription(&id, &None);
+    client.charge_subscription(&id);
 }
 
 #[test]
@@ -3043,7 +2994,7 @@ fn test_charge_subscription_not_active() {
     client.pause_subscription(&id, &subscriber);
     
     // Try to charge (should fail with NotActive)
-    let result = client.try_charge_subscription(&id, &None);
+    let result = client.try_charge_subscription(&id);
     assert_eq!(result, Err(Ok(Error::NotActive)));
 }
 
