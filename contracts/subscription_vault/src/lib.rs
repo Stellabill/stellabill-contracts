@@ -125,21 +125,43 @@ impl SubscriptionVault {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
-    /// Pause subscription (no charges until resumed). Allowed from Active.
+    /// Pause subscription (no charges until resumed).
+    ///
+    /// # State Transitions
+    /// Allowed from: `Active`
+    /// - Transitions to: `Paused`
+    ///
+    /// Only the subscriber or merchant can pause.
+    /// Cannot pause a subscription that is already `Paused`, `Cancelled`, or in `InsufficientBalance`.
     pub fn pause_subscription(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
         subscription::do_pause_subscription(&env, subscription_id, authorizer)
     }
 
-    /// Resume a subscription to Active. Allowed from Paused or InsufficientBalance.
+    /// Resume a subscription to Active status.
+    ///
+    /// # State Transitions
+    /// Allowed from: `Paused`, `InsufficientBalance`
+    /// - Transitions to: `Active`
+    ///
+    /// Only the subscriber or merchant can resume.
+    /// Cannot resume a `Cancelled` subscription.
     pub fn resume_subscription(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        if authorizer != sub.subscriber && authorizer != sub.merchant {
+            return Err(Error::Unauthorized);
+        }
         subscription::do_resume_subscription(&env, subscription_id, authorizer)
     }
 
@@ -164,23 +186,6 @@ impl SubscriptionVault {
     /// * `usage_enabled` must be `true` on the subscription.
     /// * `usage_amount` must be positive (`> 0`).
     /// * `prepaid_balance` must be >= `usage_amount`.
-    ///
-    /// # Behaviour
-    ///
-    /// On success, `prepaid_balance` is reduced by `usage_amount`.  If the
-    /// debit drains the balance to zero the subscription transitions to
-    /// `InsufficientBalance` status, signalling that no further charges
-    /// (interval or usage) can proceed until the subscriber tops up.
-    ///
-    /// # Errors
-    ///
-    /// | Variant | Reason |
-    /// |---------|--------|
-    /// | `NotFound` | Subscription ID does not exist. |
-    /// | `NotActive` | Subscription is not `Active`. |
-    /// | `UsageNotEnabled` | `usage_enabled` is `false`. |
-    /// | `InvalidAmount` | `usage_amount` is zero or negative. |
-    /// | `InsufficientPrepaidBalance` | Prepaid balance cannot cover the debit. |
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
