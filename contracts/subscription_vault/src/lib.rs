@@ -604,6 +604,15 @@ impl SubscriptionVault {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
+    /// Subscriber withdraws their remaining prepaid_balance after cancellation.
+    pub fn withdraw_subscriber_funds(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
+    }
+
     /// Pause subscription (no charges until resumed). Allowed from Active.
     pub fn pause_subscription(
         env: Env,
@@ -759,6 +768,53 @@ impl SubscriptionVault {
     /// Return the total number of subscriptions for a merchant.
     pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
         queries::get_merchant_subscription_count(&env, merchant)
+    }
+
+    /// List all subscription IDs for a given subscriber with pagination support.
+    ///
+    /// This read-only function retrieves subscription IDs owned by a subscriber in a paginated manner.
+    /// Subscriptions are returned in order by ID (ascending) for predictable iteration.
+    ///
+    /// # Arguments
+    /// * `subscriber` - The address of the subscriber to query
+    /// * `start_from_id` - Inclusive lower bound for pagination (use 0 for the first page)
+    /// * `limit` - Maximum number of subscription IDs to return (recommended: 10-100)
+    ///
+    /// # Returns
+    /// A `SubscriptionsPage` containing subscription IDs and pagination metadata
+    ///
+    /// # Performance Notes
+    /// - Time complexity: O(n) where n = total subscriptions in contract
+    /// - Space complexity: O(limit)
+    /// - Suitable for off-chain indexers and UI pagination
+    ///
+    /// # Usage Example
+    ///
+    /// ```ignore
+    /// // Get first page
+    /// let page = client.list_subscriptions_by_subscriber(&subscriber, &0, &10)?;
+    /// println!("Found {} subscriptions", page.subscription_ids.len());
+    ///
+    /// // Get next page if available
+    /// if page.has_next {
+    ///     let next_start = page.subscription_ids.last().unwrap() + 1;
+    ///     let page2 = client.list_subscriptions_by_subscriber(&subscriber, &next_start, &10)?;
+    /// }
+    /// ```
+    pub fn list_subscriptions_by_subscriber(
+        env: Env,
+        subscriber: Address,
+        start_from_id: u32,
+        limit: u32,
+    ) -> Result<crate::queries::SubscriptionsPage, Error> {
+        crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
+    }
+
+    fn _next_id(env: &Env) -> u32 {
+        let key = soroban_sdk::Symbol::new(env, "next_id");
+        let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage().instance().set(&key, &(id + 1));
+        id
     }
 }
 

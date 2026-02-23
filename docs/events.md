@@ -169,6 +169,54 @@ Emitted when a merchant withdraws accumulated funds.
 
 ---
 
+### AdminRotationEvent
+
+**Topic:** `admin_rotation`
+
+Emitted when the contract admin is rotated to a new address. Only the current admin can perform rotation.
+
+**Fields:**
+- `current_admin` (Address): The admin address that initiated the rotation (now revoked)
+- `new_admin` (Address): The new admin address that received privileges
+- `timestamp` (u64): Ledger timestamp when the rotation occurred
+
+**Indexing Strategy:**
+- Index by `current_admin` and `new_admin` for audit trails
+- Track timestamp for rotation history
+- Maintain current admin state for authorization checks
+
+**Example Use Cases:**
+- Build admin rotation audit log
+- Alert on admin changes for security monitoring
+- Update off-chain systems with current admin address
+
+---
+
+### RecoveryEvent
+
+**Topic:** `recovery`
+
+Emitted when the admin recovers stranded funds from the contract (e.g., accidental transfers, deprecated flows).
+
+**Fields:**
+- `admin` (Address): The admin who authorized the recovery
+- `recipient` (Address): The destination address receiving the recovered funds
+- `amount` (i128): Amount recovered (in token base units)
+- `reason` (RecoveryReason): Enum—`AccidentalTransfer` (0), `DeprecatedFlow` (1), `UnreachableSubscriber` (2)
+- `timestamp` (u64): Ledger timestamp when recovery was executed
+
+**Indexing Strategy:**
+- Index by `admin` to track recovery actions per admin
+- Index by `recipient` for recipient-side history
+- Aggregate amounts by reason for analytics
+
+**Example Use Cases:**
+- Audit trail for fund recoveries
+- Monitor admin recovery activity
+- Analytics on recovery reasons and amounts
+
+---
+
 ## General Indexing Recommendations
 
 ### Event Consumption
@@ -233,6 +281,14 @@ for event in contract_events {
             let data: SubscriptionChargedEvent = decode(event.data);
             db.record_payment(data);
         }
+        "admin_rotation" => {
+            let (current_admin, new_admin, timestamp) = decode(event.data);
+            db.record_admin_rotation(current_admin, new_admin, timestamp);
+        }
+        "recovery" => {
+            let data: RecoveryEvent = decode(event.data);
+            db.record_recovery(data);
+        }
         // ... handle other events
     }
 }
@@ -259,3 +315,4 @@ events.on('charged', (event) => {
 ## Version History
 
 - **v1.0** (2026-02-20): Initial event schema definitions for all lifecycle actions
+- **v1.1** (2026-02-23): Added AdminRotationEvent and RecoveryEvent for indexers

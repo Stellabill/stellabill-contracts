@@ -63,6 +63,16 @@ pub fn do_deposit_funds(
         .prepaid_balance
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
+
+    let token_addr: Address = env
+        .storage()
+        .instance()
+        .get(&Symbol::new(env, "token"))
+        .ok_or(Error::NotFound)?;
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+
+    token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
+
     env.storage().instance().set(&subscription_id, &sub);
     env.events().publish(
         (Symbol::new(env, "deposited"), subscription_id),
@@ -79,10 +89,14 @@ pub fn do_cancel_subscription(
     authorizer.require_auth();
 
     let mut sub = get_subscription(env, subscription_id)?;
+
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Unauthorized);
+    }
+
     validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     sub.status = SubscriptionStatus::Cancelled;
 
-    // TODO: allow withdraw of prepaid_balance
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())
 }
@@ -114,5 +128,44 @@ pub fn do_resume_subscription(
     sub.status = SubscriptionStatus::Active;
 
     env.storage().instance().set(&subscription_id, &sub);
+    Ok(())
+}
+
+pub fn do_withdraw_subscriber_funds(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+) -> Result<(), Error> {
+    subscriber.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
+
+    if sub.status != SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition); // Or Unauthorized/InvalidState
+    }
+
+    let amount_to_refund = sub.prepaid_balance;
+    if amount_to_refund > 0 {
+        sub.prepaid_balance = 0;
+        env.storage().instance().set(&subscription_id, &sub);
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(env, "token"))
+            .ok_or(Error::NotFound)?;
+        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+
+        token_client.transfer(
+            &env.current_contract_address(),
+            &subscriber,
+            &amount_to_refund,
+        );
+    }
+
     Ok(())
 }
