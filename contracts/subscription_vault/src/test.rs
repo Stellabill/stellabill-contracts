@@ -2,13 +2,8 @@ use crate::{
     can_transition, get_allowed_transitions, validate_status_transition, Error, RecoveryReason,
     Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
-<<<<<<< HEAD
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val, Vec, Symbol, Vec as SorobanVec};
-=======
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
->>>>>>> origin/main
 
 // ---------------------------------------------------------------------------
 // Helper: decode the event data payload (3rd element of event tuple)
@@ -57,21 +52,10 @@ fn create_sub(
 fn test_init_and_struct() {
     let (env, client, _, _) = setup_test_env();
     // Basic initialization test
+
+
+
     assert!(client.get_min_topup() == 1_000000i128);
-}
-
-// =============================================================================
-// State Machine Helper Tests
-// =============================================================================
-    )
-    .is_ok());
-
-    // Active -> InsufficientBalance (allowed)
-    assert!(validate_status_transition(
-        &SubscriptionStatus::Active,
-        &SubscriptionStatus::InsufficientBalance
-    )
-    .is_ok());
 }
 
 #[test]
@@ -206,28 +190,8 @@ fn test_get_allowed_transitions() {
 // Contract Entrypoint State Transition Tests
 // =============================================================================
 
-<<<<<<< HEAD
 // Helper to create a subscription and optionally set its status for testing
 fn create_sub_with_status(
-=======
-fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let min_topup = 1_000000i128; // 1 USDC
-    client.init(&token, &admin, &min_topup);
-
-    (env, client, token, admin)
-}
-
-fn create_test_subscription(
->>>>>>> origin/main
     env: &Env,
     client: &SubscriptionVaultClient,
     status: SubscriptionStatus,
@@ -596,7 +560,6 @@ fn test_subscription_struct_status_field() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn test_merchant_with_no_subscriptions() {
     let (env, client, _, _) = setup_test_env();
     let merchant = Address::generate(&env);
@@ -606,7 +569,6 @@ fn test_merchant_with_no_subscriptions() {
 
     let count = client.get_merchant_subscription_count(&merchant);
     assert_eq!(count, 0);
-=======
 fn test_cancel_subscription_by_subscriber() {
     let env = Env::default();
     env.mock_all_auths();
@@ -635,7 +597,6 @@ fn test_init_and_struct() {
     let contract_id = env.register(SubscriptionVault, ());
     let _client = SubscriptionVaultClient::new(&env, &contract_id);
     // Basic initialization test
->>>>>>> origin/main
 }
 
 #[test]
@@ -1039,15 +1000,12 @@ fn test_min_topup_below_threshold() {
 fn test_charge_subscription_auth() {
     let (env, client, _, admin) = setup_test_env();
 
-<<<<<<< HEAD
     // Create a subscription so ID 0 exists
-=======
     let admin = Address::generate(&env);
     let token_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
->>>>>>> origin/main
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let id = client.create_subscription(&subscriber, &merchant, &1000i128, &3600u64, &false);
@@ -1128,14 +1086,12 @@ fn test_min_topup_above_threshold() {
     client.init(&token_addr, &admin, &min_topup);
     token_admin.mint(&subscriber, &deposit_amount);
 
-<<<<<<< HEAD
     client.set_min_topup(&admin, &min_topup);
     // Create subscription
     let id = client.create_subscription(&subscriber, &Address::generate(&env), &10_000_000i128, &3600u64, &false);
     
     let result = client.try_deposit_funds(&id, &subscriber, &10_000000);
 
-=======
     let id = client.create_subscription(
         &subscriber,
         &merchant,
@@ -1145,7 +1101,6 @@ fn test_min_topup_above_threshold() {
     );
 
     let result = client.try_deposit_funds(&id, &subscriber, &deposit_amount);
->>>>>>> origin/main
     assert!(result.is_ok());
 }
 
@@ -1162,8 +1117,6 @@ fn test_set_min_topup_by_admin() {
     assert_eq!(client.get_min_topup(), new_min);
 }
 
-<<<<<<< HEAD
-=======
 // -- Usage-based charge tests ------------------------------------------------
 
 const PREPAID: i128 = 50_000_000; // 50 USDC
@@ -1305,7 +1258,6 @@ fn test_usage_charge_rejected_invalid_amount() {
     assert_eq!(sub.prepaid_balance, PREPAID);
 }
 
->>>>>>> origin/main
 #[test]
 #[should_panic(expected = "Error(Contract, #403)")] // Error::NotAdmin
 fn test_set_min_topup_unauthorized() {
@@ -3952,7 +3904,6 @@ fn test_get_admin_before_and_after_rotation() {
     assert_eq!(client.get_admin(), another_admin);
 }
 
-<<<<<<< HEAD
 #[test]
 fn test_create_subscription_invalid_amount() {
     let (env, client, _, _) = setup_test_env();
@@ -4012,7 +3963,6 @@ fn test_get_subscription_not_found() {
     let (env, client, _, _) = setup_test_env();
     let result = client.try_get_subscription(&999);
     assert_eq!(result, Err(Ok(Error::SubscriptionNotFound)));
-=======
 // =============================================================================
 // View Function Tests: list_subscriptions_by_subscriber
 // =============================================================================
@@ -4356,5 +4306,4 @@ fn test_list_subscriptions_multiple_merchants() {
             ids.get(i as u32).unwrap()
         );
     }
->>>>>>> origin/main
 }
