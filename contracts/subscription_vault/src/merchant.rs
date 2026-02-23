@@ -3,11 +3,13 @@
 //! **PRs that only change merchant payouts should edit this file only.**
 
 use crate::types::{BatchWithdrawResult, Error};
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 /// Withdraw a single amount for a merchant.
 pub fn withdraw_merchant_funds(_env: &Env, merchant: Address, _amount: i128) -> Result<(), Error> {
     merchant.require_auth();
+    _env.events()
+        .publish((Symbol::new(_env, "withdrawn"), merchant.clone()), _amount);
     Ok(())
 }
 

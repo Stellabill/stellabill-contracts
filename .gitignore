@@ -48,6 +48,7 @@ out/
 
 # Coverage and tests
 coverage/
+**/test_snapshots/
 *.profraw
 *.profdata
 tarpaulin-report.html

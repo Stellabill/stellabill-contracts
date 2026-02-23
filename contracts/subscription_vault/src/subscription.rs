@@ -1,12 +1,11 @@
-//! Subscription lifecycle: create, deposit, charge, cancel, pause, resume.
+//! Subscription lifecycle: create, deposit.
 //!
 //! **PRs that only change subscription lifecycle or billing should edit this file only.**
 
-use crate::admin::require_admin;
-use crate::charge_core::charge_one;
 use crate::queries::get_subscription;
-use crate::types::{Error, Subscription, SubscriptionStatus};
-use soroban_sdk::{Address, Env, Symbol};
+use crate::state_machine::validate_status_transition;
+use crate::types::{DataKey, Error, Subscription, SubscriptionStatus};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
@@ -26,7 +25,7 @@ pub fn do_create_subscription(
     subscriber.require_auth();
     let sub = Subscription {
         subscriber: subscriber.clone(),
-        merchant,
+        merchant: merchant.clone(),
         amount,
         interval_seconds,
         last_payment_timestamp: env.ledger().timestamp(),
@@ -36,6 +35,13 @@ pub fn do_create_subscription(
     };
     let id = next_id(env);
     env.storage().instance().set(&id, &sub);
+
+    // Maintain merchant → subscription-ID index
+    let key = DataKey::MerchantSubs(sub.merchant.clone());
+    let mut ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+    ids.push_back(id);
+    env.storage().instance().set(&key, &ids);
+
     Ok(id)
 }
 
@@ -58,38 +64,55 @@ pub fn do_deposit_funds(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     env.storage().instance().set(&subscription_id, &sub);
+    env.events().publish(
+        (Symbol::new(env, "deposited"), subscription_id),
+        (subscriber, amount, sub.prepaid_balance),
+    );
     Ok(())
 }
 
-pub fn do_charge_subscription(env: &Env, subscription_id: u32) -> Result<(), Error> {
-    let admin = require_admin(env)?;
-    admin.require_auth();
-    charge_one(env, subscription_id)
-}
-
-pub fn do_cancel_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+pub fn do_cancel_subscription(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+) -> Result<(), Error> {
     authorizer.require_auth();
+
     let mut sub = get_subscription(env, subscription_id)?;
-    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+    validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     sub.status = SubscriptionStatus::Cancelled;
+
+    // TODO: allow withdraw of prepaid_balance
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())
 }
 
-pub fn do_pause_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+pub fn do_pause_subscription(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+) -> Result<(), Error> {
     authorizer.require_auth();
+
     let mut sub = get_subscription(env, subscription_id)?;
-    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
+    validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
     sub.status = SubscriptionStatus::Paused;
+
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())
 }
 
-pub fn do_resume_subscription(env: &Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+pub fn do_resume_subscription(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+) -> Result<(), Error> {
     authorizer.require_auth();
+
     let mut sub = get_subscription(env, subscription_id)?;
-    crate::state_machine::validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
+    validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
     sub.status = SubscriptionStatus::Active;
+
     env.storage().instance().set(&subscription_id, &sub);
     Ok(())
 }
