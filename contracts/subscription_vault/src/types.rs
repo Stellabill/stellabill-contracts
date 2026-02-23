@@ -35,8 +35,6 @@ pub enum Error {
     UsageNotEnabled = 1004,
     /// Usage-based charge amount exceeds the available prepaid balance.
     InsufficientPrepaidBalance = 1005,
-    /// The provided amount is zero or negative.
-    InvalidAmount = 1006,
     /// Charge already processed for this billing period.
     Replay = 1007,
     /// Recovery amount is zero or negative.
@@ -58,7 +56,6 @@ impl Error {
             Error::InvalidAmount => 405,
             Error::UsageNotEnabled => 1004,
             Error::InsufficientPrepaidBalance => 1005,
-            Error::InvalidAmount => 1006,
             Error::Replay => 1007,
             Error::InvalidRecoveryAmount => 1008,
         }
