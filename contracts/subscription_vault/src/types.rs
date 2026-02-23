@@ -89,6 +89,15 @@ pub struct BatchChargeResult {
 ///
 /// - **InsufficientBalance**: Subscription failed due to insufficient funds.
 ///   - Can transition to: `Active` (after deposit), `Cancelled`
+
+/// Interpretation guidance for UIs/backends:
+/// - When a subscription is `InsufficientBalance`, present the user with a clear
+///   "add funds" or "top up" action. The subscription's `prepaid_balance`
+///   remains unchanged after failed charges and must be topped up via
+///   `deposit_funds`.
+/// - Once `prepaid_balance >= amount`, the contract will allow a transition to
+///   `Active` (this is done automatically by `deposit_funds` when appropriate),
+///   enabling subsequent `charge_subscription` attempts to succeed.
 ///
 /// Invalid transitions (e.g., `Cancelled` -> `Active`) are rejected with
 /// [`Error::InvalidStatusTransition`].

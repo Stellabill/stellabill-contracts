@@ -59,10 +59,23 @@ pub fn do_deposit_funds(
     }
 
     let mut sub = get_subscription(env, subscription_id)?;
+    // Increase prepaid balance (checked arithmetic)
     sub.prepaid_balance = sub
         .prepaid_balance
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
+
+    // If the subscription was previously in InsufficientBalance, and the
+    // new prepaid balance is sufficient to cover the regular interval
+    // `amount`, transition back to `Active`. This makes `deposit_funds`
+    // a non-destructive recovery operation that enables subsequent
+    // `charge_subscription` calls to succeed.
+    if sub.status == crate::types::SubscriptionStatus::InsufficientBalance
+        && sub.prepaid_balance >= sub.amount
+    {
+        crate::state_machine::validate_status_transition(&sub.status, &crate::types::SubscriptionStatus::Active)?;
+        sub.status = crate::types::SubscriptionStatus::Active;
+    }
 
     let token_addr: Address = env
         .storage()

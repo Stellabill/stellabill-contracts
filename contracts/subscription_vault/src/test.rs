@@ -235,9 +235,9 @@ fn create_test_subscription(
         // This is a test-only pattern
         let mut sub = client.get_subscription(&id);
         sub.status = status;
-        env.as_contract(&client.address, || {
-            env.storage().instance().set(&id, &sub);
-        });
+            let _ = env.as_contract(&client.address, || {
+                env.storage().instance().set(&id, &sub);
+            });
     }
 
     (id, subscriber, merchant)
@@ -453,7 +453,7 @@ fn test_all_valid_transitions_coverage() {
         // Simulate transition by updating storage directly
         let mut sub = client.get_subscription(&id);
         sub.status = SubscriptionStatus::InsufficientBalance;
-        env.as_contract(&client.address, || {
+        let _ = env.as_contract(&client.address, || {
             env.storage().instance().set(&id, &sub);
         });
 
@@ -498,7 +498,7 @@ fn test_all_valid_transitions_coverage() {
         // Set to InsufficientBalance
         let mut sub = client.get_subscription(&id);
         sub.status = SubscriptionStatus::InsufficientBalance;
-        env.as_contract(&client.address, || {
+        let _ = env.as_contract(&client.address, || {
             env.storage().instance().set(&id, &sub);
         });
 
@@ -519,7 +519,7 @@ fn test_all_valid_transitions_coverage() {
         // Set to InsufficientBalance
         let mut sub = client.get_subscription(&id);
         sub.status = SubscriptionStatus::InsufficientBalance;
-        env.as_contract(&client.address, || {
+        let _ = env.as_contract(&client.address, || {
             env.storage().instance().set(&id, &sub);
         });
 
@@ -555,7 +555,7 @@ fn test_invalid_insufficient_balance_to_paused() {
     // Set to InsufficientBalance
     let mut sub = client.get_subscription(&id);
     sub.status = SubscriptionStatus::InsufficientBalance;
-    env.as_contract(&client.address, || {
+    let _ = env.as_contract(&client.address, || {
         env.storage().instance().set(&id, &sub);
     });
 
@@ -594,7 +594,7 @@ fn test_deposit_recovery_flow() {
     
     let token = Address::generate(&env);
     let admin = Address::generate(&env);
-    client.init(&token, &admin);
+    client.init(&token, &admin, &1_000000i128);
     
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -615,7 +615,7 @@ fn test_deposit_recovery_flow() {
     };
     
     // Store directly using as_contract
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&0u32, &sub);
         Ok::<(), ()>(())
     });
@@ -627,7 +627,7 @@ fn test_deposit_recovery_flow() {
     
     // Simulate deposit_funds recovery flow via as_contract
     // (In production this would be called by subscriber with proper auth)
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         let mut sub: Subscription = env.storage().instance().get(&0u32).unwrap();
         sub.prepaid_balance += deposit_amount;
         sub.status = SubscriptionStatus::Active; // Recovery: InsufficientBalance -> Active
@@ -654,7 +654,7 @@ fn test_charge_subscription_behavior() {
     
     let token = Address::generate(&env);
     let admin = Address::generate(&env);
-    client.init(&token, &admin);
+    client.init(&token, &admin, &1i128);
     
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -672,14 +672,14 @@ fn test_charge_subscription_behavior() {
         usage_enabled: false,
     };
     
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&0u32, &sub);
         Ok::<(), ()>(())
     });
     
     // Test via direct contract call to verify behavior
     // (Client panics on error, but contract returns Err(InsufficientBalance))
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         use crate::Error;
         let result = SubscriptionVault::charge_subscription(env.clone(), 0u32);
         assert!(result.is_err());
@@ -708,7 +708,7 @@ fn test_successful_charge_exact_balance() {
     
     let token = Address::generate(&env);
     let admin = Address::generate(&env);
-    client.init(&token, &admin);
+    client.init(&token, &admin, &1i128);
     
     let merchant = Address::generate(&env);
     let amount = 10_000_0000i128;
@@ -725,13 +725,13 @@ fn test_successful_charge_exact_balance() {
         usage_enabled: false,
     };
     
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&0u32, &sub);
         Ok::<(), ()>(())
     });
     
     // Test via direct contract call
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         let result = SubscriptionVault::charge_subscription(env.clone(), 0u32);
         assert!(result.is_ok());
         
@@ -755,7 +755,7 @@ fn test_repeated_failed_charges_no_corruption() {
     
     let token = Address::generate(&env);
     let admin = Address::generate(&env);
-    client.init(&token, &admin);
+    client.init(&token, &admin, &1i128);
     
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -773,13 +773,13 @@ fn test_repeated_failed_charges_no_corruption() {
         usage_enabled: false,
     };
     
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&0u32, &sub);
         Ok::<(), ()>(())
     });
     
     // Multiple charge attempts
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         // First attempt - fails with InsufficientBalance
         let r1 = SubscriptionVault::charge_subscription(env.clone(), 0u32);
         assert!(r1.is_err());
@@ -966,7 +966,7 @@ fn setup(env: &Env, interval: u64) -> (SubscriptionVaultClient<'_>, u32) {
     // Seed prepaid balance.
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = PREPAID;
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&id, &sub);
     });
 
@@ -998,7 +998,7 @@ fn setup_usage(env: &Env) -> (SubscriptionVaultClient<'_>, u32) {
     // Seed prepaid balance by writing the subscription back with funds.
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = PREPAID;
-    env.as_contract(&contract_id, || {
+    let _ = env.as_contract(&contract_id, || {
         env.storage().instance().set(&id, &sub);
     });
 
@@ -1390,7 +1390,7 @@ fn test_get_next_charge_info_insufficient_balance_status() {
     // Manually set to InsufficientBalance for testing
     let mut sub = client.get_subscription(&id);
     sub.status = SubscriptionStatus::InsufficientBalance;
-    env.as_contract(&client.address, || {
+    let _ = env.as_contract(&client.address, || {
         env.storage().instance().set(&id, &sub);
     });
 
@@ -3303,7 +3303,7 @@ fn test_batch_charge_admin_rotation() {
     // Seed prepaid balance and advance time so charge can succeed
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = 50_000_000i128;
-    env.as_contract(&client.address, || {
+    let _ = env.as_contract(&client.address, || {
         env.storage().instance().set(&id, &sub);
     });
     env.ledger()
@@ -4019,4 +4019,4 @@ fn test_list_subscriptions_multiple_merchants() {
             ids.get(i as u32).unwrap()
         );
     }
-}
+}}
