@@ -73,7 +73,10 @@ pub fn do_deposit_funds(
     if sub.status == crate::types::SubscriptionStatus::InsufficientBalance
         && sub.prepaid_balance >= sub.amount
     {
-        crate::state_machine::validate_status_transition(&sub.status, &crate::types::SubscriptionStatus::Active)?;
+        crate::state_machine::validate_status_transition(
+            &sub.status,
+            &crate::types::SubscriptionStatus::Active,
+        )?;
         sub.status = crate::types::SubscriptionStatus::Active;
     }
 

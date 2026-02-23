@@ -1,6 +1,5 @@
 #![no_std]
 
-
 mod admin;
 mod charge_core;
 mod merchant;
@@ -9,22 +8,17 @@ mod state_machine;
 mod subscription;
 pub mod types;
 
-
+pub use queries::compute_next_charge_info;
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::*;
-pub use queries::compute_next_charge_info;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
-
-
 
 #[contract]
 pub struct SubscriptionVault;
 
 #[contractimpl]
 impl SubscriptionVault {
-
-
     pub fn init(env: Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
         admin::do_init(&env, token, admin, min_topup)
     }
@@ -41,11 +35,7 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
-    pub fn rotate_admin(
-        env: Env,
-        current_admin: Address,
-        new_admin: Address,
-    ) -> Result<(), Error> {
+    pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin)
     }
 
@@ -65,7 +55,6 @@ impl SubscriptionVault {
     ) -> Result<Vec<BatchChargeResult>, Error> {
         admin::do_batch_charge(&env, &subscription_ids)
     }
-
 
     pub fn create_subscription(
         env: Env,
@@ -132,25 +121,13 @@ impl SubscriptionVault {
         charge_core::charge_one(&env, subscription_id, None)
     }
 
-    pub fn charge_usage(
-        env: Env,
-        subscription_id: u32,
-        usage_amount: i128,
-    ) -> Result<(), Error> {
+    pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
 
-
-
-    pub fn withdraw_merchant_funds(
-        env: Env,
-        merchant: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
+    pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
-
-
 
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
@@ -164,10 +141,7 @@ impl SubscriptionVault {
         queries::estimate_topup_for_intervals(&env, subscription_id, num_intervals)
     }
 
-    pub fn get_next_charge_info(
-        env: Env,
-        subscription_id: u32,
-    ) -> Result<NextChargeInfo, Error> {
+    pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
         let sub = queries::get_subscription(&env, subscription_id)?;
         Ok(compute_next_charge_info(&sub))
     }
@@ -191,12 +165,7 @@ impl SubscriptionVault {
         start_from_id: u32,
         limit: u32,
     ) -> Result<crate::queries::SubscriptionsPage, Error> {
-        crate::queries::list_subscriptions_by_subscriber(
-            &env,
-            subscriber,
-            start_from_id,
-            limit,
-        )
+        crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
     }
 
     fn _next_id(env: &Env) -> u32 {
