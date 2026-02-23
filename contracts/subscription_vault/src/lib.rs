@@ -9,246 +9,9 @@ mod state_machine;
 mod subscription;
 pub mod types;
 
-#[contracterror]
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum Error {
-    NotFound = 404,
-    Unauthorized = 401,
-    InvalidStatusTransition = 400,
-    BelowMinimumTopup = 402,
-    RecoveryNotAllowed = 403,
-    InvalidRecoveryAmount = 405,
-    /// Subscription is not Active (e.g. Paused, Cancelled).
-    NotActive = 1002,
-}
-
-/// Represents the lifecycle state of a subscription.
-///
-/// # State Machine
-///
-/// The subscription status follows a defined state machine with specific allowed transitions:
-///
-/// - **Active**: Subscription is active and charges can be processed.
-///   - Can transition to: `Paused`, `Cancelled`, `InsufficientBalance`
-///
-/// - **Paused**: Subscription is temporarily suspended, no charges are processed.
-///   - Can transition to: `Active`, `Cancelled`
-///
-/// - **Cancelled**: Subscription is permanently terminated, no further changes allowed.
-///   - No outgoing transitions (terminal state)
-///
-/// - **InsufficientBalance**: Subscription failed due to insufficient funds.
-///   - Can transition to: `Active` (after deposit), `Cancelled`
-///
-/// Invalid transitions (e.g., `Cancelled` -> `Active`) are rejected with
-/// [`Error::InvalidStatusTransition`].
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SubscriptionStatus {
-    /// Subscription is active and ready for charging.
-    Active = 0,
-    /// Subscription is temporarily paused, no charges processed.
-    Paused = 1,
-    /// Subscription is permanently cancelled (terminal state).
-    Cancelled = 2,
-    /// Subscription failed due to insufficient balance for charging.
-    InsufficientBalance = 3,
-}
-
-/// Represents the reason for stranded funds that can be recovered by admin.
-///
-/// This enum documents the specific, well-defined cases where funds may become
-/// stranded in the contract and require administrative intervention. Each case
-/// must be carefully audited before recovery is permitted.
-///
-/// # Security Note
-///
-/// Recovery is an exceptional operation that should only be used for truly
-/// stranded funds. All recovery operations are logged via events and should
-/// be subject to governance review.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RecoveryReason {
-    /// Funds sent to contract address by mistake (no associated subscription).
-    /// This occurs when users accidentally send tokens directly to the contract.
-    AccidentalTransfer = 0,
-
-    /// Funds from deprecated contract flows or logic errors.
-    /// Used when contract upgrades or bugs leave funds in an inaccessible state.
-    DeprecatedFlow = 1,
-
-    /// Funds from cancelled subscriptions with unreachable addresses.
-    /// Subscribers may lose access to their withdrawal keys after cancellation.
-    UnreachableSubscriber = 2,
-}
-
-/// Event emitted when admin recovers stranded funds.
-///
-/// This event provides a complete audit trail for all recovery operations,
-/// including who initiated it, why, and how much was recovered.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct RecoveryEvent {
-    /// The admin who authorized the recovery
-    pub admin: Address,
-    /// The destination address receiving the recovered funds
-    pub recipient: Address,
-    /// The amount of funds recovered
-    pub amount: i128,
-    /// The documented reason for recovery
-    pub reason: RecoveryReason,
-    /// Timestamp when recovery was executed
-    pub timestamp: u64,
-}
-
-/// Stores subscription details and current state.
-///
-/// The `status` field is managed by the state machine. Use the provided
-/// transition helpers to modify status, never set it directly.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Subscription {
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub amount: i128,
-    pub interval_seconds: u64,
-    pub last_payment_timestamp: u64,
-    /// Current lifecycle state. Modified only through state machine transitions.
-    pub status: SubscriptionStatus,
-    pub prepaid_balance: i128,
-    pub usage_enabled: bool,
-}
-
-/// Emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-}
-
-/// Emitted when a subscription is resumed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionResumedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-}
-
-/// Validates if a status transition is allowed by the state machine.
-///
-/// # State Transition Rules
-///
-/// | From              | To                  | Allowed |
-/// |-------------------|---------------------|---------|
-/// | Active            | Paused              | Yes     |
-/// | Active            | Cancelled           | Yes     |
-/// | Active            | InsufficientBalance | Yes     |
-/// | Paused            | Active              | Yes     |
-/// | Paused            | Cancelled           | Yes     |
-/// | InsufficientBalance | Active            | Yes     |
-/// | InsufficientBalance | Cancelled         | Yes     |
-/// | Cancelled         | *any*               | No      |
-/// | *any*             | Same status         | Yes (idempotent) |
-///
-/// # Arguments
-/// * `from` - Current status
-/// * `to` - Target status
-///
-/// # Returns
-/// * `Ok(())` if transition is valid
-/// * `Err(Error::InvalidStatusTransition)` if transition is invalid
-pub fn validate_status_transition(
-    from: &SubscriptionStatus,
-    to: &SubscriptionStatus,
-) -> Result<(), Error> {
-    // Same status is always allowed (idempotent)
-    if from == to {
-        return Ok(());
-    }
-
-    let valid = match from {
-        SubscriptionStatus::Active => matches!(
-            to,
-            SubscriptionStatus::Paused
-                | SubscriptionStatus::Cancelled
-                | SubscriptionStatus::InsufficientBalance
-        ),
-        SubscriptionStatus::Paused => {
-            matches!(
-                to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled
-            )
-        }
-        SubscriptionStatus::Cancelled => false,
-        SubscriptionStatus::InsufficientBalance => {
-            matches!(
-                to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled
-            )
-        }
-    };
-
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::InvalidStatusTransition)
-    }
-}
-
-/// Returns all valid target statuses for a given current status.
-///
-/// This is useful for UI/documentation to show available actions.
-///
-/// # Examples
-///
-/// ```
-/// let targets = get_allowed_transitions(&SubscriptionStatus::Active);
-/// assert!(targets.contains(&SubscriptionStatus::Paused));
-/// ```
-pub fn get_allowed_transitions(status: &SubscriptionStatus) -> &'static [SubscriptionStatus] {
-    match status {
-        SubscriptionStatus::Active => &[
-            SubscriptionStatus::Paused,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::InsufficientBalance,
-        ],
-        SubscriptionStatus::Paused => &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled],
-        SubscriptionStatus::Cancelled => &[],
-        SubscriptionStatus::InsufficientBalance => {
-            &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled]
-        }
-    }
-}
-
-/// Checks if a transition is valid without returning an error.
-///
-/// Convenience wrapper around [`validate_status_transition`] for boolean checks.
-pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
-    validate_status_transition(from, to).is_ok()
-}
-
-/// Result of computing next charge information for a subscription.
-///
-/// Contains the estimated next charge timestamp and a flag indicating
-/// whether the charge is expected to occur based on the subscription status.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NextChargeInfo {
-    /// Estimated timestamp for the next charge attempt.
-    /// For Active and InsufficientBalance states, this is `last_payment_timestamp + interval_seconds`.
-    /// For Paused and Cancelled states, this represents when the charge *would* occur if the
-    /// subscription were Active, but `is_charge_expected` will be `false`.
-    pub next_charge_timestamp: u64,
-
-    /// Whether a charge is actually expected based on the subscription status.
-    /// - `true` for Active subscriptions (charge will be attempted)
-    /// - `true` for InsufficientBalance (charge will be retried after funding)
-    /// - `false` for Paused subscriptions (no charges until resumed)
-    /// - `false` for Cancelled subscriptions (terminal state, no future charges)
-    pub is_charge_expected: bool,
-}
+// ── Re-exports (used by tests and external consumers) ────────────────────────
+pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
+pub use types::*;
 
 pub use queries::compute_next_charge_info;
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
@@ -349,54 +112,7 @@ impl SubscriptionVault {
         subscriber: Address,
         amount: i128,
     ) -> Result<(), Error> {
-        subscriber.require_auth();
-
-        let min_topup: i128 = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, "min_topup"))
-            .ok_or(Error::NotFound)?;
-        if amount < min_topup {
-            return Err(Error::BelowMinimumTopup);
-        }
-
-        // TODO: transfer USDC from subscriber, increase prepaid_balance for subscription_id
-        let _ = (env, subscription_id, amount);
-        Ok(())
-    }
-
-    /// Billing engine (backend) calls this to charge one interval. Deducts from vault, pays merchant.
-    ///
-    /// # State Transitions
-    /// - On success: `Active` -> `Active` (no change)
-    /// - On insufficient balance: `Active` -> `InsufficientBalance`
-    ///
-    /// Subscriptions that are `Paused` or `Cancelled` cannot be charged.
-    pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
-        // TODO: require_caller admin or authorized billing service
-        // TODO: load subscription, check interval and balance, transfer to merchant
-
-        // Placeholder for actual charge logic
-        let maybe_sub: Option<Subscription> = env.storage().instance().get(&subscription_id);
-        if let Some(mut sub) = maybe_sub {
-            // Check current status allows charging
-            if sub.status == SubscriptionStatus::Cancelled
-                || sub.status == SubscriptionStatus::Paused
-            {
-                // Cannot charge cancelled or paused subscriptions
-                return Err(Error::NotActive);
-            }
-
-            // Simulate charge logic - on insufficient balance, transition to InsufficientBalance
-            let insufficient_balance = false; // TODO: actual balance check
-            if insufficient_balance {
-                validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
-                sub.status = SubscriptionStatus::InsufficientBalance;
-                env.storage().instance().set(&subscription_id, &sub);
-            }
-            // TODO: update last_payment_timestamp and prepaid_balance on successful charge
-        }
-        Ok(())
+        subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
     /// Cancel the subscription. Allowed from Active, Paused, or InsufficientBalance.
@@ -422,31 +138,11 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        authorizer.require_auth();
-
-        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
-
-        // Only subscriber or merchant can pause
+        let sub = queries::get_subscription(&env, subscription_id)?;
         if authorizer != sub.subscriber && authorizer != sub.merchant {
             return Err(Error::Unauthorized);
         }
-
-        // Validate and apply status transition
-        validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
-        sub.status = SubscriptionStatus::Paused;
-
-        env.storage().instance().set(&subscription_id, &sub);
-
-        // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "subscription_paused"), subscription_id),
-            SubscriptionPausedEvent {
-                subscription_id,
-                authorizer,
-            },
-        );
-
-        Ok(())
+        subscription::do_pause_subscription(&env, subscription_id, authorizer)
     }
 
     /// Resume a subscription to Active status.
@@ -462,31 +158,11 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        authorizer.require_auth();
-
-        let mut sub = Self::get_subscription(env.clone(), subscription_id)?;
-
-        // Only subscriber or merchant can resume
+        let sub = queries::get_subscription(&env, subscription_id)?;
         if authorizer != sub.subscriber && authorizer != sub.merchant {
             return Err(Error::Unauthorized);
         }
-
-        // Validate and apply status transition
-        validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-        sub.status = SubscriptionStatus::Active;
-
-        env.storage().instance().set(&subscription_id, &sub);
-
-        // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "subscription_resumed"), subscription_id),
-            SubscriptionResumedEvent {
-                subscription_id,
-                authorizer,
-            },
-        );
-
-        Ok(())
+        subscription::do_resume_subscription(&env, subscription_id, authorizer)
     }
 
     // ── Charging ─────────────────────────────────────────────────────────
@@ -510,23 +186,6 @@ impl SubscriptionVault {
     /// * `usage_enabled` must be `true` on the subscription.
     /// * `usage_amount` must be positive (`> 0`).
     /// * `prepaid_balance` must be >= `usage_amount`.
-    ///
-    /// # Behaviour
-    ///
-    /// On success, `prepaid_balance` is reduced by `usage_amount`.  If the
-    /// debit drains the balance to zero the subscription transitions to
-    /// `InsufficientBalance` status, signalling that no further charges
-    /// (interval or usage) can proceed until the subscriber tops up.
-    ///
-    /// # Errors
-    ///
-    /// | Variant | Reason |
-    /// |---------|--------|
-    /// | `NotFound` | Subscription ID does not exist. |
-    /// | `NotActive` | Subscription is not `Active`. |
-    /// | `UsageNotEnabled` | `usage_enabled` is `false`. |
-    /// | `InvalidAmount` | `usage_amount` is zero or negative. |
-    /// | `InsufficientPrepaidBalance` | Prepaid balance cannot cover the debit. |
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
