@@ -200,7 +200,11 @@ impl SubscriptionVault {
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
-    pub fn batch_withdraw_merchant_funds(env: Env, merchant: Address, amounts: Vec<i128>) -> Result<Vec<BatchWithdrawResult>, Error> {
+    pub fn batch_withdraw_merchant_funds(
+        env: Env,
+        merchant: Address,
+        amounts: Vec<i128>,
+    ) -> Result<Vec<BatchWithdrawResult>, Error> {
         merchant::batch_withdraw_merchant_funds(&env, merchant, amounts)
     }
 
