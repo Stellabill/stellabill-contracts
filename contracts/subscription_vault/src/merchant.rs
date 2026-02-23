@@ -2,6 +2,7 @@
 
 use crate::types::Error;
 use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::{Address, Env, Symbol};
 
 fn merchant_balance_key(env: &Env, merchant: &Address) -> (Symbol, Address) {
     (Symbol::new(env, "merchant_balance"), merchant.clone())
@@ -53,5 +54,7 @@ pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Re
 
     set_merchant_balance(env, &merchant, &new_balance);
 
+    _env.events()
+        .publish((Symbol::new(_env, "withdrawn"), merchant.clone()), _amount);
     Ok(())
 }
