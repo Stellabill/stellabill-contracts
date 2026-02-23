@@ -35,6 +35,8 @@ pub enum Error {
     Replay = 1006,
     /// One-off or other operation used an invalid amount (e.g. non-positive).
     InvalidAmount = 1005,
+    /// Recovery amount is zero or negative.
+    InvalidRecoveryAmount = 405,
 }
 
 impl Error {
@@ -52,6 +54,7 @@ impl Error {
             Error::InsufficientBalance => 1003,
             Error::Replay => 1006,
             Error::InvalidAmount => 1005,
+            Error::InvalidRecoveryAmount => 405,
         }
     }
 }
