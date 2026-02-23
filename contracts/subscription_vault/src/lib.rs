@@ -125,6 +125,15 @@ impl SubscriptionVault {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
+    /// Subscriber withdraws their remaining prepaid_balance after cancellation.
+    pub fn withdraw_subscriber_funds(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
+    }
+
     /// Pause subscription (no charges until resumed). Allowed from Active.
     pub fn pause_subscription(
         env: Env,

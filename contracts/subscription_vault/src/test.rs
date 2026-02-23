@@ -198,8 +198,10 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address)
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let min_topup = 1_000000i128; // 1 USDC
     client.init(&token, &admin, &min_topup);
 
@@ -568,14 +570,36 @@ fn test_subscription_struct_status_field() {
     let sub = Subscription {
         subscriber: Address::generate(&env),
         merchant: Address::generate(&env),
-        amount: 10_000_0000,
+        amount: 100_000_000,
         interval_seconds: 30 * 24 * 60 * 60,
         last_payment_timestamp: 0,
         status: SubscriptionStatus::Active,
-        prepaid_balance: 50_000_0000,
+        prepaid_balance: 500_000_000,
         usage_enabled: false,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_cancel_subscription_by_subscriber() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.init(&token, &admin, &1_000_000);
+
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+
+    client.cancel_subscription(&sub_id, &subscriber);
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
 }
 
 #[test]
@@ -585,7 +609,6 @@ fn test_init_and_struct() {
     let contract_id = env.register(SubscriptionVault, ());
     let _client = SubscriptionVaultClient::new(&env, &contract_id);
     // Basic initialization test
-    assert!(true);
 }
 
 #[test]
@@ -598,14 +621,17 @@ fn test_min_topup_below_threshold() {
     let token = Address::generate(&env);
     let admin = Address::generate(&env);
     let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
 
     client.init(&token, &admin, &min_topup);
+    let id = client.create_subscription(&subscriber, &merchant, &10_000000i128, &(86400), &true);
 
-    let result = client.try_deposit_funds(&0, &subscriber, &4_999999);
+    client.cancel_subscription(&id, &merchant);
+
+    let result = client.try_deposit_funds(&id, &subscriber, &4_999999);
     assert!(result.is_err());
 }
-
 #[test]
 fn test_min_topup_exactly_at_threshold() {
     let env = Env::default();
@@ -613,13 +639,18 @@ fn test_min_topup_exactly_at_threshold() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
 
-    client.init(&token, &admin, &min_topup);
+    client.init(&token_addr, &admin, &min_topup);
+    token_admin.mint(&subscriber, &min_topup);
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,
@@ -639,22 +670,28 @@ fn test_min_topup_above_threshold() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
+    let deposit_amount = 10_000000i128;
 
-    client.init(&token, &admin, &min_topup);
+    client.init(&token_addr, &admin, &min_topup);
+    token_admin.mint(&subscriber, &deposit_amount);
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,
-        &10_000000i128,
+        &deposit_amount,
         &(30 * 24 * 60 * 60),
         &false,
     );
 
-    let result = client.try_deposit_funds(&id, &subscriber, &10_000000);
+    let result = client.try_deposit_funds(&id, &subscriber, &deposit_amount);
     assert!(result.is_ok());
 }
 
@@ -683,7 +720,7 @@ const PREPAID: i128 = 50_000_000; // 50 USDC
 
 /// Helper: create a subscription with `usage_enabled = false` and a known
 /// `prepaid_balance` for interval-charge tests.
-fn setup(env: &Env, interval: u64) -> (SubscriptionVaultClient, u32) {
+fn setup(env: &Env, interval: u64) -> (SubscriptionVaultClient<'_>, u32) {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(env, &contract_id);
 
@@ -715,7 +752,7 @@ fn setup(env: &Env, interval: u64) -> (SubscriptionVaultClient, u32) {
 
 /// Helper: create a subscription with `usage_enabled = true` and a known
 /// `prepaid_balance` by writing directly to storage after creation.
-fn setup_usage(env: &Env) -> (SubscriptionVaultClient, u32) {
+fn setup_usage(env: &Env) -> (SubscriptionVaultClient<'_>, u32) {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(env, &contract_id);
 
@@ -1253,7 +1290,70 @@ fn test_recover_stranded_funds_successful() {
 
     // Verify event was emitted
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
+}
+
+#[test]
+fn test_cancel_subscription_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.init(&token, &admin, &1_000_000);
+
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+
+    let result = client.try_cancel_subscription(&sub_id, &other);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_withdraw_subscriber_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Setup mock token
+    let admin = Address::generate(&env);
+    let token_contract = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::Client::new(&env, &token_contract);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_contract);
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let vault_admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.init(&token_contract, &vault_admin, &1000);
+
+    // Mint some to the subscriber
+    token_admin.mint(&subscriber, &5000);
+
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+
+    // Deposit funds to increase prepaid balance
+    client.deposit_funds(&sub_id, &subscriber, &5000);
+
+    // Cancel subscription
+    client.cancel_subscription(&sub_id, &subscriber);
+
+    // Withdraw funds
+    client.withdraw_subscriber_funds(&sub_id, &subscriber);
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.prepaid_balance, 0);
+    assert_eq!(token.balance(&subscriber), 5000); // 5000 minted - 5000 deposited + 5000 withdrawn
+    assert_eq!(token.balance(&contract_id), 0);
 }
 
 #[test]
@@ -1275,7 +1375,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 fn test_recover_stranded_funds_zero_amount() {
     let (_, client, _, admin) = setup_test_env();
 
-    let recipient = Address::generate(&admin.env());
+    let recipient = Address::generate(admin.env());
     let amount = 0i128; // Invalid: zero amount
     let reason = RecoveryReason::DeprecatedFlow;
 
@@ -1288,7 +1388,7 @@ fn test_recover_stranded_funds_zero_amount() {
 fn test_recover_stranded_funds_negative_amount() {
     let (_, client, _, admin) = setup_test_env();
 
-    let recipient = Address::generate(&admin.env());
+    let recipient = Address::generate(admin.env());
     let amount = -1_000_000i128; // Invalid: negative amount
     let reason = RecoveryReason::AccidentalTransfer;
 
@@ -1344,7 +1444,7 @@ fn test_recover_stranded_funds_event_emission() {
 
     // Check that event was emitted
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
 
     // The event should contain recovery information
     // Note: Event details verification depends on SDK version
@@ -1354,7 +1454,7 @@ fn test_recover_stranded_funds_event_emission() {
 fn test_recover_stranded_funds_large_amount() {
     let (_, client, _, admin) = setup_test_env();
 
-    let recipient = Address::generate(&admin.env());
+    let recipient = Address::generate(admin.env());
     let amount = 1_000_000_000_000i128; // 1 million USDC (with 6 decimals)
     let reason = RecoveryReason::DeprecatedFlow;
 
@@ -1367,7 +1467,7 @@ fn test_recover_stranded_funds_large_amount() {
 fn test_recover_stranded_funds_small_amount() {
     let (_, client, _, admin) = setup_test_env();
 
-    let recipient = Address::generate(&admin.env());
+    let recipient = Address::generate(admin.env());
     let amount = 1i128; // Minimal amount (1 stroops)
     let reason = RecoveryReason::AccidentalTransfer;
 
@@ -1412,7 +1512,7 @@ fn test_recover_stranded_funds_multiple_recoveries() {
     // Verify events were emitted
     // Note: Exact count may vary by SDK version
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
 }
 
 #[test]
@@ -1479,7 +1579,7 @@ fn test_recover_stranded_funds_timestamp_recorded() {
     // Event should contain the timestamp
     // (Full verification depends on event inspection capabilities)
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
 }
 
 #[test]
@@ -1578,14 +1678,14 @@ fn test_recover_stranded_funds_idempotency() {
     // Both should succeed (no idempotency constraint)
     // Each generates its own event
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
 }
 
 #[test]
 fn test_recover_stranded_funds_edge_case_max_i128() {
     let (_, client, _, admin) = setup_test_env();
 
-    let recipient = Address::generate(&admin.env());
+    let recipient = Address::generate(admin.env());
     // Test near max i128 value
     let amount = i128::MAX - 1000;
     let reason = RecoveryReason::DeprecatedFlow;
@@ -1617,7 +1717,7 @@ fn test_create_subscription_with_usage_disabled() {
     );
 
     let subscription = client.get_subscription(&id);
-    assert_eq!(subscription.usage_enabled, false);
+    assert!(!subscription.usage_enabled);
     assert_eq!(subscription.amount, amount);
     assert_eq!(subscription.interval_seconds, interval_seconds);
 }
@@ -1641,7 +1741,7 @@ fn test_create_subscription_with_usage_enabled() {
     );
 
     let subscription = client.get_subscription(&id);
-    assert_eq!(subscription.usage_enabled, true);
+    assert!(subscription.usage_enabled);
     assert_eq!(subscription.amount, amount);
     assert_eq!(subscription.interval_seconds, interval_seconds);
 }
@@ -1663,11 +1763,11 @@ fn test_usage_flag_persists_through_state_transitions() {
     );
 
     // Verify initial state
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
 
     // Pause subscription
     client.pause_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Paused
@@ -1675,7 +1775,7 @@ fn test_usage_flag_persists_through_state_transitions() {
 
     // Resume subscription
     client.resume_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Active
@@ -1683,7 +1783,7 @@ fn test_usage_flag_persists_through_state_transitions() {
 
     // Cancel subscription
     client.cancel_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Cancelled
@@ -1727,9 +1827,9 @@ fn test_multiple_subscriptions_different_usage_modes() {
     );
 
     // Verify each subscription has correct usage_enabled value
-    assert_eq!(client.get_subscription(&id1).usage_enabled, false);
-    assert_eq!(client.get_subscription(&id2).usage_enabled, true);
-    assert_eq!(client.get_subscription(&id3).usage_enabled, false);
+    assert!(!client.get_subscription(&id1).usage_enabled);
+    assert!(client.get_subscription(&id2).usage_enabled);
+    assert!(!client.get_subscription(&id3).usage_enabled);
 
     // Verify they're independent subscriptions
     assert_eq!(client.get_subscription(&id1).merchant, merchant1);
@@ -1772,9 +1872,9 @@ fn test_usage_enabled_with_different_intervals() {
     );
 
     // Verify usage_enabled is independent of interval
-    assert_eq!(client.get_subscription(&daily_id).usage_enabled, true);
-    assert_eq!(client.get_subscription(&weekly_id).usage_enabled, false);
-    assert_eq!(client.get_subscription(&monthly_id).usage_enabled, true);
+    assert!(client.get_subscription(&daily_id).usage_enabled);
+    assert!(!client.get_subscription(&weekly_id).usage_enabled);
+    assert!(client.get_subscription(&monthly_id).usage_enabled);
 }
 
 #[test]
@@ -1794,7 +1894,7 @@ fn test_usage_enabled_with_zero_interval() {
     );
 
     let subscription = client.get_subscription(&id);
-    assert_eq!(subscription.usage_enabled, true);
+    assert!(subscription.usage_enabled);
     assert_eq!(subscription.interval_seconds, 0);
 }
 
@@ -1833,8 +1933,8 @@ fn test_usage_flag_with_next_charge_info() {
     assert!(info_disabled.is_charge_expected);
 
     // Verify subscriptions still have correct usage_enabled values
-    assert_eq!(client.get_subscription(&id_enabled).usage_enabled, true);
-    assert_eq!(client.get_subscription(&id_disabled).usage_enabled, false);
+    assert!(client.get_subscription(&id_enabled).usage_enabled);
+    assert!(!client.get_subscription(&id_disabled).usage_enabled);
 }
 
 #[test]
@@ -1856,7 +1956,7 @@ fn test_usage_enabled_default_behavior() {
     let subscription = client.get_subscription(&id);
 
     // Should work fine with interval-based billing
-    assert_eq!(subscription.usage_enabled, false);
+    assert!(!subscription.usage_enabled);
     assert_eq!(subscription.status, SubscriptionStatus::Active);
     assert_eq!(subscription.interval_seconds, 30 * 24 * 60 * 60);
 }
@@ -1877,14 +1977,14 @@ fn test_usage_enabled_immutable_after_creation() {
         &false,
     );
 
-    assert_eq!(client.get_subscription(&id).usage_enabled, false);
+    assert!(!client.get_subscription(&id).usage_enabled);
 
     // Perform various operations
     client.pause_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, false);
+    assert!(!client.get_subscription(&id).usage_enabled);
 
     client.resume_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, false);
+    assert!(!client.get_subscription(&id).usage_enabled);
 
     // The usage_enabled flag cannot be changed after creation
     // It remains false throughout the subscription lifecycle
@@ -1909,7 +2009,7 @@ fn test_usage_enabled_with_all_subscription_statuses() {
     );
 
     // Test Active status
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Active
@@ -1917,7 +2017,7 @@ fn test_usage_enabled_with_all_subscription_statuses() {
 
     // Test Paused status
     client.pause_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Paused
@@ -1925,7 +2025,7 @@ fn test_usage_enabled_with_all_subscription_statuses() {
 
     // Test Active again (resumed)
     client.resume_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Active
@@ -1933,7 +2033,7 @@ fn test_usage_enabled_with_all_subscription_statuses() {
 
     // Test Cancelled status
     client.cancel_subscription(&id, &subscriber);
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Cancelled
@@ -1960,7 +2060,7 @@ fn test_usage_enabled_true_semantics() {
     let subscription = client.get_subscription(&id);
 
     // The subscription is created successfully
-    assert_eq!(subscription.usage_enabled, true);
+    assert!(subscription.usage_enabled);
 
     // It still has interval_seconds (can be used for hybrid models)
     assert_eq!(subscription.interval_seconds, 30 * 24 * 60 * 60);
@@ -1994,7 +2094,7 @@ fn test_usage_enabled_false_semantics() {
     let subscription = client.get_subscription(&id);
 
     // The subscription is created successfully
-    assert_eq!(subscription.usage_enabled, false);
+    assert!(!subscription.usage_enabled);
 
     // It has interval_seconds for regular interval billing
     assert_eq!(subscription.interval_seconds, 30 * 24 * 60 * 60);
@@ -2042,13 +2142,13 @@ fn test_usage_enabled_with_different_amounts() {
     let sub3 = client.get_subscription(&id3);
 
     assert_eq!(sub1.amount, 100i128);
-    assert_eq!(sub1.usage_enabled, true);
+    assert!(sub1.usage_enabled);
 
     assert_eq!(sub2.amount, 1_000_000_000i128);
-    assert_eq!(sub2.usage_enabled, false);
+    assert!(!sub2.usage_enabled);
 
     assert_eq!(sub3.amount, 50_000_000i128);
-    assert_eq!(sub3.usage_enabled, true);
+    assert!(sub3.usage_enabled);
 }
 
 #[test]
@@ -2100,11 +2200,11 @@ fn test_usage_enabled_field_storage() {
     );
 
     // Verify each subscription has the correct usage_enabled value
-    assert_eq!(client.get_subscription(&id0).usage_enabled, true);
-    assert_eq!(client.get_subscription(&id1).usage_enabled, false);
-    assert_eq!(client.get_subscription(&id2).usage_enabled, true);
-    assert_eq!(client.get_subscription(&id3).usage_enabled, false);
-    assert_eq!(client.get_subscription(&id4).usage_enabled, true);
+    assert!(client.get_subscription(&id0).usage_enabled);
+    assert!(!client.get_subscription(&id1).usage_enabled);
+    assert!(client.get_subscription(&id2).usage_enabled);
+    assert!(!client.get_subscription(&id3).usage_enabled);
+    assert!(client.get_subscription(&id4).usage_enabled);
 }
 
 #[test]
@@ -2123,7 +2223,7 @@ fn test_usage_enabled_with_recovery_operations() {
         &true,
     );
 
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
 
     // Admin recovery should not affect subscription's usage_enabled flag
     let recipient = Address::generate(&env);
@@ -2135,7 +2235,7 @@ fn test_usage_enabled_with_recovery_operations() {
     );
 
     // Subscription should still exist with same usage_enabled value
-    assert_eq!(client.get_subscription(&id).usage_enabled, true);
+    assert!(client.get_subscription(&id).usage_enabled);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Active
@@ -2429,7 +2529,7 @@ fn test_admin_rotation_event_emission() {
 
     // Verify event was emitted
     let events = env.events().all();
-    assert!(events.len() > 0);
+    assert!(!events.is_empty());
 }
 
 #[test]
