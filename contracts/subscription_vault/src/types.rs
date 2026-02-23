@@ -89,7 +89,6 @@ pub struct BatchChargeResult {
 ///
 /// - **InsufficientBalance**: Subscription failed due to insufficient funds.
 ///   - Can transition to: `Active` (after deposit), `Cancelled`
-
 /// Interpretation guidance for UIs/backends:
 /// - When a subscription is `InsufficientBalance`, present the user with a clear
 ///   "add funds" or "top up" action. The subscription's `prepaid_balance`
