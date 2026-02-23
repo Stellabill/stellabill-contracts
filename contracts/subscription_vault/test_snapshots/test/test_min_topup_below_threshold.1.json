@@ -8,6 +8,7 @@
     [],
     [
       [
+<<<<<<< HEAD
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
         {
           "function": {
@@ -33,6 +34,8 @@
     ],
     [
       [
+=======
+>>>>>>> origin/main
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
         {
           "function": {
@@ -53,10 +56,39 @@
                   }
                 },
                 {
+<<<<<<< HEAD
                   "u64": 3600
                 },
                 {
                   "bool": false
+=======
+                  "u64": 86400
+                },
+                {
+                  "bool": true
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "cancel_subscription",
+              "args": [
+                {
+                  "u32": 0
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+>>>>>>> origin/main
                 }
               ]
             }
@@ -122,7 +154,11 @@
                                 "symbol": "interval_seconds"
                               },
                               "val": {
+<<<<<<< HEAD
                                 "u64": 3600
+=======
+                                "u64": 86400
+>>>>>>> origin/main
                               }
                             },
                             {
@@ -157,7 +193,11 @@
                                 "symbol": "status"
                               },
                               "val": {
+<<<<<<< HEAD
                                 "u32": 0
+=======
+                                "u32": 2
+>>>>>>> origin/main
                               }
                             },
                             {
@@ -173,7 +213,11 @@
                                 "symbol": "usage_enabled"
                               },
                               "val": {
+<<<<<<< HEAD
                                 "bool": false
+=======
+                                "bool": true
+>>>>>>> origin/main
                               }
                             }
                           ]
@@ -246,7 +290,11 @@
       [
         {
           "contract_data": {
+<<<<<<< HEAD
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+=======
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+>>>>>>> origin/main
             "key": {
               "ledger_key_nonce": {
                 "nonce": 801925984706572462
@@ -261,7 +309,11 @@
             "data": {
               "contract_data": {
                 "ext": "v0",
+<<<<<<< HEAD
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+=======
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+>>>>>>> origin/main
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 801925984706572462
@@ -279,7 +331,11 @@
       [
         {
           "contract_data": {
+<<<<<<< HEAD
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+=======
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+>>>>>>> origin/main
             "key": {
               "ledger_key_nonce": {
                 "nonce": 5541220902715666415
@@ -294,7 +350,11 @@
             "data": {
               "contract_data": {
                 "ext": "v0",
+<<<<<<< HEAD
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+=======
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+>>>>>>> origin/main
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 5541220902715666415
