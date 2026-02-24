@@ -7,11 +7,11 @@ use crate::state_machine::validate_status_transition;
 use crate::types::{DataKey, Error, Subscription, SubscriptionStatus};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-pub fn next_id(env: &Env) -> u32 {
-    let key = Symbol::new(env, "next_id");
-    let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage().instance().set(&key, &(id + 1));
-    id
+pub fn next_id(env: &Env) -> Result<u32, Error> {
+    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next = id.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage().instance().set(&DataKey::NextId, &next);
+    Ok(id)
 }
 
 pub fn do_create_subscription(
@@ -33,10 +33,9 @@ pub fn do_create_subscription(
         prepaid_balance: 0i128,
         usage_enabled,
     };
-    let id = next_id(env);
-    env.storage().instance().set(&id, &sub);
+    let id = next_id(env)?;
+    env.storage().instance().set(&DataKey::Sub(id), &sub);
 
-    // Maintain merchant → subscription-ID index
     let key = DataKey::MerchantSubs(sub.merchant.clone());
     let mut ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
     ids.push_back(id);
@@ -67,13 +66,13 @@ pub fn do_deposit_funds(
     let token_addr: Address = env
         .storage()
         .instance()
-        .get(&Symbol::new(env, "token"))
+        .get(&DataKey::Token)
         .ok_or(Error::NotFound)?;
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
 
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     env.events().publish(
         (Symbol::new(env, "deposited"), subscription_id),
         (subscriber, amount, sub.prepaid_balance),
@@ -97,7 +96,7 @@ pub fn do_cancel_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     sub.status = SubscriptionStatus::Cancelled;
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     Ok(())
 }
 
@@ -112,7 +111,7 @@ pub fn do_pause_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
     sub.status = SubscriptionStatus::Paused;
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     Ok(())
 }
 
@@ -127,7 +126,7 @@ pub fn do_resume_subscription(
     validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
     sub.status = SubscriptionStatus::Active;
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     Ok(())
 }
 
@@ -145,18 +144,18 @@ pub fn do_withdraw_subscriber_funds(
     }
 
     if sub.status != SubscriptionStatus::Cancelled {
-        return Err(Error::InvalidStatusTransition); // Or Unauthorized/InvalidState
+        return Err(Error::InvalidStatusTransition);
     }
 
     let amount_to_refund = sub.prepaid_balance;
     if amount_to_refund > 0 {
         sub.prepaid_balance = 0;
-        env.storage().instance().set(&subscription_id, &sub);
+        env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
         let token_addr: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(env, "token"))
+            .get(&DataKey::Token)
             .ok_or(Error::NotFound)?;
         let token_client = soroban_sdk::token::Client::new(env, &token_addr);
 
