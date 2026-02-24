@@ -3,19 +3,14 @@
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
 use crate::charge_core::charge_one;
-use crate::types::{BatchChargeResult, Error, RecoveryEvent, RecoveryReason};
+use crate::types::{BatchChargeResult, DataKey, Error, RecoveryEvent, RecoveryReason, STORAGE_VERSION};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, "token"), &token);
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, "admin"), &admin);
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, "min_topup"), &min_topup);
+    env.storage().instance().set(&DataKey::Token, &token);
+    env.storage().instance().set(&DataKey::Admin, &admin);
+    env.storage().instance().set(&DataKey::MinTopup, &min_topup);
+    env.storage().instance().set(&DataKey::SchemaVersion, &STORAGE_VERSION);
     env.events().publish(
         (Symbol::new(env, "initialized"),),
         (token, admin, min_topup),
@@ -26,7 +21,7 @@ pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Re
 pub fn require_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::Unauthorized)
 }
 
@@ -36,9 +31,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     if admin != stored {
         return Err(Error::Unauthorized);
     }
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, "min_topup"), &min_topup);
+    env.storage().instance().set(&DataKey::MinTopup, &min_topup);
     env.events()
         .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
     Ok(())
@@ -47,7 +40,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
 pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "min_topup"))
+        .get(&DataKey::MinTopup)
         .ok_or(Error::NotFound)
 }
 
@@ -79,7 +72,7 @@ pub fn do_batch_charge(
 pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::NotFound)
 }
 
@@ -89,16 +82,14 @@ pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) ->
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::NotFound)?;
 
     if current_admin != stored_admin {
         return Err(Error::Unauthorized);
     }
 
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, "admin"), &new_admin);
+    env.storage().instance().set(&DataKey::Admin, &new_admin);
 
     env.events().publish(
         (Symbol::new(env, "admin_rotation"), current_admin.clone()),
@@ -120,7 +111,7 @@ pub fn do_recover_stranded_funds(
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::NotFound)?;
 
     if admin != stored_admin {
