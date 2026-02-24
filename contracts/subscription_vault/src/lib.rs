@@ -98,7 +98,7 @@ impl SubscriptionVault {
         amount: i128,
         interval_seconds: u64,
         usage_enabled: bool,
-        expiration: Option<u64>,
+        _expiration: Option<u64>,
     ) -> Result<u32, Error> {
         subscription::do_create_subscription(
             &env,
