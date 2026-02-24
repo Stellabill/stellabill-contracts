@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use crate::queries::get_subscription;
+use crate::safe_math::{safe_add_balance, validate_non_negative};
 use crate::state_machine::validate_status_transition;
 use crate::types::{DataKey, Error, PlanTemplate, Subscription, SubscriptionStatus};
 use soroban_sdk::{Address, Env, Symbol, Vec};
@@ -37,6 +38,7 @@ pub fn do_create_subscription(
     usage_enabled: bool,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
+    validate_non_negative(amount)?;
     let sub = Subscription {
         subscriber: subscriber.clone(),
         merchant: merchant.clone(),
@@ -71,13 +73,10 @@ pub fn do_deposit_funds(
     if amount < min_topup {
         return Err(Error::BelowMinimumTopup);
     }
+    validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
-    sub.prepaid_balance = sub
-        .prepaid_balance
-        .checked_add(amount)
-        .ok_or(Error::Overflow)?;
-
+    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
     let token_addr: Address = env
         .storage()
         .instance()
@@ -86,7 +85,6 @@ pub fn do_deposit_funds(
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
 
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
     env.storage().instance().set(&subscription_id, &sub);
     env.events().publish(
         (Symbol::new(env, "deposited"), subscription_id),
