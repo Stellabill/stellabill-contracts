@@ -3672,7 +3672,7 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
 
     let subscriber_after_deposit = token_client.balance(&subscriber);
     let merchant_after_deposit = token_client.balance(&merchant);
-    let vault_after_deposit = token_client.balance(&contract_id);
+    let vault_after_deposit = token_client.balance(&client.address);
 
     // advance vault manually (since actual subtract mocked in isolated function test logic)
     assert_eq!(vault_after_deposit - vault_before, deposit_amount);
@@ -3690,7 +3690,7 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
     // Charging doesn't move tokens out of the vault
     let subscriber_after_charge = token_client.balance(&subscriber);
     let merchant_after_charge = token_client.balance(&merchant);
-    let vault_after_charge = token_client.balance(&contract_id);
+    let vault_after_charge = token_client.balance(&client.address);
     assert_eq!(subscriber_after_charge, subscriber_after_deposit);
     assert_eq!(merchant_after_charge, merchant_after_deposit);
     assert_eq!(vault_after_charge, vault_after_deposit);
