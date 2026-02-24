@@ -27,12 +27,14 @@ pub enum Error {
     BelowMinimumTopup = 402,
     /// Arithmetic overflow in computation (e.g. amount * intervals).
     Overflow = 403,
+    /// Arithmetic underflow (e.g. negative amount or balance would go negative).
+    Underflow = 1004,
     /// Charge failed due to insufficient prepaid balance.
     InsufficientBalance = 1003,
     /// Usage-based charge attempted on a subscription with `usage_enabled = false`.
-    UsageNotEnabled = 1004,
+    UsageNotEnabled = 1009,
     /// Usage-based charge amount exceeds the available prepaid balance.
-    InsufficientPrepaidBalance = 1005,
+    InsufficientPrepaidBalance = 1010,
     /// The provided amount is zero or negative.
     InvalidAmount = 1006,
     /// Charge already processed for this billing period.
@@ -52,9 +54,10 @@ impl Error {
             Error::InvalidStatusTransition => 400,
             Error::BelowMinimumTopup => 402,
             Error::Overflow => 403,
+            Error::Underflow => 1004,
             Error::InsufficientBalance => 1003,
-            Error::UsageNotEnabled => 1004,
-            Error::InsufficientPrepaidBalance => 1005,
+            Error::UsageNotEnabled => 1009,
+            Error::InsufficientPrepaidBalance => 1010,
             Error::InvalidAmount => 1006,
             Error::Replay => 1007,
             Error::InvalidRecoveryAmount => 1008,
@@ -112,14 +115,29 @@ pub enum SubscriptionStatus {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Subscription {
+    /// Subscriber address (payer).
+    /// WARNING: Renaming this field is a breaking change for serialization.
     pub subscriber: Address,
+    /// Merchant address (payee).
+    /// WARNING: Renaming this field is a breaking change for serialization.
     pub merchant: Address,
+    /// Recurring payment amount.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub amount: i128,
+    /// Payment interval in seconds.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub interval_seconds: u64,
+    /// Timestamp of the last successful payment.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub last_payment_timestamp: u64,
     /// Current lifecycle state. Modified only through state machine transitions.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub status: SubscriptionStatus,
+    /// Prepaid balance available for charges.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub prepaid_balance: i128,
+    /// Whether usage-based billing is enabled.
+    /// WARNING: Renaming or changing type is a breaking change.
     pub usage_enabled: bool,
 }
 
