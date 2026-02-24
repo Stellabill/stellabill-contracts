@@ -792,13 +792,13 @@ fn test_repeated_failed_charges_no_corruption() {
         assert_eq!(after_first.prepaid_balance, initial_balance);
         assert_eq!(after_first.status, SubscriptionStatus::InsufficientBalance);
 
-        // Second attempt - status is now InsufficientBalance, so returns Ok (skipped)
+        // Second attempt - status is now InsufficientBalance, so charging is rejected
         let r2 = SubscriptionVault::charge_subscription(env.clone(), 0u32);
-        assert!(r2.is_ok()); // Returns Ok because status != Active
+        assert!(r2.is_err()); // Returns Err because status != Active
 
-        // Third attempt - same, returns Ok
+        // Third attempt - same, returns Err
         let r3 = SubscriptionVault::charge_subscription(env.clone(), 0u32);
-        assert!(r3.is_ok());
+        assert!(r3.is_err());
 
         // Balance still unchanged (INVARIANT preserved)
         let final_state: Subscription = env.storage().instance().get(&0u32).unwrap();

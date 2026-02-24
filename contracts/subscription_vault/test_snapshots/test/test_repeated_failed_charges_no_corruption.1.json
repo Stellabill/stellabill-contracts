@@ -6,7 +6,6 @@
   "auth": [
     [],
     [],
-    [],
     []
   ],
   "ledger": {
@@ -99,7 +98,7 @@
                                 "symbol": "status"
                               },
                               "val": {
-                                "u32": 3
+                                "u32": 0
                               }
                             },
                             {
@@ -127,6 +126,17 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "min_topup"
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1
+                          }
                         }
                       },
                       {
