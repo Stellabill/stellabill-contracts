@@ -968,8 +968,13 @@ fn test_min_topup_below_threshold() {
     let min_topup = 5_000000i128; // 5 USDC
 
     client.init(&token, &admin, &min_topup);
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &min_topup, &(30 * 24 * 60 * 60), &false);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &min_topup,
+        &(30 * 24 * 60 * 60),
+        &false,
+    );
 
     let result = client.try_deposit_funds(&sub_id, &subscriber, &4_999999);
     assert!(result.is_err());
@@ -1591,8 +1596,7 @@ fn test_get_next_charge_info_contract_method() {
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
 
-    let id =
-        client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
 
     let info = client.get_next_charge_info(&id);
 
@@ -1611,8 +1615,7 @@ fn test_get_next_charge_info_all_statuses() {
 
     env.ledger().with_mut(|li| li.timestamp = 5000);
 
-    let id =
-        client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
 
     // Test Active status
     let info = client.get_next_charge_info(&id);
@@ -1657,8 +1660,7 @@ fn test_get_next_charge_info_insufficient_balance_status() {
 
     env.ledger().with_mut(|li| li.timestamp = 2000);
 
-    let id =
-        client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
 
     // Manually set to InsufficientBalance for testing
     let mut sub = client.get_subscription(&id);
@@ -2162,8 +2164,7 @@ fn test_batch_charge_small_batch_5_subscriptions() {
     let mut ids = SorobanVec::<u32>::new(&env);
 
     for _ in 0..5 {
-        let id =
-            client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+        let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
         ids.push_back(id as u32);
     }
@@ -2194,8 +2195,7 @@ fn test_batch_charge_medium_batch_20_subscriptions() {
     let mut ids = SorobanVec::<u32>::new(&env);
 
     for _ in 0..20 {
-        let id =
-            client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+        let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
         ids.push_back(id as u32);
     }
@@ -2225,8 +2225,7 @@ fn test_batch_charge_large_batch_50_subscriptions() {
     let mut ids = SorobanVec::<u32>::new(&env);
 
     for _ in 0..50 {
-        let id =
-            client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+        let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
         ids.push_back(id as u32);
     }
@@ -2260,8 +2259,7 @@ fn test_batch_charge_mixed_success_and_insufficient_balance() {
     let mut ids = SorobanVec::<u32>::new(&env);
 
     for i in 0..4 {
-        let id =
-            client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+        let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         if i % 2 == 0 {
             client.deposit_funds(&id, &subscriber, &10_000000i128);
         }
@@ -2301,8 +2299,7 @@ fn test_batch_charge_mixed_interval_not_elapsed() {
     let merchant = Address::generate(&env);
 
     let id_short = client.create_subscription(&subscriber, &merchant, &1000i128, &1800, &false);
-    let id_long =
-        client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
+    let id_long = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
 
     client.deposit_funds(&id_short, &subscriber, &10_000000i128);
     client.deposit_funds(&id_long, &subscriber, &10_000000i128);
@@ -2505,8 +2502,7 @@ fn test_batch_charge_successful_charges_update_state() {
     let merchant = Address::generate(&env);
     let charge_amount = 1_000_000i128;
 
-    let id =
-        client.create_subscription(&subscriber, &merchant, &charge_amount, &INTERVAL, &false);
+    let id = client.create_subscription(&subscriber, &merchant, &charge_amount, &INTERVAL, &false);
     let initial_balance = 10_000_000i128;
     client.deposit_funds(&id, &subscriber, &initial_balance);
 
@@ -3011,13 +3007,7 @@ fn test_usage_enabled_with_zero_interval() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &0,
-        &true,
-    );
+    let id = client.create_subscription(&subscriber, &merchant, &1_000_000i128, &0, &true);
 
     let subscription = client.get_subscription(&id);
     assert!(subscription.usage_enabled);
@@ -3209,8 +3199,7 @@ fn test_usage_enabled_with_different_amounts() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    let id1 =
-        client.create_subscription(&subscriber, &merchant, &100i128, &(24 * 60 * 60), &true);
+    let id1 = client.create_subscription(&subscriber, &merchant, &100i128, &(24 * 60 * 60), &true);
 
     let id2 = client.create_subscription(
         &subscriber,
@@ -3250,19 +3239,39 @@ fn test_usage_enabled_field_storage() {
     let merchant = Address::generate(&env);
 
     let id0 = client.create_subscription(
-        &subscriber, &merchant, &10_000_000i128, &(30 * 24 * 60 * 60), &true,
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &true,
     );
     let id1 = client.create_subscription(
-        &subscriber, &merchant, &10_000_000i128, &(30 * 24 * 60 * 60), &false,
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &false,
     );
     let id2 = client.create_subscription(
-        &subscriber, &merchant, &10_000_000i128, &(30 * 24 * 60 * 60), &true,
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &true,
     );
     let id3 = client.create_subscription(
-        &subscriber, &merchant, &10_000_000i128, &(30 * 24 * 60 * 60), &false,
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &false,
     );
     let id4 = client.create_subscription(
-        &subscriber, &merchant, &10_000_000i128, &(30 * 24 * 60 * 60), &true,
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &(30 * 24 * 60 * 60),
+        &true,
     );
 
     assert!(client.get_subscription(&id0).usage_enabled);
@@ -3409,8 +3418,7 @@ fn test_batch_charge_admin_rotation() {
 
     env.ledger().with_mut(|li| li.timestamp = T0);
 
-    let id =
-        client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
+    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval_seconds, &false);
 
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = 50_000_000i128;
