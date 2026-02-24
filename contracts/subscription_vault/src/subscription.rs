@@ -65,7 +65,6 @@ pub fn do_deposit_funds(
 
     let mut sub = get_subscription(env, subscription_id)?;
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
-
     let token_addr: Address = env
         .storage()
         .instance()
@@ -74,7 +73,6 @@ pub fn do_deposit_funds(
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
 
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
     env.storage().instance().set(&subscription_id, &sub);
     env.events().publish(
         (Symbol::new(env, "deposited"), subscription_id),

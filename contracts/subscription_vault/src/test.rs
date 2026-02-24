@@ -860,8 +860,11 @@ fn test_create_subscription_validates_amount() {
     assert_eq!(validate_non_negative(10_000_000i128), Ok(()));
 }
 
+<<<<<<< HEAD
 // ─── Merchant view helper tests ───────────────────────────────────────────────
 
+=======
+>>>>>>> upstream/main
 #[test]
 fn test_cancel_subscription_by_subscriber() {
     let env = Env::default();
@@ -914,6 +917,17 @@ fn test_min_topup_below_threshold() {
 
     let result = client.try_deposit_funds(&sub_id, &subscriber, &4_999999);
 
+=======
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &min_topup,
+        &(30 * 24 * 60 * 60),
+        &false,
+    );
+
+    let result = client.try_deposit_funds(&sub_id, &subscriber, &4_999999);
+>>>>>>> upstream/main
     assert!(result.is_err());
 }
 #[test]
@@ -976,7 +990,6 @@ fn test_min_topup_above_threshold() {
     );
 
     let result = client.try_deposit_funds(&sub_id, &subscriber, &deposit_amount);
-
     assert!(result.is_ok());
 }
 
@@ -1530,7 +1543,7 @@ fn test_get_next_charge_info_multiple_intervals() {
 }
 
 #[test]
-fn test_get_next_charge_info_zero_interval() {
+fn test_compute_next_charge_info_zero_interval() {
     use crate::{compute_next_charge_info, Subscription, SubscriptionStatus};
 
     let env = Env::default();
@@ -1963,6 +1976,7 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
     client.init(&token_addr, &admin, &1_000000i128);
 
     let subscriber = Address::generate(env);
+    token_admin.mint(&subscriber, &100_000_000i128);
     let merchant = Address::generate(env);
 
     token_admin.mint(&subscriber, &20_000_000i128);
@@ -3832,14 +3846,9 @@ fn test_list_subscriptions_one_subscription() {
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
+    let balance = 10_000_000i128;
 
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &10_000_000i128,
-        &(30 * 24 * 60 * 60),
-        &false,
-    );
+    let id = client.create_subscription(&subscriber, &merchant, &balance, &INTERVAL, &false);
 
     let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
 

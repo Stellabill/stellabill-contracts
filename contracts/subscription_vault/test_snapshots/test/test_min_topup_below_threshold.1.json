@@ -54,6 +54,18 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 5000000
+                  }
+                },
+                {
+                  "u64": 2592000
+                },
+                {
+                  "bool": false
                 }
               ]
             }
