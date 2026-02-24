@@ -17,51 +17,61 @@ pub enum DataKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    NotFound = 404,
+    // --- Auth Errors (401-403) ---
+    /// Caller does not have the required authorization or is not the admin.
     Unauthorized = 401,
-    /// Charge attempted before `last_payment_timestamp + interval_seconds`.
-    IntervalNotElapsed = 1001,
-    /// Subscription is not Active (e.g. Paused, Cancelled).
-    NotActive = 1002,
+    /// Caller is authorized but does not have permission for this specific action.
+    Forbidden = 403,
+
+    // --- Not Found (404) ---
+    /// The requested resource (e.g. subscription) was not found.
+    NotFound = 404,
+
+    // --- Invalid Input (400, 405-409) ---
+    /// The requested state transition is not allowed by the state machine.
     InvalidStatusTransition = 400,
+    /// The top-up amount is below the minimum required threshold.
     BelowMinimumTopup = 402,
-    /// Arithmetic overflow in computation (e.g. amount * intervals).
-    Overflow = 403,
-    /// Arithmetic underflow (e.g. negative amount or balance would go negative).
-    Underflow = 1004,
-    /// Charge failed due to insufficient prepaid balance.
-    InsufficientBalance = 1003,
-    /// Usage-based charge attempted on a subscription with `usage_enabled = false`.
-    UsageNotEnabled = 1009,
-    /// Usage-based charge amount exceeds the available prepaid balance.
-    InsufficientPrepaidBalance = 1010,
     /// The provided amount is zero or negative.
-    InvalidAmount = 1006,
-    /// Charge already processed for this billing period.
-    Replay = 1007,
+    InvalidAmount = 405,
     /// Recovery amount is zero or negative.
-    InvalidRecoveryAmount = 1008,
+    InvalidRecoveryAmount = 406,
+    /// Usage-based charge attempted on a subscription with usage disabled.
+    UsageNotEnabled = 407,
+    /// Invalid parameters provided to the function.
+    InvalidInput = 408,
+
+    // --- Insufficient Funds (10xx) ---
+    /// Subscription failed due to insufficient prepaid balance in the vault.
+    InsufficientBalance = 1001,
+    /// Usage-based charge exceeds the available prepaid balance.
+    InsufficientPrepaidBalance = 1002,
+
+    // --- Timing & Lifecycle Errors (11xx) ---
+    /// Charge attempted before the required interval has elapsed.
+    IntervalNotElapsed = 1101,
+    /// Charge already processed for this billing period (replay protection).
+    Replay = 1102,
+    /// Subscription is not in the 'Active' state.
+    NotActive = 1103,
+
+    // --- Algebra & Overflow (12xx) ---
+    /// Arithmetic overflow in computation.
+    Overflow = 1201,
+    /// Arithmetic underflow (e.g. balance would go negative).
+    Underflow = 1202,
+
+    // --- Configuration & System (13xx) ---
+    /// Contract is already initialized.
+    AlreadyInitialized = 1301,
+    /// Contract has not been initialized.
+    NotInitialized = 1302,
 }
 
 impl Error {
     /// Returns the numeric code for this error (for batch result reporting).
     pub const fn to_code(self) -> u32 {
-        match self {
-            Error::NotFound => 404,
-            Error::Unauthorized => 401,
-            Error::IntervalNotElapsed => 1001,
-            Error::NotActive => 1002,
-            Error::InvalidStatusTransition => 400,
-            Error::BelowMinimumTopup => 402,
-            Error::Overflow => 403,
-            Error::Underflow => 1004,
-            Error::InsufficientBalance => 1003,
-            Error::UsageNotEnabled => 1009,
-            Error::InsufficientPrepaidBalance => 1010,
-            Error::InvalidAmount => 1006,
-            Error::Replay => 1007,
-            Error::InvalidRecoveryAmount => 1008,
-        }
+        self as u32
     }
 }
 
