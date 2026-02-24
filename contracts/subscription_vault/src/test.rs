@@ -1678,10 +1678,10 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(env, &contract_id);
-    let token = Address::generate(env);
+    let subscriber = Address::generate(env);
+    let token = crate::test::create_token_and_mint(env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(env);
     client.init(&token, &admin, &1_000000i128);
-    let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
     let id0 = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
     client.deposit_funds(&id0, &subscriber, &10_000000i128);
@@ -1713,11 +1713,11 @@ fn test_batch_charge_small_batch_5_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
 
@@ -1745,11 +1745,11 @@ fn test_batch_charge_medium_batch_20_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
 
@@ -1776,11 +1776,11 @@ fn test_batch_charge_large_batch_50_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
 
@@ -1811,11 +1811,11 @@ fn test_batch_charge_mixed_success_and_insufficient_balance() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
 
@@ -1856,11 +1856,11 @@ fn test_batch_charge_mixed_interval_not_elapsed() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     // Create subscriptions with different intervals
@@ -1895,11 +1895,11 @@ fn test_batch_charge_mixed_paused_and_active() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     let id0 = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
@@ -1933,11 +1933,11 @@ fn test_batch_charge_mixed_cancelled_and_active() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     let id0 = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
@@ -1997,11 +1997,11 @@ fn test_batch_charge_all_different_error_types() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     // Sub 0: Success case
@@ -2066,11 +2066,11 @@ fn test_batch_charge_successful_charges_update_state() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let charge_amount = 1_000_000i128; // 1 USDC
 
@@ -2101,11 +2101,11 @@ fn test_batch_charge_failed_charges_leave_state_unchanged() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
@@ -2138,11 +2138,11 @@ fn test_batch_charge_partial_batch_correct_final_state() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let amount = 1_000_000i128;
 
@@ -2190,11 +2190,11 @@ fn test_batch_charge_multiple_rounds_state_consistency() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let amount = 1_000_000i128;
 
@@ -2228,11 +2228,11 @@ fn test_batch_charge_requires_admin_auth() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
 
@@ -2292,11 +2292,11 @@ fn test_batch_charge_exhausts_balance_exactly() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let amount = 5_000_000i128;
 
@@ -2322,11 +2322,11 @@ fn test_batch_charge_balance_off_by_one_insufficient() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let amount = 5_000_000i128;
 
@@ -2353,11 +2353,11 @@ fn test_batch_charge_result_indices_match_input_order() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &admin, &1_000000i128);
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
     let id0 = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
@@ -3462,7 +3462,6 @@ fn test_get_admin_before_and_after_rotation() {
 }
 
 // =============================================================================
-feature/withdraw-merchant-funds-implementation
 // withdraw_merchant_funds tests
 // =============================================================================
 
@@ -3536,10 +3535,7 @@ fn test_withdraw_merchant_funds_exact_balance_succeeds_and_transfers() {
     assert_eq!(vault_before - vault_after, 3_000000i128);
 
     // Merchant balance should now be zero
-    assert_eq!(
-        client.get_merchant_balance(&merchant),
-        0i128
-    );
+    assert_eq!(client.get_merchant_balance(&merchant), 0i128);
 }
 
 #[test]
@@ -3570,10 +3566,7 @@ fn test_withdraw_merchant_funds_partial_succeeds_and_leaves_remainder() {
     assert_eq!(merchant_after - merchant_before, 2_000000i128);
 
     // Remaining owed should be 3 USDC
-    assert_eq!(
-        client.get_merchant_balance(&merchant),
-        3_000000i128
-    );
+    assert_eq!(client.get_merchant_balance(&merchant), 3_000000i128);
 }
 
 #[test]
@@ -3610,10 +3603,7 @@ fn test_withdraw_merchant_funds_overdraft_fails_and_does_not_transfer() {
     assert_eq!(vault_after, vault_before);
 
     // Ensure ledger balance unchanged
-    assert_eq!(
-        client.get_merchant_balance(&merchant),
-        1_000000i128
-    );
+    assert_eq!(client.get_merchant_balance(&merchant), 1_000000i128);
 }
 
 #[test]
@@ -3680,9 +3670,6 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
     let deposit_amount = 10_000000i128;
     client.deposit_funds(&id, &subscriber, &deposit_amount);
 
-    // Simulate front-end actual token transfer over to vault
-    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
-    token_admin_client.mint(&contract_id, &deposit_amount);
 
     let subscriber_after_deposit = token_client.balance(&subscriber);
     let merchant_after_deposit = token_client.balance(&merchant);
@@ -3723,22 +3710,6 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
     // Subscriber unchanged after charge/withdraw (already paid at deposit)
     assert_eq!(token_client.balance(&subscriber), subscriber_after_charge);
 }
-
-// View Function Tests: list_subscriptions_by_subscriber
-// =============================================================================
-
-#[test]
-fn test_list_subscriptions_zero_subscriptions() {
-    // Test querying a subscriber with no subscriptions
-    let (env, client, _, _) = setup_test_env();
-
-    let subscriber = Address::generate(&env);
-    let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
-
-    assert_eq!(page.subscription_ids.len(), 0);
-    assert!(!page.has_next);
-// View Function Tests: list_subscriptions_by_subscriber
-// 
 
 #[test]
 fn test_list_subscriptions_zero_subscriptions() {
@@ -4079,5 +4050,4 @@ fn test_list_subscriptions_multiple_merchants() {
             ids.get(i as u32).unwrap()
         );
     }
-main
 }

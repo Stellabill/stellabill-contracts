@@ -2,10 +2,6 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-use crate::types::{
-    DataKey, Error, NextChargeInfo, Subscription, SubscriptionPage, SubscriptionStatus,
-};
-use soroban_sdk::{Address, Env, Vec};
 #![allow(dead_code)]
 
 use crate::types::{DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
@@ -114,43 +110,6 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     }
 }
 
-feature/withdraw-merchant-funds-implementation
-/// Returns subscriptions for a subscriber, paginated by offset.
-pub fn list_subscriptions_by_subscriber(
-    env: &Env,
-    subscriber: Address,
-    start: u32,
-    limit: u32,
-) -> SubscriptionPage {
-    let key = DataKey::SubscriberSubs(subscriber);
-    let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
-
-    let len = ids.len();
-    if start >= len || limit == 0 {
-        return SubscriptionPage {
-            subscription_ids: Vec::new(env),
-            has_next: false,
-        };
-    }
-
-    let end = if start + limit > len {
-        len
-    } else {
-        start + limit
-    };
-
-    let mut result_ids = Vec::new(env);
-    let mut i = start;
-    while i < end {
-        result_ids.push_back(ids.get(i).unwrap());
-        i += 1;
-    }
-
-    SubscriptionPage {
-        subscription_ids: result_ids,
-        has_next: end < len,
-    }
-
 /// Result of a paginated query for subscriptions by subscriber.
 /// Contains the subscription IDs and metadata for pagination.
 #[contracttype]
@@ -255,5 +214,4 @@ pub fn list_subscriptions_by_subscriber(
         subscription_ids,
         has_next,
     })
-main
 }
