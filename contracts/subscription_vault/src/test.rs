@@ -615,13 +615,17 @@ fn test_min_topup_exactly_at_threshold() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
 
-    client.init(&token, &admin, &min_topup);
+    client.init(&token_addr, &admin, &min_topup);
+    token_admin.mint(&subscriber, &min_topup);
 
     // Create a subscription first
     let sub_id = client.create_subscription(&subscriber, &merchant, &1_000000, &86400, &false);
@@ -637,18 +641,23 @@ fn test_min_topup_above_threshold() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
+    let deposit_amount = 10_000000i128;
 
-    client.init(&token, &admin, &min_topup);
+    client.init(&token_addr, &admin, &min_topup);
+    token_admin.mint(&subscriber, &deposit_amount);
 
     // Create a subscription first
     let sub_id = client.create_subscription(&subscriber, &merchant, &1_000000, &86400, &false);
 
-    let result = client.try_deposit_funds(&sub_id, &subscriber, &10_000000);
+    let result = client.try_deposit_funds(&sub_id, &subscriber, &deposit_amount);
     assert!(result.is_ok());
 }
 
@@ -1118,7 +1127,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1007)")]
+#[should_panic(expected = "Error(Contract, #1008)")]
 fn test_recover_stranded_funds_zero_amount() {
     let (_, client, _, admin) = setup_test_env();
 
@@ -1131,7 +1140,7 @@ fn test_recover_stranded_funds_zero_amount() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1007)")]
+#[should_panic(expected = "Error(Contract, #1008)")]
 fn test_recover_stranded_funds_negative_amount() {
     let (_, client, _, admin) = setup_test_env();
 
@@ -1648,18 +1657,23 @@ fn test_subscription_from_plan_can_be_charged() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let token = Address::generate(&env);
     let admin = Address::generate(&env);
-    client.init(&token, &admin, &1_000000i128);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    
+    client.init(&token_addr, &admin, &1_000000i128);
 
     let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
     let amount = 1000i128;
     let plan_id = client.create_plan_template(&merchant, &amount, &INTERVAL, &false);
 
-    let subscriber = Address::generate(&env);
     let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
 
-    // Deposit funds
+    // Mint and deposit funds
+    token_admin.mint(&subscriber, &10_000000i128);
     client.deposit_funds(&sub_id, &subscriber, &10_000000i128);
 
     // Advance time and charge
