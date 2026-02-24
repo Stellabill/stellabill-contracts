@@ -1697,7 +1697,7 @@ fn test_batch_charge_single_subscription() {
     let env = Env::default();
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
+    ids.push_back(id0);
 
     let results = client.batch_charge(&ids);
 
@@ -1725,7 +1725,7 @@ fn test_batch_charge_small_batch_5_subscriptions() {
     for _ in 0..5 {
         let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -1757,7 +1757,7 @@ fn test_batch_charge_medium_batch_20_subscriptions() {
     for _ in 0..20 {
         let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -1788,7 +1788,7 @@ fn test_batch_charge_large_batch_50_subscriptions() {
     for _ in 0..50 {
         let id = client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -1826,7 +1826,7 @@ fn test_batch_charge_mixed_success_and_insufficient_balance() {
             client.deposit_funds(&id, &subscriber, &10_000000i128);
         }
         // Odd indices have no funds
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -1912,8 +1912,8 @@ fn test_batch_charge_mixed_paused_and_active() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
 
@@ -1950,8 +1950,8 @@ fn test_batch_charge_mixed_cancelled_and_active() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
 
@@ -1970,7 +1970,7 @@ fn test_batch_charge_nonexistent_subscription_ids() {
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32); // Valid
+    ids.push_back(id0); // Valid
     ids.push_back(9999); // Nonexistent
     ids.push_back(8888); // Nonexistent
 
@@ -2084,7 +2084,7 @@ fn test_batch_charge_successful_charges_update_state() {
 
     env.ledger().set_timestamp(T0 + INTERVAL);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(results.get(0).unwrap().success);
@@ -2115,7 +2115,7 @@ fn test_batch_charge_failed_charges_leave_state_unchanged() {
 
     env.ledger().set_timestamp(T0 + INTERVAL);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(!results.get(0).unwrap().success);
@@ -2158,9 +2158,9 @@ fn test_batch_charge_partial_batch_correct_final_state() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
-    ids.push_back(id2 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
+    ids.push_back(id2);
 
     let results = client.batch_charge(&ids);
 
@@ -2202,7 +2202,7 @@ fn test_batch_charge_multiple_rounds_state_consistency() {
     client.deposit_funds(&id, &subscriber, &10_000_000i128);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     // Charge 3 times over 3 intervals
     for i in 1..=3 {
@@ -2246,7 +2246,7 @@ fn test_batch_charge_requires_admin_auth() {
             fn_name: "batch_charge",
             args: {
                 let mut ids = SorobanVec::<u32>::new(&env);
-                ids.push_back(id as u32);
+                ids.push_back(id);
                 (ids,).into_val(&env)
             },
             sub_invokes: &[],
@@ -2254,7 +2254,7 @@ fn test_batch_charge_requires_admin_auth() {
     }]);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
     client.batch_charge(&ids);
 }
 
@@ -2268,9 +2268,9 @@ fn test_batch_charge_duplicate_subscription_ids() {
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id0 as u32); // Duplicate
-    ids.push_back(id0 as u32); // Duplicate
+    ids.push_back(id0);
+    ids.push_back(id0); // Duplicate
+    ids.push_back(id0); // Duplicate
 
     let results = client.batch_charge(&ids);
 
@@ -2306,7 +2306,7 @@ fn test_batch_charge_exhausts_balance_exactly() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(results.get(0).unwrap().success);
@@ -2336,7 +2336,7 @@ fn test_batch_charge_balance_off_by_one_insufficient() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(!results.get(0).unwrap().success);
@@ -2373,9 +2373,9 @@ fn test_batch_charge_result_indices_match_input_order() {
 
     // Test specific order: id2, id0, id1
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id2 as u32);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id2);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
     assert_eq!(results.len(), 3);
@@ -3648,7 +3648,7 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    let subscriber_before = token_client.balance(&subscriber);
+    let _subscriber_before = token_client.balance(&subscriber);
     let merchant_before = token_client.balance(&merchant);
     let vault_before = token_client.balance(&contract_id);
 
@@ -3669,7 +3669,6 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
     // Deposit 10 USDC
     let deposit_amount = 10_000000i128;
     client.deposit_funds(&id, &subscriber, &deposit_amount);
-
 
     let subscriber_after_deposit = token_client.balance(&subscriber);
     let merchant_after_deposit = token_client.balance(&merchant);
@@ -3773,10 +3772,7 @@ fn test_list_subscriptions_many_subscriptions() {
 
     // Verify subscriptions are returned in order by ID
     for i in 0..5 {
-        assert_eq!(
-            page.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
 }
 
@@ -3807,10 +3803,7 @@ fn test_list_subscriptions_pagination_first_page() {
 
     // Verify first page contains the first 10 subscriptions
     for i in 0..10 {
-        assert_eq!(
-            page1.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page1.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
 }
 
@@ -3850,7 +3843,7 @@ fn test_list_subscriptions_pagination_second_page() {
     for i in 0..5 {
         assert_eq!(
             page2.subscription_ids.get(i).unwrap(),
-            ids.get((10 + i) as u32).unwrap()
+            ids.get(10 + i).unwrap()
         );
     }
 }
@@ -3922,7 +3915,7 @@ fn test_list_subscriptions_small_limit() {
 
     while has_next {
         let page = client.list_subscriptions_by_subscriber(&subscriber, &start_id, &1u32);
-        if page.subscription_ids.len() > 0 {
+        if !page.subscription_ids.is_empty() {
             let current_id = page.subscription_ids.get(0).unwrap();
             all_ids.push_back(current_id);
             // Advance start cursor past the current ID
@@ -3981,7 +3974,7 @@ fn test_list_subscriptions_respects_start_from_id() {
     for i in 0..5 {
         assert_eq!(
             page.subscription_ids.get(i).unwrap(),
-            ids.get((5 + i) as u32).unwrap()
+            ids.get(5 + i).unwrap()
         );
     }
 }
@@ -4045,9 +4038,6 @@ fn test_list_subscriptions_multiple_merchants() {
     assert_eq!(page.subscription_ids.len(), 10);
     // All subscriptions should be from this subscriber regardless of merchant
     for i in 0..10 {
-        assert_eq!(
-            page.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
 }
