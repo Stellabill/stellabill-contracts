@@ -287,6 +287,8 @@ pub struct NextChargeInfo {
 }
 pub mod types;
 
+mod safe_math;
+
 // ── Re-exports (used by tests and external consumers) ────────────────────────
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::*;
