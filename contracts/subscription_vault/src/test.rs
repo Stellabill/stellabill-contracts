@@ -1662,7 +1662,7 @@ fn test_subscription_from_plan_can_be_charged() {
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    
+
     client.init(&token_addr, &admin, &1_000000i128);
 
     let merchant = Address::generate(&env);
