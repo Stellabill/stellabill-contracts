@@ -232,6 +232,16 @@ impl SubscriptionVault {
     pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
         queries::get_merchant_subscription_count(&env, merchant)
     }
+
+    /// Return subscription IDs by subscriber, paginated.
+    pub fn list_subscriptions_by_subscriber(
+        env: Env,
+        subscriber: Address,
+        start: u32,
+        limit: u32,
+    ) -> SubscriptionPage {
+        queries::list_subscriptions_by_subscriber(&env, subscriber, start, limit)
+    }
 }
 
 #[cfg(test)]

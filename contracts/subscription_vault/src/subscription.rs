@@ -42,6 +42,16 @@ pub fn do_create_subscription(
     ids.push_back(id);
     env.storage().instance().set(&key, &ids);
 
+    // Maintain subscriber → subscription-ID index
+    let sub_key = DataKey::SubscriberSubs(sub.subscriber.clone());
+    let mut sub_ids: Vec<u32> = env
+        .storage()
+        .instance()
+        .get(&sub_key)
+        .unwrap_or(Vec::new(env));
+    sub_ids.push_back(id);
+    env.storage().instance().set(&sub_key, &sub_ids);
+
     Ok(id)
 }
 

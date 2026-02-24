@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address};
+use soroban_sdk::{contracterror, contracttype, Address, Vec};
 
 /// Storage keys for secondary indices.
 #[contracttype]
@@ -11,6 +11,8 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
+    /// Maps a subscriber address to its list of subscription IDs.
+    SubscriberSubs(Address),
 }
 
 #[contracterror]
@@ -70,6 +72,14 @@ pub struct BatchChargeResult {
     pub success: bool,
     /// If success is false, the error code (e.g. from [`Error::to_code`]); otherwise 0.
     pub error_code: u32,
+}
+
+/// Result of paginated subscription queries.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionPage {
+    pub subscription_ids: Vec<u32>,
+    pub has_next: bool,
 }
 
 /// Represents the lifecycle state of a subscription.

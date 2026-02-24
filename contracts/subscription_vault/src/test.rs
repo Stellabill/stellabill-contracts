@@ -2649,32 +2649,34 @@ fn test_withdraw_merchant_funds_exact_balance_succeeds_and_transfers() {
     let merchant = Address::generate(&env);
 
     // Create token, and mint enough to the VAULT (contract) so it can pay out
-    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
 
     let admin = Address::generate(&env);
     let min_topup = 1_000000i128;
     client.init(&token, &admin, &min_topup);
 
     // Credit merchant balance directly.
-    crate::merchant::credit_merchant_balance(&env, &merchant, 3_000000i128).unwrap();
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 3_000000i128).unwrap();
+    });
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     let merchant_before = token_client.balance(&merchant);
-    let vault_before = token_client.balance(&env.current_contract_address());
+    let vault_before = token_client.balance(&contract_id);
 
     // Withdraw exactly the owed balance
     client.withdraw_merchant_funds(&merchant, &3_000000i128);
 
     let merchant_after = token_client.balance(&merchant);
-    let vault_after = token_client.balance(&env.current_contract_address());
+    let vault_after = token_client.balance(&contract_id);
 
     assert_eq!(merchant_after - merchant_before, 3_000000i128);
     assert_eq!(vault_before - vault_after, 3_000000i128);
 
     // Merchant balance should now be zero
     assert_eq!(
-        crate::merchant::get_merchant_balance(&env, &merchant),
+        client.get_merchant_balance(&merchant),
         0i128
     );
 }
@@ -2689,12 +2691,14 @@ fn test_withdraw_merchant_funds_partial_succeeds_and_leaves_remainder() {
 
     let merchant = Address::generate(&env);
 
-    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
     let admin = Address::generate(&env);
     let min_topup = 1_000000i128;
     client.init(&token, &admin, &min_topup);
 
-    crate::merchant::credit_merchant_balance(&env, &merchant, 5_000000i128).unwrap();
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 5_000000i128).unwrap();
+    });
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
     let merchant_before = token_client.balance(&merchant);
@@ -2706,7 +2710,7 @@ fn test_withdraw_merchant_funds_partial_succeeds_and_leaves_remainder() {
 
     // Remaining owed should be 3 USDC
     assert_eq!(
-        crate::merchant::get_merchant_balance(&env, &merchant),
+        client.get_merchant_balance(&merchant),
         3_000000i128
     );
 }
@@ -2721,16 +2725,18 @@ fn test_withdraw_merchant_funds_overdraft_fails_and_does_not_transfer() {
 
     let merchant = Address::generate(&env);
 
-    let token = create_token_and_mint(&env, &env.current_contract_address(), 10_000000i128);
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
     let admin = Address::generate(&env);
     let min_topup = 1_000000i128;
     client.init(&token, &admin, &min_topup);
 
-    crate::merchant::credit_merchant_balance(&env, &merchant, 1_000000i128).unwrap();
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 1_000000i128).unwrap();
+    });
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
     let merchant_before = token_client.balance(&merchant);
-    let vault_before = token_client.balance(&env.current_contract_address());
+    let vault_before = token_client.balance(&contract_id);
 
     // Attempt to withdraw more than owed
     let res = client.try_withdraw_merchant_funds(&merchant, &2_000000i128);
@@ -2738,13 +2744,13 @@ fn test_withdraw_merchant_funds_overdraft_fails_and_does_not_transfer() {
 
     // Ensure no token movement
     let merchant_after = token_client.balance(&merchant);
-    let vault_after = token_client.balance(&env.current_contract_address());
+    let vault_after = token_client.balance(&contract_id);
     assert_eq!(merchant_after, merchant_before);
     assert_eq!(vault_after, vault_before);
 
     // Ensure ledger balance unchanged
     assert_eq!(
-        crate::merchant::get_merchant_balance(&env, &merchant),
+        client.get_merchant_balance(&merchant),
         1_000000i128
     );
 }
@@ -2758,7 +2764,7 @@ fn test_withdraw_invalid_amount() {
     let merchant = Address::generate(&env);
 
     // Init with token just in case validations run far enough
-    let token = create_token_and_mint(&env, &env.current_contract_address(), 1_000000i128);
+    let token = create_token_and_mint(&env, &contract_id, 1_000000i128);
     client.init(&token, &Address::generate(&env), &1_000000i128);
 
     let res_zero = client.try_withdraw_merchant_funds(&merchant, &0i128);
@@ -2855,4 +2861,19 @@ fn test_integration_deposit_charge_withdraw_lifecycle() {
 
     // Subscriber unchanged after charge/withdraw (already paid at deposit)
     assert_eq!(token_client.balance(&subscriber), subscriber_after_charge);
+}
+
+// View Function Tests: list_subscriptions_by_subscriber
+// =============================================================================
+
+#[test]
+fn test_list_subscriptions_zero_subscriptions() {
+    // Test querying a subscriber with no subscriptions
+    let (env, client, _, _) = setup_test_env();
+
+    let subscriber = Address::generate(&env);
+    let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
+
+    assert_eq!(page.subscription_ids.len(), 0);
+    assert!(!page.has_next);
 }
