@@ -12,6 +12,7 @@
 //!   debiting again (idempotent success). Storage stays bounded (one key and one period per sub).
 
 use crate::queries::get_subscription;
+use crate::safe_math::safe_sub_balance;
 use crate::state_machine::validate_status_transition;
 use crate::types::{Error, SubscriptionChargedEvent, SubscriptionStatus};
 use soroban_sdk::{symbol_short, Env, Symbol};
@@ -85,38 +86,38 @@ pub fn charge_one(
         return Err(Error::IntervalNotElapsed);
     }
 
-    if sub.prepaid_balance < sub.amount {
-        validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
-        sub.status = SubscriptionStatus::InsufficientBalance;
-        env.storage().instance().set(&subscription_id, &sub);
-        return Err(Error::InsufficientBalance);
+    match safe_sub_balance(sub.prepaid_balance, sub.amount) {
+        Ok(new_balance) => {
+            sub.prepaid_balance = new_balance;
+            sub.last_payment_timestamp = now;
+            env.storage().instance().set(&subscription_id, &sub);
+
+            // Record charged period and optional idempotency key (bounded storage)
+            env.storage()
+                .instance()
+                .set(&charged_period_key(subscription_id), &period_index);
+            if let Some(k) = idempotency_key {
+                env.storage().instance().set(&idem_key(subscription_id), &k);
+            }
+
+            env.events().publish(
+                (symbol_short!("charged"),),
+                SubscriptionChargedEvent {
+                    subscription_id,
+                    merchant: sub.merchant.clone(),
+                    amount: sub.amount,
+                },
+            );
+
+            Ok(())
+        }
+        Err(_) => {
+            validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
+            sub.status = SubscriptionStatus::InsufficientBalance;
+            env.storage().instance().set(&subscription_id, &sub);
+            Err(Error::InsufficientBalance)
+        }
     }
-
-    sub.prepaid_balance = sub
-        .prepaid_balance
-        .checked_sub(sub.amount)
-        .ok_or(Error::Overflow)?;
-    sub.last_payment_timestamp = now;
-    env.storage().instance().set(&subscription_id, &sub);
-
-    // Record charged period and optional idempotency key (bounded storage)
-    env.storage()
-        .instance()
-        .set(&charged_period_key(subscription_id), &period_index);
-    if let Some(k) = idempotency_key {
-        env.storage().instance().set(&idem_key(subscription_id), &k);
-    }
-
-    env.events().publish(
-        (symbol_short!("charged"),),
-        SubscriptionChargedEvent {
-            subscription_id,
-            merchant: sub.merchant.clone(),
-            amount: sub.amount,
-        },
-    );
-
-    Ok(())
 }
 
 /// Debit a metered `usage_amount` from a subscription's prepaid balance.
