@@ -43,15 +43,15 @@ fn idem_key(subscription_id: u32) -> (Symbol, u32) {
 pub fn charge_one(
     env: &Env,
     subscription_id: u32,
+    now: u64,
     idempotency_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<(), Error> {
     let mut sub = get_subscription(env, subscription_id)?;
 
-    if sub.status != SubscriptionStatus::Active {
+    if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::GracePeriod {
         return Err(Error::NotActive);
     }
 
-    let now = env.ledger().timestamp();
     let period_index = now / sub.interval_seconds;
 
     // Idempotent return: same idempotency key already processed for this subscription
@@ -86,18 +86,23 @@ pub fn charge_one(
         return Err(Error::IntervalNotElapsed);
     }
 
+    let storage = env.storage().instance();
+
     match safe_sub_balance(sub.prepaid_balance, sub.amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
             sub.last_payment_timestamp = now;
-            env.storage().instance().set(&subscription_id, &sub);
+            if sub.status == SubscriptionStatus::GracePeriod {
+                validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
+                sub.status = SubscriptionStatus::Active;
+            }
+
+            storage.set(&subscription_id, &sub);
 
             // Record charged period and optional idempotency key (bounded storage)
-            env.storage()
-                .instance()
-                .set(&charged_period_key(subscription_id), &period_index);
+            storage.set(&charged_period_key(subscription_id), &period_index);
             if let Some(k) = idempotency_key {
-                env.storage().instance().set(&idem_key(subscription_id), &k);
+                storage.set(&idem_key(subscription_id), &k);
             }
 
             env.events().publish(
@@ -112,10 +117,25 @@ pub fn charge_one(
             Ok(())
         }
         Err(_) => {
-            validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
-            sub.status = SubscriptionStatus::InsufficientBalance;
-            env.storage().instance().set(&subscription_id, &sub);
-            Err(Error::InsufficientBalance)
+            // Insufficient balance — check if grace period applies
+            let grace_duration = crate::admin::get_grace_period(env).unwrap_or(0);
+            let grace_expires = next_allowed
+                .checked_add(grace_duration)
+                .ok_or(Error::Overflow)?;
+
+            if grace_duration > 0 && now < grace_expires {
+                if sub.status != SubscriptionStatus::GracePeriod {
+                    validate_status_transition(&sub.status, &SubscriptionStatus::GracePeriod)?;
+                    sub.status = SubscriptionStatus::GracePeriod;
+                    storage.set(&subscription_id, &sub);
+                }
+                Err(Error::InsufficientBalance)
+            } else {
+                validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
+                sub.status = SubscriptionStatus::InsufficientBalance;
+                storage.set(&subscription_id, &sub);
+                Err(Error::InsufficientBalance)
+            }
         }
     }
 }
