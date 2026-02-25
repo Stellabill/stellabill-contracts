@@ -102,6 +102,10 @@ impl SubscriptionVault {
     // ── Subscription lifecycle ───────────────────────────────────────────
 
     /// Create a new subscription. Caller deposits initial USDC; contract stores agreement.
+    ///
+    /// # Arguments
+    /// * `expiration` - Optional Unix timestamp (seconds). If `Some(ts)`, charges are blocked
+    ///                  at or after `ts`. Pass `None` for an open-ended subscription.
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -109,6 +113,7 @@ impl SubscriptionVault {
         amount: i128,
         interval_seconds: u64,
         usage_enabled: bool,
+        _expiration: Option<u64>,
     ) -> Result<u32, Error> {
         subscription::do_create_subscription(
             &env,
