@@ -1619,7 +1619,13 @@ fn test_withdraw_subscriber_funds() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    client.init(&token_contract, &6, &vault_admin, &1000, &(7 * 24 * 60 * 60));
+    client.init(
+        &token_contract,
+        &6,
+        &vault_admin,
+        &1000,
+        &(7 * 24 * 60 * 60),
+    );
 
     // Mint some to the subscriber
     token_admin.mint(&subscriber, &5000);

@@ -283,7 +283,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::InsufficientBalance => true, // Will be retried after funding
-        SubscriptionStatus::GracePeriod => true, // Will be retried after grace period
+        SubscriptionStatus::GracePeriod => true,         // Will be retried after grace period
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
     };
