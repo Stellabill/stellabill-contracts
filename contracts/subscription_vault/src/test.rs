@@ -1326,7 +1326,8 @@ fn test_cancel_subscription_unauthorized() {
 
     client.init(&token, &admin, &1_000_000);
 
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
+    let sub_id =
+        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
 
     let result = client.try_cancel_subscription(&sub_id, &other);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
@@ -1357,7 +1358,8 @@ fn test_withdraw_subscriber_funds() {
     // Mint some to the subscriber
     token_admin.mint(&subscriber, &5000);
 
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
+    let sub_id =
+        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
 
     // Deposit funds to increase prepaid balance
     client.deposit_funds(&sub_id, &subscriber, &5000);
@@ -4421,4 +4423,496 @@ fn test_version_persists_across_admin_rotation() {
     // New admin can still read version
     assert_eq!(client.get_admin(), new_admin);
     assert_eq!(client.get_storage_version(), 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMERGENCY STOP (CIRCUIT BREAKER) TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Test that emergency stop is disabled by default
+#[test]
+fn test_emergency_stop_default_is_disabled() {
+    let (env, client, _, _) = setup_test_env();
+    assert!(!client.get_emergency_stop_status());
+}
+
+/// Test that admin can enable emergency stop
+#[test]
+fn test_enable_emergency_stop_by_admin() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Initially disabled
+    assert!(!client.get_emergency_stop_status());
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Should now be enabled
+    assert!(client.get_emergency_stop_status());
+}
+
+/// Test that admin can disable emergency stop
+#[test]
+fn test_disable_emergency_stop_by_admin() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Enable first
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+
+    // Disable
+    client.disable_emergency_stop(&admin);
+
+    // Should now be disabled
+    assert!(!client.get_emergency_stop_status());
+}
+
+/// Test that non-admin cannot enable emergency stop
+#[test]
+#[should_panic(expected = "Error(Contract, #401)")]
+fn test_enable_emergency_stop_by_non_admin_fails() {
+    let (env, client, _, admin) = setup_test_env();
+    let non_admin = Address::generate(&env);
+
+    client.enable_emergency_stop(&non_admin);
+}
+
+/// Test that non-admin cannot disable emergency stop
+#[test]
+#[should_panic(expected = "Error(Contract, #401)")]
+fn test_disable_emergency_stop_by_non_admin_fails() {
+    let (env, client, _, admin) = setup_test_env();
+    let non_admin = Address::generate(&env);
+
+    // Enable first
+    client.enable_emergency_stop(&admin);
+
+    // Try to disable with non-admin
+    client.disable_emergency_stop(&non_admin);
+}
+
+/// Test that enabling emergency stop when already enabled is idempotent (no-op)
+#[test]
+fn test_enable_emergency_stop_when_already_enabled_is_idempotent() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Enable twice
+    client.enable_emergency_stop(&admin);
+    client.enable_emergency_stop(&admin); // Should not panic
+
+    // Should still be enabled
+    assert!(client.get_emergency_stop_status());
+}
+
+/// Test that disabling emergency stop when already disabled is idempotent (no-op)
+#[test]
+fn test_disable_emergency_stop_when_already_disabled_is_idempotent() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Already disabled by default
+    client.disable_emergency_stop(&admin); // Should not panic
+
+    // Should still be disabled
+    assert!(!client.get_emergency_stop_status());
+}
+
+/// Test that create_subscription fails when emergency stop is active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_create_subscription_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to create subscription - should fail
+    client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+}
+
+/// Test that deposit_funds fails when emergency stop is active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_deposit_funds_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to deposit - should fail
+    client.deposit_funds(&id, &subscriber, &5_000_000i128);
+}
+
+/// Test that charge_subscription fails when emergency stop is active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_charge_subscription_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Add funds first
+    env.as_contract(&client.address, || {
+        let mut sub = env
+            .storage()
+            .instance()
+            .get::<DataKey, Subscription>(&DataKey::Sub(id))
+            .unwrap();
+        sub.prepaid_balance = 100_000_000i128;
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
+    });
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to charge - should fail
+    client.charge_subscription(&id);
+}
+
+/// Test that charge_usage fails when emergency stop is active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_charge_usage_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Create subscription with usage enabled
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &true, // usage_enabled
+        &None,
+    );
+
+    // Add funds
+    env.as_contract(&client.address, || {
+        let mut sub = env
+            .storage()
+            .instance()
+            .get::<DataKey, Subscription>(&DataKey::Sub(id))
+            .unwrap();
+        sub.prepaid_balance = 100_000_000i128;
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
+    });
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to charge usage - should fail
+    client.charge_usage(&id, &1_000_000i128);
+}
+
+/// Test that batch_charge fails when emergency stop is active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_batch_charge_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Add funds
+    env.as_contract(&client.address, || {
+        let mut sub = env
+            .storage()
+            .instance()
+            .get::<DataKey, Subscription>(&DataKey::Sub(id))
+            .unwrap();
+        sub.prepaid_balance = 100_000_000i128;
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
+    });
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try batch charge - should fail
+    let sub_ids = soroban_sdk::Vec::from_array(&env, [id]);
+    client.batch_charge(&sub_ids);
+}
+
+/// Test that get_subscription still works when emergency stop is active (read-only query)
+#[test]
+fn test_get_subscription_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Query should still work
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+/// Test that get_admin still works when emergency stop is active
+#[test]
+fn test_get_admin_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Query should still work
+    assert_eq!(client.get_admin(), admin);
+}
+
+/// Test that get_min_topup still works when emergency stop is active
+#[test]
+fn test_get_min_topup_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Query should still work
+    assert_eq!(client.get_min_topup(), 1_000000i128);
+}
+
+/// Test that get_emergency_stop_status still works when emergency stop is active
+#[test]
+fn test_get_emergency_stop_status_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Query should still work
+    assert!(client.get_emergency_stop_status());
+}
+
+/// Test that withdraw_merchant_funds still works when emergency stop is active
+/// (merchant withdrawals are allowed during emergency stop)
+#[test]
+fn test_withdraw_merchant_funds_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let merchant = Address::generate(&env);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Merchant withdrawal should still work (no error expected as it's a mock)
+    // Note: In real implementation, this would transfer tokens
+    let result = client.try_withdraw_merchant_funds(&merchant, &1_000_000i128);
+    // Should not fail due to emergency stop
+    assert!(result.is_ok() || result.unwrap_err() == Error::Unauthorized);
+}
+
+/// Test that cancel_subscription still works when emergency stop is active
+/// (cancelling reduces financial exposure)
+#[test]
+fn test_cancel_subscription_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Cancel should still work
+    client.cancel_subscription(&id, &subscriber);
+
+    // Verify cancelled
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+/// Test that pause_subscription still works when emergency stop is active
+#[test]
+fn test_pause_subscription_works_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Pause should still work
+    client.pause_subscription(&id, &subscriber);
+
+    // Verify paused
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.status, SubscriptionStatus::Paused);
+}
+
+/// Test full cycle: enable -> disable -> operations work normally
+#[test]
+fn test_emergency_stop_full_cycle() {
+    let (env, client, _, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Step 1: Normal operation - create subscription should work
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(id > 0);
+
+    // Step 2: Enable emergency stop
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+
+    // Step 3: Critical operation should fail
+    let result = client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(result.is_err());
+
+    // Step 4: Disable emergency stop
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // Step 5: Operations should work again
+    let id2 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(id2 > id);
+}
+
+/// Test multiple enable/disable cycles
+#[test]
+fn test_emergency_stop_multiple_cycles() {
+    let (env, client, _, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Cycle 1: Enable -> disable
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // Cycle 2: Enable -> disable
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // Cycle 3: Enable -> disable
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // After all cycles, operations should work
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(id > 0);
+}
+
+/// Test interaction with paused subscription - charging fails when emergency stop active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_charge_paused_subscription_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Pause the subscription first
+    client.pause_subscription(&id, &subscriber);
+
+    // Add funds
+    env.as_contract(&client.address, || {
+        let mut sub = env
+            .storage()
+            .instance()
+            .get::<DataKey, Subscription>(&DataKey::Sub(id))
+            .unwrap();
+        sub.prepaid_balance = 100_000_000i128;
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
+    });
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to charge - should fail (even though it's paused, emergency stop takes precedence)
+    client.charge_subscription(&id);
+}
+
+/// Test interaction with cancelled subscription - charging fails when emergency stop active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_charge_cancelled_subscription_fails_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Cancel the subscription first
+    client.cancel_subscription(&id, &subscriber);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to charge - should fail
+    client.charge_subscription(&id);
+}
+
+/// Test that deposit fails even for subscription in any status when emergency stop active
+#[test]
+#[should_panic(expected = "Error(Contract, #1009)")]
+fn test_deposit_fails_for_any_status_when_emergency_stop_active() {
+    let (env, client, _, admin) = setup_test_env();
+    let (id, subscriber, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Pause first
+    client.pause_subscription(&id, &subscriber);
+
+    // Enable emergency stop
+    client.enable_emergency_stop(&admin);
+
+    // Try to deposit - should fail
+    client.deposit_funds(&id, &subscriber, &5_000_000i128);
+}
+
+/// Test that create_subscription fails even after multiple enable/disable cycles
+#[test]
+fn test_create_subscription_fails_during_emergency_stop_after_cycles() {
+    let (env, client, _, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Multiple cycles
+    for _ in 0..5 {
+        client.enable_emergency_stop(&admin);
+        client.disable_emergency_stop(&admin);
+    }
+
+    // Enable one more time
+    client.enable_emergency_stop(&admin);
+
+    // Should still fail
+    let result = client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(result.is_err());
 }

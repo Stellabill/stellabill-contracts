@@ -36,6 +36,8 @@ pub enum DataKey {
     ChargedPeriod(u32),
     /// Idempotency key stored per subscription. Discriminant 8.
     IdemKey(u32),
+    /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
+    EmergencyStop,
 }
 
 #[contracterror]
@@ -75,6 +77,12 @@ pub enum Error {
     Replay = 1007,
     /// Recovery amount is zero or negative.
     InvalidRecoveryAmount = 1008,
+    /// Charge interval has not elapsed yet.
+    IntervalNotElapsed = 1001,
+    /// Subscription is not in the Active state.
+    NotActive = 1002,
+    /// Emergency stop is active - critical operations are blocked.
+    EmergencyStopActive = 1009,
 }
 
 impl Error {
@@ -94,6 +102,7 @@ impl Error {
             Error::InvalidAmount => 1006,
             Error::Replay => 1007,
             Error::InvalidRecoveryAmount => 1008,
+            Error::EmergencyStopActive => 1009,
         }
     }
 }
@@ -224,6 +233,26 @@ pub struct SubscriptionResumedEvent {
 pub struct MerchantWithdrawalEvent {
     pub merchant: Address,
     pub amount: i128,
+}
+
+/// Event emitted when emergency stop is enabled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyStopEnabledEvent {
+    /// The admin who enabled the emergency stop.
+    pub admin: Address,
+    /// Timestamp when emergency stop was enabled.
+    pub timestamp: u64,
+}
+
+/// Event emitted when emergency stop is disabled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyStopDisabledEvent {
+    /// The admin who disabled the emergency stop.
+    pub admin: Address,
+    /// Timestamp when emergency stop was disabled.
+    pub timestamp: u64,
 }
 
 /// Emitted when a merchant-initiated one-off charge is applied to a subscription.
