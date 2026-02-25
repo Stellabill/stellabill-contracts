@@ -1775,7 +1775,7 @@ fn test_cancel_subscription_unauthorized() {
 
     client.init(&token, &7, &admin, &1_000_000, &43200);
 
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
 
     let result = client.try_cancel_subscription(&sub_id, &other);
     assert_eq!(result, Err(Ok(Error::Forbidden)));
@@ -1806,7 +1806,7 @@ fn test_withdraw_subscriber_funds() {
     // Mint some to the subscriber
     token_admin.mint(&subscriber, &5000);
 
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<u64>);
 
     // Deposit funds to increase prepaid balance
     client.deposit_funds(&sub_id, &subscriber, &5000);

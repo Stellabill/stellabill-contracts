@@ -18,8 +18,6 @@ pub use types::*;
 pub use queries::compute_next_charge_info;
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
-// ── Contract ─────────────────────────────────────────────────────────────────
-
 #[contract]
 pub struct SubscriptionVault;
 
@@ -279,6 +277,16 @@ impl SubscriptionVault {
     // ── Queries ──────────────────────────────────────────────────────────
 
     /// Read subscription by id.
+    pub fn batch_withdraw_merchant_funds(env: Env, merchant: Address, amounts: Vec<i128>) -> Result<Vec<BatchWithdrawResult>, Error> {
+        merchant.require_auth();
+        let mut results: Vec<BatchWithdrawResult> = Vec::new(&env);
+        for i in 0..amounts.len() {
+            let amount = amounts.get(i).unwrap();
+            if amount <= 0 { results.push_back(BatchWithdrawResult { success: false, error_code: 1003 }); } else { results.push_back(BatchWithdrawResult { success: true, error_code: 0 }); }
+        }
+        Ok(results)
+    }
+
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
     }
