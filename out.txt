@@ -1,0 +1,272 @@
+    Checking subscription_vault v0.1.0 (C:\Users\nwaug\Desktop\Blockchain\DripsWave\stellabill-contracts\contracts\subscription_vault)
+error[E0599]: no variant or associated item named `Replay` found for enum `types::Error` in the current scope
+  --> contracts\subscription_vault\src\charge_core.rs:76:31
+   |
+76 |             return Err(Error::Replay);
+   |                               ^^^^^^ variant or associated item not found in `types::Error`
+   |
+  ::: contracts\subscription_vault\src\types.rs:19:1
+   |
+19 | pub enum Error {
+   | -------------- variant or associated item `Replay` not found for this enum
+
+error[E0599]: no variant or associated item named `Replay` found for enum `types::Error` in the current scope
+  --> contracts\subscription_vault\src\types.rs:60:20
+   |
+19 | pub enum Error {
+   | -------------- variant or associated item `Replay` not found for this enum
+...
+60 |             Error::Replay => 1007,
+   |                    ^^^^^^ variant or associated item not found in `types::Error`
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\lib.rs:168:9
+    |
+168 |         charge_core::charge_one(&env, subscription_id, None)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^                        ---- argument #3 of type `u64` is missing
+    |
+note: function defined here
+   --> contracts\subscription_vault\src\charge_core.rs:42:8
+    |
+ 42 | pub fn charge_one(
+    |        ^^^^^^^^^^
+...
+ 45 |     now: u64,
+    |     --------
+help: provide the argument
+    |
+168 |         charge_core::charge_one(&env, subscription_id, /* u64 */, None)
+    |                                                        ++++++++++
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:204:12
+    |
+204 |     client.init(&token, &admin, &min_topup);
+    |            ^^^^----------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+204 -     client.init(&token, &admin, &min_topup);
+204 +     client.init(&token, /* &u32 */, &admin, &min_topup, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:603:12
+    |
+603 |     client.init(&token, &admin, &min_topup);
+    |            ^^^^----------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+603 -     client.init(&token, &admin, &min_topup);
+603 +     client.init(&token, /* &u32 */, &admin, &min_topup, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:622:12
+    |
+622 |     client.init(&token, &admin, &min_topup);
+    |            ^^^^----------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+622 -     client.init(&token, &admin, &min_topup);
+622 +     client.init(&token, /* &u32 */, &admin, &min_topup, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:648:12
+    |
+648 |     client.init(&token, &admin, &min_topup);
+    |            ^^^^----------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+648 -     client.init(&token, &admin, &min_topup);
+648 +     client.init(&token, /* &u32 */, &admin, &min_topup, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:673:12
+    |
+673 |     client.init(&token, &admin, &initial_min);
+    |            ^^^^------------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+673 -     client.init(&token, &admin, &initial_min);
+673 +     client.init(&token, /* &u32 */, &admin, &initial_min, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:692:12
+    |
+692 |     client.init(&token, &admin, &1_000000i128);
+    |            ^^^^-------------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+692 -     client.init(&token, &admin, &1_000000i128);
+692 +     client.init(&token, /* &u32 */, &admin, &1_000000i128, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:724:12
+    |
+724 |     client.init(&token, &admin, &1_000000i128);
+    |            ^^^^-------------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+724 -     client.init(&token, &admin, &1_000000i128);
+724 +     client.init(&token, /* &u32 */, &admin, &1_000000i128, /* &u64 */);
+    |
+
+error[E0061]: this method takes 5 arguments but 3 arguments were supplied
+   --> contracts\subscription_vault\src\test.rs:833:12
+    |
+833 |     client.init(&token, &admin, &min_topup);
+    |            ^^^^----------------------------
+    |                |        |
+    |                |        argument #2 of type `&u32` is missing
+    |                argument #5 of type `&u64` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:29:12
+    |
+ 29 |     pub fn init(
+    |            ^^^^
+...
+ 32 |         token_decimals: u32,
+    |         -------------------
+...
+ 35 |         grace_period: u64,
+    |         -----------------
+help: provide the arguments
+    |
+833 -     client.init(&token, &admin, &min_topup);
+833 +     client.init(&token, /* &u32 */, &admin, &min_topup, /* &u64 */);
+    |
+
+error[E0004]: non-exhaustive patterns: `types::SubscriptionStatus::GracePeriod` not covered
+   --> contracts\subscription_vault\src\queries.rs:98:36
+    |
+ 98 |     let is_charge_expected = match subscription.status {
+    |                                    ^^^^^^^^^^^^^^^^^^^ pattern `types::SubscriptionStatus::GracePeriod` not covered
+    |
+note: `types::SubscriptionStatus` defined here
+   --> contracts\subscription_vault\src\types.rs:99:10
+    |
+ 99 | pub enum SubscriptionStatus {
+    |          ^^^^^^^^^^^^^^^^^^
+...
+109 |     GracePeriod = 4,
+    |     ----------- not covered
+    = note: the matched value is of type `types::SubscriptionStatus`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+102 ~         SubscriptionStatus::Cancelled => false,
+103 ~         types::SubscriptionStatus::GracePeriod => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0061, E0599.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `subscription_vault` (lib test) due to 12 previous errors
