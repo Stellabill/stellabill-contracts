@@ -310,3 +310,10 @@ pub struct NextChargeInfo {
     /// Whether a charge is actually expected based on the subscription status.
     pub is_charge_expected: bool,
 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BatchWithdrawResult {
+    pub success: bool,
+    pub error_code: u32,
+}
