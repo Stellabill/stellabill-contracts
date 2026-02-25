@@ -4,9 +4,10 @@ use crate::{
     Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
 use soroban_sdk::xdr::{FromXdr, ToXdr};
+use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
 extern crate std;
+use std::string::String;
 
 /// Baseline creation timestamp used by test helpers.
 const T0: u64 = 1_000;
