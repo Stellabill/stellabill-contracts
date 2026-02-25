@@ -162,7 +162,7 @@ pub fn list_subscriptions_by_subscriber(
     limit: u32,
 ) -> Result<SubscriptionsPage, Error> {
     if limit == 0 {
-        return Err(Error::NotFound);
+        return Err(Error::InvalidInput);
     }
 
     // Get the next_id counter to determine the range of valid subscription IDs

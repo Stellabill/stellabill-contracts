@@ -224,6 +224,25 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address)
     (env, client, token, admin)
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #1301)")]
+fn test_init_already_initialized() {
+    let (_env, client, token, admin) = setup_test_env();
+    // Second call to init should fail
+    client.init(&token, &7, &admin, &1_000_000, &43200);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1302)")]
+fn test_not_initialized() {
+    let env = Env::default();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    // Calling any admin function before init should fail
+    client.get_admin();
+}
+
 fn create_test_subscription(
     env: &Env,
     client: &SubscriptionVaultClient,
@@ -1742,7 +1761,70 @@ fn test_recover_stranded_funds_successful() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #401)")]
+fn test_cancel_subscription_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let token = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.init(&token, &7, &admin, &1_000_000, &43200);
+
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+
+    let result = client.try_cancel_subscription(&sub_id, &other);
+    assert_eq!(result, Err(Ok(Error::Forbidden)));
+}
+
+#[test]
+fn test_withdraw_subscriber_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Setup mock token
+    let admin = Address::generate(&env);
+    let token_contract = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::Client::new(&env, &token_contract);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_contract);
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let vault_admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.init(&token_contract, &7, &vault_admin, &1000, &43200);
+
+    // Mint some to the subscriber
+    token_admin.mint(&subscriber, &5000);
+
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true);
+
+    // Deposit funds to increase prepaid balance
+    client.deposit_funds(&sub_id, &subscriber, &5000);
+
+    // Cancel subscription
+    client.cancel_subscription(&sub_id, &subscriber);
+
+    // Withdraw funds
+    client.withdraw_subscriber_funds(&sub_id, &subscriber);
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.prepaid_balance, 0);
+    assert_eq!(token.balance(&subscriber), 5000); // 5000 minted - 5000 deposited + 5000 withdrawn
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #403)")]
 fn test_recover_stranded_funds_unauthorized_caller() {
     let (env, client, _, _) = setup_test_env();
 
@@ -1756,7 +1838,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1008)")]
+#[should_panic(expected = "Error(Contract, #406)")]
 fn test_recover_stranded_funds_zero_amount() {
     let (_, client, _, admin) = setup_test_env();
 
@@ -1769,7 +1851,7 @@ fn test_recover_stranded_funds_zero_amount() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1008)")]
+#[should_panic(expected = "Error(Contract, #406)")]
 fn test_recover_stranded_funds_negative_amount() {
     let (_, client, _, admin) = setup_test_env();
 
@@ -3517,7 +3599,7 @@ fn test_rotate_admin_successful() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #401)")]
+#[should_panic(expected = "Error(Contract, #403)")]
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_test_env();
 

@@ -260,11 +260,11 @@ impl SubscriptionVault {
     ///
     /// | Variant | Reason |
     /// |---------|--------|
-    /// | `NotFound` | Subscription ID does not exist. |
-    /// | `NotActive` | Subscription is not `Active`. |
-    /// | `UsageNotEnabled` | `usage_enabled` is `false`. |
+    /// | `NotFound` | Subscription ID does not exist in storage. |
+    /// | `NotActive` | Subscription is not in the `Active` state. |
+    /// | `UsageNotEnabled` | `usage_enabled` is flag is set to `false`. |
     /// | `InvalidAmount` | `usage_amount` is zero or negative. |
-    /// | `InsufficientPrepaidBalance` | Prepaid balance cannot cover the debit. |
+    /// | `InsufficientPrepaidBalance` | Prepaid balance in the vault cannot cover the debit. |
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
