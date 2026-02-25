@@ -28,8 +28,15 @@ impl SubscriptionVault {
     // ── Admin / Config ───────────────────────────────────────────────────
 
     /// Initialize the contract: set token address, admin, and minimum top-up.
-    pub fn init(env: Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
-        admin::do_init(&env, token, admin, min_topup)
+    pub fn init(
+        env: Env,
+        token: Address,
+        token_decimals: u32,
+        admin: Address,
+        min_topup: i128,
+        grace_period: u64,
+    ) -> Result<(), Error> {
+        admin::do_init(&env, token, token_decimals, admin, min_topup, grace_period)
     }
 
     /// Update the minimum top-up threshold. Only callable by admin.
@@ -82,6 +89,14 @@ impl SubscriptionVault {
         subscription_ids: Vec<u32>,
     ) -> Result<Vec<BatchChargeResult>, Error> {
         admin::do_batch_charge(&env, &subscription_ids)
+    }
+
+    pub fn set_grace_period(env: Env, admin: Address, grace_period: u64) -> Result<(), Error> {
+        admin::do_set_grace_period(&env, admin, grace_period)
+    }
+
+    pub fn get_grace_period(env: Env) -> Result<u64, Error> {
+        admin::get_grace_period(&env)
     }
 
     // ── Subscription lifecycle ───────────────────────────────────────────
@@ -237,11 +252,64 @@ impl SubscriptionVault {
 
     // ── Charging ─────────────────────────────────────────────────────────
 
-    /// Billing engine calls this to charge one interval.
+    /// Charge a subscription for one billing interval.
     ///
-    /// Enforces strict interval timing and replay protection.
+    /// This function attempts to charge the subscriber's prepaid balance for the
+    /// recurring subscription fee. It enforces:
+    /// - The subscription must be in `Active` status
+    /// - The billing interval must have elapsed since the last charge
+    /// - The prepaid balance must be sufficient to cover the charge amount
+    ///
+    /// # Preconditions
+    ///
+    /// - The subscription must exist and be in `Active` status
+    /// - `last_payment_timestamp + interval_seconds` must be <= current ledger timestamp
+    /// - `prepaid_balance >= amount` (the subscription's recurring charge amount)
+    ///
+    /// # Behavior
+    ///
+    /// On success:
+    /// - `prepaid_balance` is reduced by `amount`
+    /// - `last_payment_timestamp` is updated to current timestamp
+    /// - A `SubscriptionChargedEvent` is emitted
+    /// - The subscription remains `Active`
+    ///
+    /// On failure (insufficient balance):
+    /// - No changes are made to the subscription's prepaid balance
+    /// - Status transitions to `InsufficientBalance`
+    /// - An `Error::InsufficientBalance` error is returned
+    ///
+    /// # Error Cases
+    ///
+    /// | Error | Condition |
+    /// |-------|-----------|
+    /// | `NotFound` | Subscription ID does not exist |
+    /// | `NotActive` | Subscription is not in `Active` status (Paused, Cancelled, or InsufficientBalance) |
+    /// | `IntervalNotElapsed` | Not enough time has passed since last charge |
+    /// | `Replay` | This billing period has already been charged |
+    /// | `InsufficientBalance` | `prepaid_balance < amount` |
+    ///
+    /// # Non-Destructive Failure Guarantee
+    ///
+    /// When a charge fails due to insufficient balance:
+    /// - The subscriber's prepaid balance is NOT deducted
+    /// - No tokens are transferred to the merchant
+    /// - The subscription metadata remains unchanged (except status)
+    /// - The failure is atomic - no partial state updates occur
+    ///
+    /// # Recovery
+    ///
+    /// If the charge fails due to insufficient balance:
+    /// 1. Subscriber calls `deposit_funds` to add more funds
+    /// 2. Subscriber calls `resume_subscription` to transition back to `Active`
+    /// 3. The next charge attempt will succeed (if balance is sufficient)
+    ///
+    /// # Gas Efficiency
+    ///
+    /// The function uses early validation to avoid unnecessary state modifications.
+    /// Balance check is performed before any state changes.
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
-        charge_core::charge_one(&env, subscription_id, None)
+        charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
     }
 
     /// Charge a metered usage amount against the subscription's prepaid balance.
@@ -321,6 +389,16 @@ impl SubscriptionVault {
         queries::get_merchant_subscription_count(&env, merchant)
     }
 
+    /// Merchant-initiated one-off charge.
+    pub fn charge_one_off(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
+    }
+
     /// List all subscription IDs for a given subscriber with pagination support.
     ///
     /// This read-only function retrieves subscription IDs owned by a subscriber in a paginated manner.
@@ -359,13 +437,6 @@ impl SubscriptionVault {
         limit: u32,
     ) -> Result<crate::queries::SubscriptionsPage, Error> {
         crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
-    }
-
-    fn _next_id(env: &Env) -> u32 {
-        let key = soroban_sdk::Symbol::new(env, "next_id");
-        let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-        env.storage().instance().set(&key, &(id + 1));
-        id
     }
 }
 

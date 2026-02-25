@@ -2,8 +2,6 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-#![allow(dead_code)]
-
 use crate::types::{DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
@@ -100,6 +98,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::GracePeriod => true,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
     };
