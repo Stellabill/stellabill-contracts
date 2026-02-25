@@ -2492,6 +2492,9 @@ fn test_batch_charge_requires_admin_auth() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     client.init(&token, &7, &admin, &1_000000i128, &43200);
 
     let subscriber = Address::generate(&env);
@@ -4144,7 +4147,7 @@ fn setup_property_env(
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
     // min_topup = 1 so deposit tests are not blocked by the minimum constraint
-    client.init(&token_addr, &admin, &1i128);
+    client.init(&token_addr, &7, &admin, &1i128, &0);
 
     // Allocate a subscription ID via the normal path, then overwrite with
     // the desired state so arbitrary parameter combinations can be tested.
