@@ -45,6 +45,8 @@ A single Soroban contract that implements a **prepaid subscription vault** for r
 - **`SubscriptionStatus`** — `Active`, `Paused`, `Cancelled`, `InsufficientBalance`.
 - **`Error`** — `NotFound`, `Unauthorized`.
 
+**Documentation:** [Subscription lifecycle and state machine](docs/subscription_lifecycle.md) — states, transitions, on-chain representation, and invariants.
+
 The contract is in early development; several functions still have `TODO` placeholders (e.g. token transfers, admin checks, full charge/withdraw logic). See the source in `contracts/subscription_vault/src/lib.rs` for details.
 
 ---
@@ -171,6 +173,13 @@ stellabill-contracts/
 ├── Cargo.lock                 # Locked dependencies (reproducible builds)
 ├── README.md                  # This file
 ├── .gitignore
+├── docs/                      # Contract documentation
+│   ├── subscription_lifecycle.md   # Subscription lifecycle, state machine, on-chain representation
+│   ├── subscription_state_machine.md
+│   ├── batch_charge.md
+│   ├── billing_intervals.md
+│   ├── topup_estimation.md
+│   └── safe_math.md
 └── contracts/
     └── subscription_vault/    # Prepaid subscription vault contract
         ├── Cargo.toml
