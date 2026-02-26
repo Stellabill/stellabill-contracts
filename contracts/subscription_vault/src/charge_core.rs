@@ -11,6 +11,8 @@
 //! - **Period-based key**: We record the last charged billing period index per subscription.
 //!   A charge for the same period is rejected with [`Error::Replay`].
 //! - **Optional idempotency key**: If the caller supplies an idempotency key (e.g. for retries),
+
+#![allow(dead_code)]
 //!   we store one key per subscription. A second call with the same key returns `Ok(())` without
 //!   debiting again (idempotent success). Storage stays bounded (one key and one period per sub).
 

@@ -266,6 +266,87 @@ impl SubscriptionVault {
         )
     }
 
+    /// Creates a plan template that can be used to instantiate subscriptions.
+    ///
+    /// Plan templates allow merchants to define reusable subscription offerings
+    /// with predefined parameters. This ensures consistency and reduces the need
+    /// for repeated parameter input when creating similar subscriptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` - The merchant address that owns this plan template
+    /// * `amount` - The recurring charge amount per interval
+    /// * `interval_seconds` - The billing interval in seconds
+    /// * `usage_enabled` - Whether usage-based charging is enabled
+    ///
+    /// # Returns
+    ///
+    /// The unique plan template ID that can be used to create subscriptions
+    ///
+    /// # Example Use Cases
+    ///
+    /// - "Basic Plan": $9.99/month with standard features
+    /// - "Premium Plan": $29.99/month with advanced features
+    /// - "Enterprise Plan": Custom pricing with usage-based billing
+    pub fn create_plan_template(
+        env: Env,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+    ) -> Result<u32, Error> {
+        subscription::do_create_plan_template(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            usage_enabled,
+        )
+    }
+
+    /// Creates a subscription from a predefined plan template.
+    ///
+    /// This function instantiates a new subscription using the parameters defined
+    /// in a plan template. The subscriber only needs to provide their address and
+    /// the template ID, while all other parameters (amount, interval, usage settings)
+    /// are inherited from the template.
+    ///
+    /// # Arguments
+    ///
+    /// * `subscriber` - The subscriber address for the new subscription
+    /// * `plan_template_id` - The ID of the plan template to use
+    ///
+    /// # Returns
+    ///
+    /// The unique subscription ID for the newly created subscription
+    ///
+    /// # Benefits
+    ///
+    /// - Reduces parameter input errors
+    /// - Ensures consistency across subscriptions using the same plan
+    /// - Simplifies the subscription creation process for end users
+    /// - Allows merchants to update plan offerings centrally
+    pub fn create_subscription_from_plan(
+        env: Env,
+        subscriber: Address,
+        plan_template_id: u32,
+    ) -> Result<u32, Error> {
+        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
+    }
+
+    /// Retrieves a plan template by its ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `plan_template_id` - The ID of the plan template to retrieve
+    ///
+    /// # Returns
+    ///
+    /// The plan template details
+    pub fn get_plan_template(env: Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
+        subscription::get_plan_template(&env, plan_template_id)
+    }
+
     /// Subscriber deposits more USDC into their prepaid vault.
     ///
     /// Rejects deposits below the configured minimum threshold.

@@ -2,6 +2,8 @@
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
+#![allow(dead_code)]
+
 use crate::charge_core::charge_one;
 use crate::types::{BatchChargeResult, Error, RecoveryEvent, RecoveryReason};
 use soroban_sdk::{Address, Env, Symbol, Vec};
