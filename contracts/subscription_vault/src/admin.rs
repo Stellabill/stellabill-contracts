@@ -85,6 +85,13 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
         .unwrap_or(0))
 }
 
+pub fn get_token(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "token"))
+        .ok_or(Error::NotFound)
+}
+
 pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,

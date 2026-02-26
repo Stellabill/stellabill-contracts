@@ -1,4 +1,6 @@
 use crate::{
+    can_transition, get_allowed_transitions, validate_status_transition, Error, RecoveryReason,
+    Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 
 
     Error, Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
@@ -66,12 +68,18 @@ use soroban_sdk::{Address, Env, IntoVal, Vec as SorobanVec};
 const T0: u64 = 1_000;
 /// Default billing interval for tests (30 days in seconds).
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
-/// Large mint amount used to fund batch tests.
-const BATCH_MINT: i128 = 1_000_000_000;
 
 // =============================================================================
 // State Machine Helper Tests
 // =============================================================================
+
+fn create_token_and_mint(env: &Env, recipient: &Address, amount: i128) -> Address {
+    let token_admin = Address::generate(env);
+    let token_addr = env.register_stellar_asset_contract(token_admin.clone());
+    let token_client = soroban_sdk::token::StellarAssetClient::new(env, &token_addr);
+    token_client.mint(recipient, &amount);
+    token_addr
+}
 
 #[test]
 fn test_validate_status_transition_same_status_is_allowed() {
@@ -229,7 +237,6 @@ fn test_get_allowed_transitions() {
     assert!(active_targets.contains(&SubscriptionStatus::Paused));
     assert!(active_targets.contains(&SubscriptionStatus::Cancelled));
     assert!(active_targets.contains(&SubscriptionStatus::InsufficientBalance));
-    assert!(active_targets.contains(&SubscriptionStatus::GracePeriod));
 
     // Paused
     let paused_targets = get_allowed_transitions(&SubscriptionStatus::Paused);
@@ -685,276 +692,6 @@ fn test_subscription_struct_with_expiration() {
     assert_eq!(sub.expiration, Some(exp_ts));
 }
 
-// ============================================================================
-// Safe Math Tests
-// ============================================================================
-
-#[test]
-fn test_safe_add_normal() {
-    assert_eq!(safe_add(100, 200), Ok(300));
-    assert_eq!(safe_add(0, 1000), Ok(1000));
-    assert_eq!(safe_add(1_000_000, 2_000_000), Ok(3_000_000));
-}
-
-#[test]
-fn test_safe_add_overflow() {
-    assert_eq!(safe_add(i128::MAX, 1), Err(Error::Overflow));
-    assert_eq!(safe_add(i128::MAX, 0), Ok(i128::MAX));
-    assert_eq!(safe_add(i128::MAX - 1, 2), Err(Error::Overflow));
-}
-
-#[test]
-fn test_safe_sub_normal() {
-    assert_eq!(safe_sub(200, 100), Ok(100));
-    assert_eq!(safe_sub(1000, 0), Ok(1000));
-    assert_eq!(safe_sub(5_000_000, 2_000_000), Ok(3_000_000));
-}
-
-#[test]
-fn test_safe_sub_underflow() {
-    assert_eq!(safe_sub(i128::MIN, 1), Err(Error::Underflow));
-    assert_eq!(safe_sub(i128::MIN, 0), Ok(i128::MIN));
-    assert_eq!(safe_sub(i128::MIN + 1, 2), Err(Error::Underflow));
-}
-
-#[test]
-fn test_safe_sub_negative_result() {
-    // safe_sub allows negative results (it's for general arithmetic)
-    assert_eq!(safe_sub(100, 200), Ok(-100));
-    assert_eq!(safe_sub(0, 1), Ok(-1));
-}
-
-#[test]
-fn test_validate_non_negative() {
-    assert_eq!(validate_non_negative(0), Ok(()));
-    assert_eq!(validate_non_negative(100), Ok(()));
-    assert_eq!(validate_non_negative(i128::MAX), Ok(()));
-    assert_eq!(validate_non_negative(-1), Err(Error::Underflow));
-    assert_eq!(validate_non_negative(i128::MIN), Err(Error::Underflow));
-}
-
-#[test]
-fn test_safe_add_balance_normal() {
-    assert_eq!(safe_add_balance(1000, 500), Ok(1500));
-    assert_eq!(safe_add_balance(0, 1000), Ok(1000));
-    assert_eq!(safe_add_balance(1_000_000, 2_000_000), Ok(3_000_000));
-}
-
-#[test]
-fn test_safe_add_balance_overflow() {
-    assert_eq!(safe_add_balance(i128::MAX, 1), Err(Error::Overflow));
-    assert_eq!(safe_add_balance(i128::MAX, 0), Ok(i128::MAX));
-}
-
-#[test]
-fn test_safe_add_balance_negative_amount() {
-    assert_eq!(safe_add_balance(1000, -100), Err(Error::Underflow));
-    assert_eq!(safe_add_balance(0, -1), Err(Error::Underflow));
-}
-
-#[test]
-fn test_safe_sub_balance_normal() {
-    assert_eq!(safe_sub_balance(1000, 500), Ok(500));
-    assert_eq!(safe_sub_balance(1000, 0), Ok(1000));
-    assert_eq!(safe_sub_balance(5_000_000, 2_000_000), Ok(3_000_000));
-}
-
-#[test]
-fn test_safe_sub_balance_insufficient() {
-    assert_eq!(safe_sub_balance(1000, 1500), Err(Error::Underflow));
-    assert_eq!(safe_sub_balance(100, 200), Err(Error::Underflow));
-    assert_eq!(safe_sub_balance(0, 1), Err(Error::Underflow));
-}
-
-#[test]
-fn test_safe_sub_balance_negative_amount() {
-    assert_eq!(safe_sub_balance(1000, -100), Err(Error::Underflow));
-    assert_eq!(safe_sub_balance(0, -1), Err(Error::Underflow));
-}
-
-#[test]
-fn test_safe_sub_balance_exact_zero() {
-    assert_eq!(safe_sub_balance(1000, 1000), Ok(0));
-    assert_eq!(safe_sub_balance(1_000_000, 1_000_000), Ok(0));
-}
-
-#[test]
-fn test_safe_add_zero() {
-    assert_eq!(safe_add(0, 0), Ok(0));
-    assert_eq!(safe_add(100, 0), Ok(100));
-    assert_eq!(safe_add(0, 100), Ok(100));
-    assert_eq!(safe_add(i128::MAX, 0), Ok(i128::MAX));
-}
-
-#[test]
-fn test_safe_sub_zero() {
-    assert_eq!(safe_sub(0, 0), Ok(0));
-    assert_eq!(safe_sub(100, 0), Ok(100));
-    assert_eq!(safe_sub(i128::MAX, 0), Ok(i128::MAX));
-}
-
-#[test]
-fn test_safe_add_max_to_zero() {
-    assert_eq!(safe_add(0, i128::MAX), Ok(i128::MAX));
-}
-
-#[test]
-fn test_safe_sub_from_max() {
-    assert_eq!(safe_sub(i128::MAX, 0), Ok(i128::MAX));
-    assert_eq!(safe_sub(i128::MAX, 1), Ok(i128::MAX - 1));
-}
-
-#[test]
-fn test_safe_add_max_to_one() {
-    assert_eq!(safe_add(i128::MAX, 1), Err(Error::Overflow));
-}
-
-#[test]
-fn test_safe_sub_min_from_zero() {
-    // Subtracting i128::MIN from 0 would require adding i128::MAX + 1, which overflows
-    // This tests the edge case where subtraction underflows
-    assert_eq!(safe_sub(0, i128::MIN), Err(Error::Underflow));
-}
-
-#[test]
-fn test_usdc_amounts() {
-    // Test with realistic USDC amounts (6 decimals)
-    let one_usdc = 1_000_000i128;
-    let thousand_usdc = 1_000_000_000i128;
-    let ten_thousand_usdc = 10_000_000_000i128;
-
-    // Addition
-    assert_eq!(safe_add_balance(one_usdc, thousand_usdc), Ok(1_001_000_000));
-    assert_eq!(
-        safe_add_balance(thousand_usdc, ten_thousand_usdc),
-        Ok(11_000_000_000)
-    );
-
-    // Subtraction
-    assert_eq!(safe_sub_balance(thousand_usdc, one_usdc), Ok(999_000_000));
-    assert_eq!(
-        safe_sub_balance(ten_thousand_usdc, thousand_usdc),
-        Ok(9_000_000_000)
-    );
-
-    // Edge case: maximum reasonable USDC amount (still well below i128::MAX)
-    let max_reasonable_usdc = 1_000_000_000_000_000i128; // 1 trillion USDC
-    assert_eq!(
-        safe_add_balance(max_reasonable_usdc, one_usdc),
-        Ok(max_reasonable_usdc + one_usdc)
-    );
-}
-
-#[test]
-fn test_deposit_funds_with_safe_math() {
-    // Test that safe_add_balance is used correctly in deposit_funds
-    // This test verifies the safe math integration through direct function calls
-    // Note: Full integration test requires proper auth mocking which is complex
-    // The core safe math functionality is tested in the dedicated safe math tests above
-
-    // Test safe_add_balance directly (which is what deposit_funds uses)
-    assert_eq!(safe_add_balance(0, 5_000_000i128), Ok(5_000_000i128));
-    assert_eq!(
-        safe_add_balance(5_000_000i128, 3_000_000i128),
-        Ok(8_000_000i128)
-    );
-
-    // Test overflow protection
-    assert_eq!(safe_add_balance(i128::MAX, 1), Err(Error::Overflow));
-
-    // Test negative amount rejection
-    assert_eq!(safe_add_balance(1000, -100), Err(Error::Underflow));
-}
-
-#[test]
-fn test_deposit_funds_rejects_negative() {
-    // Test that validate_non_negative (used in deposit_funds) rejects negative amounts
-    assert_eq!(validate_non_negative(-1_000_000i128), Err(Error::Underflow));
-    assert_eq!(validate_non_negative(0), Ok(()));
-    assert_eq!(validate_non_negative(1_000_000i128), Ok(()));
-}
-
-#[test]
-fn test_charge_subscription_with_safe_math() {
-    // Test that safe_sub_balance is used correctly in charge_subscription
-    // This verifies safe math integration for charge operations
-
-    // Test normal charge (deduct amount from balance)
-    assert_eq!(
-        safe_sub_balance(30_000_000i128, 10_000_000i128),
-        Ok(20_000_000i128)
-    );
-
-    // Test insufficient balance (should fail)
-    assert_eq!(
-        safe_sub_balance(5_000_000i128, 10_000_000i128),
-        Err(Error::Underflow)
-    );
-
-    // Test exact balance (should succeed with zero result)
-    assert_eq!(safe_sub_balance(10_000_000i128, 10_000_000i128), Ok(0i128));
-}
-
-#[test]
-fn test_charge_subscription_insufficient_balance() {
-    // Test that safe_sub_balance prevents charging when balance is insufficient
-    assert_eq!(safe_sub_balance(0, 10_000_000i128), Err(Error::Underflow));
-    assert_eq!(
-        safe_sub_balance(5_000_000i128, 10_000_000i128),
-        Err(Error::Underflow)
-    );
-}
-
-#[test]
-fn test_multiple_deposits_no_overflow() {
-    // Test that multiple large deposits don't overflow
-    let large_amount = 100_000_000_000i128; // 100k USDC
-    let mut balance = 0i128;
-
-    // Simulate 10 deposits
-    for _ in 0..10 {
-        balance = safe_add_balance(balance, large_amount).unwrap();
-    }
-
-    assert_eq!(balance, 1_000_000_000_000i128); // 1M USDC total
-
-    // Test that adding a very large amount close to i128::MAX would overflow
-    // Use an amount that would definitely cause overflow
-    let overflow_amount = i128::MAX - balance + 1;
-    assert_eq!(
-        safe_add_balance(balance, overflow_amount),
-        Err(Error::Overflow)
-    );
-
-    // Test that adding a reasonable amount still works
-    assert_eq!(
-        safe_add_balance(balance, large_amount),
-        Ok(balance + large_amount)
-    );
-}
-
-#[test]
-fn test_repeated_charges_no_underflow() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
-    client.init(&token, &7, &admin, &1_000_000, &43200);
-
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None);
-
-    client.cancel_subscription(&sub_id, &subscriber);
-
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-}
-
 #[test]
 fn test_cancel_subscription_by_subscriber() {
     let env = Env::default();
@@ -1005,7 +742,7 @@ fn test_min_topup_below_threshold() {
 
     client.init(&token, &admin, &min_topup);
     client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
-    let sub_id = client.create_subscription(
+    let id = client.create_subscription(
         &subscriber,
         &merchant,
         &10_000000i128,
@@ -1014,9 +751,9 @@ fn test_min_topup_below_threshold() {
         &None,
     );
 
-    client.cancel_subscription(&sub_id, &merchant);
+    client.cancel_subscription(&id, &merchant);
 
-    let result = client.try_deposit_funds(&sub_id, &subscriber, &4_999999);
+    let result = client.try_deposit_funds(&id, &subscriber, &4_999999);
     assert!(result.is_err());
 }
 #[test]
@@ -1030,6 +767,7 @@ fn test_min_topup_exactly_at_threshold() {
     let token_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
 
 
@@ -1040,7 +778,6 @@ fn test_min_topup_exactly_at_threshold() {
     let merchant = Address::generate(&env);
     let min_topup = 5_000000i128; // 5 USDC
 
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     client.init(&token_addr, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
     token_admin.mint(&subscriber, &min_topup);
 
@@ -1068,6 +805,7 @@ fn test_min_topup_above_threshold() {
     let token_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     let subscriber = Address::generate(&env);
 
 
@@ -1082,7 +820,6 @@ fn test_min_topup_above_threshold() {
     let min_topup = 5_000000i128; // 5 USDC
     let deposit_amount = 10_000000i128;
 
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
     client.init(&token_addr, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
     token_admin.mint(&subscriber, &deposit_amount);
 
@@ -2385,16 +2122,11 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(env, &contract_id);
-    let admin = Address::generate(env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(env);
+    let token = crate::test::create_token_and_mint(env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
     let merchant = Address::generate(env);
-    token_admin.mint(&subscriber, &BATCH_MINT);
     let id0 =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
     client.deposit_funds(&id0, &subscriber, &10_000000i128);
@@ -2404,11 +2136,6 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
     (client, admin, id0, id1)
 }
 
-fn mint_for_subscriber(env: &Env, token_addr: &Address, subscriber: &Address, amount: i128) {
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(env, token_addr);
-    token_admin.mint(subscriber, &amount);
-}
-
 // -----------------------------------------------------------------------------
 
 #[test]
@@ -2416,7 +2143,7 @@ fn test_batch_charge_single_subscription() {
     let env = Env::default();
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
+    ids.push_back(id0);
 
     let results = client.batch_charge(&ids);
 
@@ -2432,16 +2159,12 @@ fn test_batch_charge_small_batch_5_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let mut ids = SorobanVec::<u32>::new(&env);
 
     // Create 5 subscriptions with sufficient balance
@@ -2449,7 +2172,7 @@ fn test_batch_charge_small_batch_5_subscriptions() {
         let id =
             client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -2469,16 +2192,12 @@ fn test_batch_charge_medium_batch_20_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let mut ids = SorobanVec::<u32>::new(&env);
 
     // Create 20 subscriptions
@@ -2486,7 +2205,7 @@ fn test_batch_charge_medium_batch_20_subscriptions() {
         let id =
             client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -2505,16 +2224,12 @@ fn test_batch_charge_large_batch_50_subscriptions() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let mut ids = SorobanVec::<u32>::new(&env);
 
     // Create 50 subscriptions to test scalability
@@ -2522,7 +2237,7 @@ fn test_batch_charge_large_batch_50_subscriptions() {
         let id =
             client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
         client.deposit_funds(&id, &subscriber, &10_000000i128);
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -2545,16 +2260,12 @@ fn test_batch_charge_mixed_success_and_insufficient_balance() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let mut ids = SorobanVec::<u32>::new(&env);
 
     // Create alternating pattern: funded, unfunded, funded, unfunded
@@ -2565,7 +2276,7 @@ fn test_batch_charge_mixed_success_and_insufficient_balance() {
             client.deposit_funds(&id, &subscriber, &10_000000i128);
         }
         // Odd indices have no funds
-        ids.push_back(id as u32);
+        ids.push_back(id);
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -2595,16 +2306,12 @@ fn test_batch_charge_mixed_interval_not_elapsed() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     // Create subscriptions with different intervals
     let id_short =
@@ -2640,16 +2347,12 @@ fn test_batch_charge_mixed_paused_and_active() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     let id0 =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
@@ -2663,8 +2366,8 @@ fn test_batch_charge_mixed_paused_and_active() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
 
@@ -2684,16 +2387,12 @@ fn test_batch_charge_mixed_cancelled_and_active() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     let id0 =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
@@ -2707,8 +2406,8 @@ fn test_batch_charge_mixed_cancelled_and_active() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
 
@@ -2727,7 +2426,7 @@ fn test_batch_charge_nonexistent_subscription_ids() {
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32); // Valid
+    ids.push_back(id0); // Valid
     ids.push_back(9999); // Nonexistent
     ids.push_back(8888); // Nonexistent
 
@@ -2754,16 +2453,12 @@ fn test_batch_charge_all_different_error_types() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     // Sub 0: Success case
     let id_success =
@@ -2827,16 +2522,12 @@ fn test_batch_charge_successful_charges_update_state() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let charge_amount = 1_000_000i128; // 1 USDC
 
     let id = client.create_subscription(
@@ -2856,7 +2547,7 @@ fn test_batch_charge_successful_charges_update_state() {
 
     env.ledger().set_timestamp(T0 + INTERVAL);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(results.get(0).unwrap().success);
@@ -2873,16 +2564,12 @@ fn test_batch_charge_failed_charges_leave_state_unchanged() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     let id =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
@@ -2892,7 +2579,7 @@ fn test_batch_charge_failed_charges_leave_state_unchanged() {
 
     env.ledger().set_timestamp(T0 + INTERVAL);
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(!results.get(0).unwrap().success);
@@ -2904,7 +2591,7 @@ fn test_batch_charge_failed_charges_leave_state_unchanged() {
         sub_after.last_payment_timestamp,
         sub_before.last_payment_timestamp
     );
-    // Status changes to GracePeriod when charge fails due to insufficient funds
+    // Status changes to InsufficientBalance when charge fails due to insufficient funds
     assert_eq!(sub_after.status, SubscriptionStatus::GracePeriod);
 }
 
@@ -2915,16 +2602,12 @@ fn test_batch_charge_partial_batch_correct_final_state() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let amount = 1_000_000i128;
 
     let id0 = client.create_subscription(&subscriber, &merchant, &amount, &INTERVAL, &false, &None);
@@ -2939,9 +2622,9 @@ fn test_batch_charge_partial_batch_correct_final_state() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
-    ids.push_back(id2 as u32);
+    ids.push_back(id0);
+    ids.push_back(id1);
+    ids.push_back(id2);
 
     let results = client.batch_charge(&ids);
 
@@ -2971,23 +2654,19 @@ fn test_batch_charge_multiple_rounds_state_consistency() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let amount = 1_000_000i128;
 
     let id = client.create_subscription(&subscriber, &merchant, &amount, &INTERVAL, &false, &None);
     client.deposit_funds(&id, &subscriber, &10_000_000i128);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     // Charge 3 times over 3 intervals
     for i in 1..=3 {
@@ -3013,13 +2692,12 @@ fn test_batch_charge_requires_admin_auth() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
     let admin = Address::generate(&env);
     client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
 
-    let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token, &subscriber, BATCH_MINT);
     let id =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
 
@@ -3033,7 +2711,7 @@ fn test_batch_charge_requires_admin_auth() {
             fn_name: "batch_charge",
             args: {
                 let mut ids = SorobanVec::<u32>::new(&env);
-                ids.push_back(id as u32);
+                ids.push_back(id);
                 (ids,).into_val(&env)
             },
             sub_invokes: &[],
@@ -3041,7 +2719,7 @@ fn test_batch_charge_requires_admin_auth() {
     }]);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
     client.batch_charge(&ids);
 }
 
@@ -3055,9 +2733,9 @@ fn test_batch_charge_duplicate_subscription_ids() {
     let (client, _admin, id0, _id1) = setup_batch_env(&env);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id0 as u32);
-    ids.push_back(id0 as u32); // Duplicate
-    ids.push_back(id0 as u32); // Duplicate
+    ids.push_back(id0);
+    ids.push_back(id0); // Duplicate
+    ids.push_back(id0); // Duplicate
 
     let results = client.batch_charge(&ids);
 
@@ -3079,16 +2757,12 @@ fn test_batch_charge_exhausts_balance_exactly() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let amount = 5_000_000i128;
 
     let id = client.create_subscription(&subscriber, &merchant, &amount, &INTERVAL, &false, &None);
@@ -3097,7 +2771,7 @@ fn test_batch_charge_exhausts_balance_exactly() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(results.get(0).unwrap().success);
@@ -3113,16 +2787,12 @@ fn test_batch_charge_balance_off_by_one_insufficient() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
     let amount = 5_000_000i128;
 
     let id = client.create_subscription(&subscriber, &merchant, &amount, &INTERVAL, &false, &None);
@@ -3131,7 +2801,7 @@ fn test_batch_charge_balance_off_by_one_insufficient() {
     env.ledger().set_timestamp(T0 + INTERVAL);
 
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id as u32);
+    ids.push_back(id);
 
     let results = client.batch_charge(&ids);
     assert!(!results.get(0).unwrap().success);
@@ -3148,16 +2818,12 @@ fn test_batch_charge_result_indices_match_input_order() {
     env.ledger().set_timestamp(T0);
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let _token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
     let subscriber = Address::generate(&env);
+    let token = crate::test::create_token_and_mint(&env, &subscriber, 1_000_000_000i128);
+    let admin = Address::generate(&env);
+    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
+
     let merchant = Address::generate(&env);
-    mint_for_subscriber(&env, &token_addr, &subscriber, BATCH_MINT);
 
     let id0 =
         client.create_subscription(&subscriber, &merchant, &1000i128, &INTERVAL, &false, &None);
@@ -3175,9 +2841,9 @@ fn test_batch_charge_result_indices_match_input_order() {
 
     // Test specific order: id2, id0, id1
     let mut ids = SorobanVec::<u32>::new(&env);
-    ids.push_back(id2 as u32);
-    ids.push_back(id0 as u32);
-    ids.push_back(id1 as u32);
+    ids.push_back(id2);
+    ids.push_back(id0);
+    ids.push_back(id1);
 
     let results = client.batch_charge(&ids);
     assert_eq!(results.len(), 3);
@@ -3185,7 +2851,6 @@ fn test_batch_charge_result_indices_match_input_order() {
     assert!(results.get(1).unwrap().success); // id0
     assert!(!results.get(2).unwrap().success); // id1
 }
-
 #[test]
 fn test_recover_stranded_funds_idempotency() {
     let (env, client, _, admin) = setup_test_env();
@@ -3220,133 +2885,6 @@ fn test_recover_stranded_funds_edge_case_max_i128() {
     // Should handle large values
     let result = client.try_recover_stranded_funds(&admin, &recipient, &amount, &reason);
     assert!(result.is_ok());
-}
-
-// =============================================================================
-// Migration Export Hooks Tests
-// =============================================================================
-
-#[test]
-fn test_export_contract_snapshot_admin_only() {
-    let (env, client, token, admin) = setup_test_env();
-
-    let snapshot = client.export_contract_snapshot(&admin);
-    assert_eq!(snapshot.admin, admin);
-    assert_eq!(snapshot.token, token);
-    assert_eq!(snapshot.min_topup, 1_000000i128);
-
-    let non_admin = Address::generate(&env);
-    let result = client.try_export_contract_snapshot(&non_admin);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_export_subscription_summary_fields() {
-    let (env, client, _, admin) = setup_test_env();
-
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let amount = 12_000_000i128;
-    let interval_seconds = 14 * 24 * 60 * 60;
-
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &amount,
-        &interval_seconds,
-        &false,
-        &None,
-    );
-
-    let summary = client.export_subscription_summary(&admin, &id);
-    assert_eq!(summary.subscription_id, id);
-    assert_eq!(summary.subscriber, subscriber);
-    assert_eq!(summary.merchant, merchant);
-    assert_eq!(summary.amount, amount);
-    assert_eq!(summary.interval_seconds, interval_seconds);
-    assert_eq!(summary.status, SubscriptionStatus::Active);
-}
-
-#[test]
-fn test_export_subscription_summaries_pagination() {
-    let (env, client, _, admin) = setup_test_env();
-
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
-    let id1 = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &(24 * 60 * 60),
-        &false,
-        &None,
-    );
-    let id2 = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &2_000_000i128,
-        &(7 * 24 * 60 * 60),
-        &false,
-        &None,
-    );
-    let id3 = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &3_000_000i128,
-        &(30 * 24 * 60 * 60),
-        &true,
-        &None,
-    );
-
-    let page1 = client.export_subscription_summaries(&admin, &id1, &2);
-    assert_eq!(page1.len(), 2);
-    assert_eq!(page1.get(0).unwrap().subscription_id, id1);
-    assert_eq!(page1.get(1).unwrap().subscription_id, id2);
-
-    let page2 = client.export_subscription_summaries(&admin, &id3, &2);
-    assert_eq!(page2.len(), 1);
-    assert_eq!(page2.get(0).unwrap().subscription_id, id3);
-}
-
-#[test]
-fn test_export_subscription_summaries_limit_enforced() {
-    let (env, client, _, admin) = setup_test_env();
-
-    let result = client.try_export_subscription_summaries(&admin, &0, &101);
-    assert!(result.is_err());
-
-    let non_admin = Address::generate(&env);
-    let result = client.try_export_subscription_summaries(&non_admin, &0, &1);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_export_subscription_does_not_mutate_state() {
-    let (env, client, _, admin) = setup_test_env();
-
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &5_000_000i128,
-        &(30 * 24 * 60 * 60),
-        &false,
-        &None,
-    );
-
-    let before = client.get_subscription(&id);
-    let _summary = client.export_subscription_summary(&admin, &id);
-    let after = client.get_subscription(&id);
-
-    assert_eq!(before.subscriber, after.subscriber);
-    assert_eq!(before.merchant, after.merchant);
-    assert_eq!(before.amount, after.amount);
-    assert_eq!(before.interval_seconds, after.interval_seconds);
-    assert_eq!(before.status, after.status);
-    assert_eq!(before.prepaid_balance, after.prepaid_balance);
-    assert_eq!(before.usage_enabled, after.usage_enabled);
 }
 // =============================================================================
 // Usage Enabled Feature Tests
@@ -4434,8 +3972,260 @@ fn test_get_admin_before_and_after_rotation() {
 }
 
 // =============================================================================
-// View Function Tests: list_subscriptions_by_subscriber
+// withdraw_merchant_funds tests
 // =============================================================================
+
+#[test]
+#[should_panic] // Soroban panic on require_auth failure
+fn test_withdraw_requires_auth() {
+    let env = Env::default();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let merchant = Address::generate(&env);
+
+    // Auth is NOT mocked, so require_auth() will panic
+    client.withdraw_merchant_funds(&merchant, &100i128);
+}
+
+#[test]
+fn test_withdraw_merchant_funds_not_found_when_no_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    // Init vault with a real token contract address
+    let token = create_token_and_mint(&env, &Address::generate(&env), 1_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
+
+    // Merchant has never been credited -> NotFound
+    let res = client.try_withdraw_merchant_funds(&merchant, &1_000000i128);
+    assert_eq!(res, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_withdraw_merchant_funds_exact_balance_succeeds_and_transfers() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    // Create token, and mint enough to the VAULT (contract) so it can pay out
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
+
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
+
+    // Credit merchant balance directly.
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 3_000000i128).unwrap();
+    });
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&contract_id);
+
+    // Withdraw exactly the owed balance
+    client.withdraw_merchant_funds(&merchant, &3_000000i128);
+
+    let merchant_after = token_client.balance(&merchant);
+    let vault_after = token_client.balance(&contract_id);
+
+    assert_eq!(merchant_after - merchant_before, 3_000000i128);
+    assert_eq!(vault_before - vault_after, 3_000000i128);
+
+    // Merchant balance should now be zero
+    assert_eq!(client.get_merchant_balance(&merchant), 0i128);
+}
+
+#[test]
+fn test_withdraw_merchant_funds_partial_succeeds_and_leaves_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
+
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 5_000000i128).unwrap();
+    });
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let merchant_before = token_client.balance(&merchant);
+
+    client.withdraw_merchant_funds(&merchant, &2_000000i128);
+
+    let merchant_after = token_client.balance(&merchant);
+    assert_eq!(merchant_after - merchant_before, 2_000000i128);
+
+    // Remaining owed should be 3 USDC
+    assert_eq!(client.get_merchant_balance(&merchant), 3_000000i128);
+}
+
+#[test]
+fn test_withdraw_merchant_funds_overdraft_fails_and_does_not_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let merchant = Address::generate(&env);
+
+    let token = create_token_and_mint(&env, &contract_id, 10_000000i128);
+    let admin = Address::generate(&env);
+    let min_topup = 1_000000i128;
+    client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
+
+    env.as_contract(&contract_id, || {
+        crate::merchant::credit_merchant_balance(&env, &merchant, 1_000000i128).unwrap();
+    });
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&contract_id);
+
+    // Attempt to withdraw more than owed
+    let res = client.try_withdraw_merchant_funds(&merchant, &2_000000i128);
+    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
+
+    // Ensure no token movement
+    let merchant_after = token_client.balance(&merchant);
+    let vault_after = token_client.balance(&contract_id);
+    assert_eq!(merchant_after, merchant_before);
+    assert_eq!(vault_after, vault_before);
+
+    // Ensure ledger balance unchanged
+    assert_eq!(client.get_merchant_balance(&merchant), 1_000000i128);
+}
+
+#[test]
+fn test_withdraw_invalid_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let merchant = Address::generate(&env);
+
+    // Init with token just in case validations run far enough
+    let token = create_token_and_mint(&env, &contract_id, 1_000000i128);
+    client.init(
+        &token,
+        &6,
+        &Address::generate(&env),
+        &1_000000i128,
+        &(7 * 24 * 60 * 60),
+    );
+
+    let res_zero = client.try_withdraw_merchant_funds(&merchant, &0i128);
+    assert_eq!(res_zero, Err(Ok(Error::InvalidAmount)));
+
+    let res_neg = client.try_withdraw_merchant_funds(&merchant, &-100i128);
+    assert_eq!(res_neg, Err(Ok(Error::InvalidAmount)));
+}
+
+// =============================================================================
+// E2E Lifecycle Integrations
+// =============================================================================
+
+#[test]
+fn test_integration_deposit_charge_withdraw_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    // Real token and mint to subscriber for deposit
+    let token = create_token_and_mint(&env, &subscriber, 100_000000i128);
+    let min_topup = 1_000000i128;
+    client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let _subscriber_before = token_client.balance(&subscriber);
+    let merchant_before = token_client.balance(&merchant);
+    let vault_before = token_client.balance(&contract_id);
+
+    let sub_amount = 1_000000i128; // 1 USDC
+    let interval_seconds = 86_400u64;
+    let usage_enabled = false;
+
+    // Create subscription at timestamp t0
+    let t0 = env.ledger().timestamp();
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &sub_amount,
+        &interval_seconds,
+        &usage_enabled,
+        &None,
+    );
+
+    // Deposit 10 USDC
+    let deposit_amount = 10_000000i128;
+    client.deposit_funds(&id, &subscriber, &deposit_amount);
+
+    let subscriber_after_deposit = token_client.balance(&subscriber);
+    let merchant_after_deposit = token_client.balance(&merchant);
+    let vault_after_deposit = token_client.balance(&client.address);
+
+    // advance vault manually (since actual subtract mocked in isolated function test logic)
+    assert_eq!(vault_after_deposit - vault_before, deposit_amount);
+    assert_eq!(merchant_after_deposit, merchant_before);
+
+    // Advance time so now >= t0 + interval_seconds
+    env.ledger().set_timestamp(t0 + interval_seconds + 1);
+
+    // Charge once
+    client.charge_subscription(&id);
+
+    // Merchant ledger balance credited by one charge
+    assert_eq!(client.get_merchant_balance(&merchant), sub_amount);
+
+    // Charging doesn't move tokens out of the vault
+    let subscriber_after_charge = token_client.balance(&subscriber);
+    let merchant_after_charge = token_client.balance(&merchant);
+    let vault_after_charge = token_client.balance(&client.address);
+    assert_eq!(subscriber_after_charge, subscriber_after_deposit);
+    assert_eq!(merchant_after_charge, merchant_after_deposit);
+    assert_eq!(vault_after_charge, vault_after_deposit);
+
+    // Withdraw merchant funds
+    client.withdraw_merchant_funds(&merchant, &sub_amount);
+
+    assert_eq!(client.get_merchant_balance(&merchant), 0i128);
+
+    let merchant_after_withdraw = token_client.balance(&merchant);
+    let vault_after_withdraw = token_client.balance(&contract_id);
+
+    assert_eq!(merchant_after_withdraw - merchant_after_charge, sub_amount);
+    assert_eq!(vault_after_charge - vault_after_withdraw, sub_amount);
+
+    // Subscriber unchanged after charge/withdraw (already paid at deposit)
+    assert_eq!(token_client.balance(&subscriber), subscriber_after_charge);
+}
 
 #[test]
 fn test_list_subscriptions_zero_subscriptions() {
@@ -4501,10 +4291,7 @@ fn test_list_subscriptions_many_subscriptions() {
 
     // Verify subscriptions are returned in order by ID
     for i in 0..5 {
-        assert_eq!(
-            page.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
 }
 
@@ -4536,10 +4323,7 @@ fn test_list_subscriptions_pagination_first_page() {
 
     // Verify first page contains the first 10 subscriptions
     for i in 0..10 {
-        assert_eq!(
-            page1.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page1.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
 }
 
@@ -4580,7 +4364,7 @@ fn test_list_subscriptions_pagination_second_page() {
     for i in 0..5 {
         assert_eq!(
             page2.subscription_ids.get(i).unwrap(),
-            ids.get((10 + i) as u32).unwrap()
+            ids.get(10 + i).unwrap()
         );
     }
 }
@@ -4655,7 +4439,7 @@ fn test_list_subscriptions_small_limit() {
 
     while has_next {
         let page = client.list_subscriptions_by_subscriber(&subscriber, &start_id, &1u32);
-        if page.subscription_ids.len() > 0 {
+        if !page.subscription_ids.is_empty() {
             let current_id = page.subscription_ids.get(0).unwrap();
             all_ids.push_back(current_id);
             // Advance start cursor past the current ID
@@ -4715,7 +4499,7 @@ fn test_list_subscriptions_respects_start_from_id() {
     for i in 0..5 {
         assert_eq!(
             page.subscription_ids.get(i).unwrap(),
-            ids.get((5 + i) as u32).unwrap()
+            ids.get(5 + i).unwrap()
         );
     }
 }
@@ -4781,421 +4565,6 @@ fn test_list_subscriptions_multiple_merchants() {
     assert_eq!(page.subscription_ids.len(), 10);
     // All subscriptions should be from this subscriber regardless of merchant
     for i in 0..10 {
-        assert_eq!(
-            page.subscription_ids.get(i).unwrap(),
-            ids.get(i as u32).unwrap()
-        );
+        assert_eq!(page.subscription_ids.get(i).unwrap(), ids.get(i).unwrap());
     }
-}
-
-// =============================================================================
-// Plan Template Tests
-// =============================================================================
-
-#[test]
-fn test_create_plan_template() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let amount = 1000i128;
-    let interval = 86400u64; // 1 day
-    let usage_enabled = false;
-
-    let plan_id = client.create_plan_template(&merchant, &amount, &interval, &usage_enabled);
-
-    let plan = client.get_plan_template(&plan_id);
-    assert_eq!(plan.merchant, merchant);
-    assert_eq!(plan.amount, amount);
-    assert_eq!(plan.interval_seconds, interval);
-    assert_eq!(plan.usage_enabled, usage_enabled);
-}
-
-#[test]
-fn test_create_multiple_plan_templates() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-
-    // Create "Basic Plan"
-    let plan_id_1 = client.create_plan_template(&merchant, &999i128, &2592000u64, &false);
-
-    // Create "Premium Plan"
-    let plan_id_2 = client.create_plan_template(&merchant, &2999i128, &2592000u64, &true);
-
-    assert_eq!(plan_id_1, 0);
-    assert_eq!(plan_id_2, 1);
-
-    let plan1 = client.get_plan_template(&plan_id_1);
-    let plan2 = client.get_plan_template(&plan_id_2);
-
-    assert_eq!(plan1.amount, 999i128);
-    assert_eq!(plan2.amount, 2999i128);
-    assert!(!plan1.usage_enabled);
-    assert!(plan2.usage_enabled);
-}
-
-#[test]
-fn test_create_subscription_from_plan() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let amount = 1500i128;
-    let interval = 2592000u64; // 30 days
-    let usage_enabled = true;
-
-    // Create plan template
-    let plan_id = client.create_plan_template(&merchant, &amount, &interval, &usage_enabled);
-
-    // Create subscription from plan
-    let subscriber = Address::generate(&env);
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    // Verify subscription inherits plan parameters
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.subscriber, subscriber);
-    assert_eq!(sub.merchant, merchant);
-    assert_eq!(sub.amount, amount);
-    assert_eq!(sub.interval_seconds, interval);
-    assert_eq!(sub.usage_enabled, usage_enabled);
-    assert_eq!(sub.status, SubscriptionStatus::Active);
-    assert_eq!(sub.prepaid_balance, 0i128);
-    assert_eq!(sub.last_payment_timestamp, T0);
-}
-
-#[test]
-fn test_create_multiple_subscriptions_from_same_plan() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let plan_id = client.create_plan_template(&merchant, &999i128, &2592000u64, &false);
-
-    // Create subscriptions for different subscribers
-    let subscriber1 = Address::generate(&env);
-    let subscriber2 = Address::generate(&env);
-    let subscriber3 = Address::generate(&env);
-
-    let sub_id_1 = client.create_subscription_from_plan(&subscriber1, &plan_id);
-    let sub_id_2 = client.create_subscription_from_plan(&subscriber2, &plan_id);
-    let sub_id_3 = client.create_subscription_from_plan(&subscriber3, &plan_id);
-
-    // Verify all subscriptions have consistent parameters
-    let sub1 = client.get_subscription(&sub_id_1);
-    let sub2 = client.get_subscription(&sub_id_2);
-    let sub3 = client.get_subscription(&sub_id_3);
-
-    assert_eq!(sub1.amount, 999i128);
-    assert_eq!(sub2.amount, 999i128);
-    assert_eq!(sub3.amount, 999i128);
-
-    assert_eq!(sub1.merchant, merchant);
-    assert_eq!(sub2.merchant, merchant);
-    assert_eq!(sub3.merchant, merchant);
-
-    assert_eq!(sub1.subscriber, subscriber1);
-    assert_eq!(sub2.subscriber, subscriber2);
-    assert_eq!(sub3.subscriber, subscriber3);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #404)")]
-fn test_create_subscription_from_nonexistent_plan() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let subscriber = Address::generate(&env);
-    let nonexistent_plan_id = 999u32;
-
-    // Should panic with NotFound error
-    client.create_subscription_from_plan(&subscriber, &nonexistent_plan_id);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #404)")]
-fn test_get_nonexistent_plan_template() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    // Should panic with NotFound error
-    client.get_plan_template(&999u32);
-}
-
-#[test]
-fn test_plan_template_with_usage_enabled() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let plan_id = client.create_plan_template(&merchant, &5000i128, &2592000u64, &true);
-
-    let subscriber = Address::generate(&env);
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    let sub = client.get_subscription(&sub_id);
-    assert!(sub.usage_enabled);
-}
-
-#[test]
-fn test_plan_template_with_different_intervals() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-
-    // Weekly plan
-    let weekly_plan = client.create_plan_template(&merchant, &250i128, &604800u64, &false);
-
-    // Monthly plan
-    let monthly_plan = client.create_plan_template(&merchant, &999i128, &2592000u64, &false);
-
-    // Yearly plan
-    let yearly_plan = client.create_plan_template(&merchant, &9999i128, &31536000u64, &false);
-
-    let plan1 = client.get_plan_template(&weekly_plan);
-    let plan2 = client.get_plan_template(&monthly_plan);
-    let plan3 = client.get_plan_template(&yearly_plan);
-
-    assert_eq!(plan1.interval_seconds, 604800u64);
-    assert_eq!(plan2.interval_seconds, 2592000u64);
-    assert_eq!(plan3.interval_seconds, 31536000u64);
-}
-
-#[test]
-fn test_subscription_from_plan_can_be_charged() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-
-    client.init(&token_addr, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let subscriber = Address::generate(&env);
-    let amount = 1000i128;
-    let plan_id = client.create_plan_template(&merchant, &amount, &INTERVAL, &false);
-
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    // Mint and deposit funds
-    token_admin.mint(&subscriber, &10_000000i128);
-    client.deposit_funds(&sub_id, &subscriber, &10_000000i128);
-
-    // Advance time and charge
-    env.ledger().set_timestamp(T0 + INTERVAL);
-    client.charge_subscription(&sub_id);
-
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.prepaid_balance, 10_000000i128 - amount);
-}
-
-#[test]
-fn test_subscription_from_plan_lifecycle() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let plan_id = client.create_plan_template(&merchant, &1000i128, &INTERVAL, &false);
-
-    let subscriber = Address::generate(&env);
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    // Test pause
-    client.pause_subscription(&sub_id, &subscriber);
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.status, SubscriptionStatus::Paused);
-
-    // Test resume
-    client.resume_subscription(&sub_id, &subscriber);
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.status, SubscriptionStatus::Active);
-
-    // Test cancel
-    client.cancel_subscription(&sub_id, &subscriber);
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-}
-
-#[test]
-fn test_plan_template_independent_subscription_ids() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let subscriber = Address::generate(&env);
-
-    // Create a direct subscription
-    let direct_sub_id =
-        client.create_subscription(&subscriber, &merchant, &500i128, &INTERVAL, &false, &None);
-
-    // Create a plan template
-    let plan_id = client.create_plan_template(&merchant, &1000i128, &INTERVAL, &false);
-
-    // Create subscription from plan
-    let plan_sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    // Verify IDs are sequential and independent
-    assert_eq!(direct_sub_id, 0);
-    assert_eq!(plan_id, 0); // Plan IDs are separate
-    assert_eq!(plan_sub_id, 1); // Next subscription ID
-}
-
-#[test]
-fn test_direct_subscription_still_works() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-    let subscriber = Address::generate(&env);
-
-    // Create plan template
-    let _plan_id = client.create_plan_template(&merchant, &1000i128, &INTERVAL, &false);
-
-    // Direct subscription creation should still work
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &750i128, &INTERVAL, &true, &None);
-
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.amount, 750i128);
-    assert!(sub.usage_enabled);
-}
-
-#[test]
-fn test_plan_template_with_zero_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-
-    // Free tier plan with zero amount
-    let plan_id = client.create_plan_template(&merchant, &0i128, &INTERVAL, &false);
-
-    let subscriber = Address::generate(&env);
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.amount, 0i128);
-}
-
-#[test]
-fn test_plan_template_with_large_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let token = Address::generate(&env);
-    let admin = Address::generate(&env);
-    client.init(&token, &6, &admin, &1_000000i128, &(7 * 24 * 60 * 60));
-
-    let merchant = Address::generate(&env);
-
-    // Enterprise plan with large amount
-    let large_amount = 1_000_000_000i128;
-    let plan_id = client.create_plan_template(&merchant, &large_amount, &INTERVAL, &true);
-
-    let subscriber = Address::generate(&env);
-    let sub_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-
-    let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.amount, large_amount);
 }

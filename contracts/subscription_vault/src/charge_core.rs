@@ -96,6 +96,7 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, sub.amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
+            crate::merchant::credit_merchant_balance(env, &sub.merchant, sub.amount)?;
             sub.last_payment_timestamp = now;
             if sub.status == SubscriptionStatus::GracePeriod {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
