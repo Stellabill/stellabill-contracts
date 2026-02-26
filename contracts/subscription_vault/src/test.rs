@@ -584,8 +584,6 @@ fn test_subscription_struct_status_field() {
     assert_eq!(sub.status, SubscriptionStatus::Active);
 }
 
-=======
->>>>>>> upstream/main
 #[test]
 fn test_cancel_subscription_by_subscriber() {
     let env = Env::default();
