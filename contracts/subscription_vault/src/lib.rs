@@ -311,6 +311,26 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     Ok(())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMERGENCY STOP (CIRCUIT BREAKER)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Get the current emergency stop status.
+fn get_emergency_stop(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyStop)
+        .unwrap_or(false)
+}
+
+/// Check if emergency stop is active and return error if so.
+/// This should be called at the start of any guarded function.
+fn require_not_emergency_stop(env: &Env) -> Result<(), Error> {
+    if get_emergency_stop(env) {
+        return Err(Error::EmergencyStopActive);
+    }
+    Ok(())
+}
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 
@@ -387,15 +407,58 @@ impl SubscriptionVault {
 
     /// Charge a batch of subscriptions in one transaction. Admin only.
     ///
+    /// **This function is disabled when the emergency stop is active.**
+    ///
     /// Returns a per-subscription result vector so callers can identify
     /// which charges succeeded and which failed (with error codes).
     pub fn batch_charge(
         env: Env,
         subscription_ids: Vec<u32>,
     ) -> Result<Vec<BatchChargeResult>, Error> {
+        // Emergency stop check - block batch charges when active
+        require_not_emergency_stop(&env)?;
+
         admin::do_batch_charge(&env, &subscription_ids)
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EMERGENCY STOP (CIRCUIT BREAKER)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Get the current emergency stop status.
+    ///
+    /// Returns `true` if emergency stop is active (critical operations blocked),
+    /// `false` otherwise.
+    pub fn get_emergency_stop_status(env: Env) -> bool {
+        get_emergency_stop(&env)
+    }
+
+    /// Enable the emergency stop (circuit breaker). Admin only.
+    ///
+    /// When enabled, critical operations like creating subscriptions, depositing funds,
+    /// and charging subscriptions are blocked. This is intended for incident response
+    /// scenarios where the contract needs to be halted to prevent further financial exposure.
+    ///
+    /// # Requirements
+    /// - Caller must be the admin.
+    /// - Emergency stop must currently be disabled.
+    ///
+    /// # Emits
+    /// `EmergencyStopEnabledEvent` on success.
+    pub fn enable_emergency_stop(env: Env, admin: Address) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+
+        if get_emergency_stop(&env) {
+            // Already enabled - return success (idempotent)
+            return Ok(());
+        }
+
+        env.storage().instance().set(&DataKey::EmergencyStop, &true);
+
+        env.events().publish(
+            (Symbol::new(&env, "emergency_stop_enabled"),),
+            EmergencyStopEnabledEvent {
+                admin,
     /// **ADMIN ONLY**: Export contract-level configuration for migration tooling.
     ///
     /// Read-only snapshot intended for carefully managed upgrades.
@@ -449,6 +512,36 @@ impl SubscriptionVault {
             },
         );
 
+        Ok(())
+    }
+
+    /// Disable the emergency stop (circuit breaker). Admin only.
+    ///
+    /// When disabled, normal contract operations resume. This should only be used
+    /// after the incident has been resolved and the contract is safe to operate.
+    ///
+    /// # Requirements
+    /// - Caller must be the admin.
+    /// - Emergency stop must currently be enabled.
+    ///
+    /// # Emits
+    /// `EmergencyStopDisabledEvent` on success.
+    pub fn disable_emergency_stop(env: Env, admin: Address) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+
+        if !get_emergency_stop(&env) {
+            // Already disabled - return success (idempotent)
+            return Ok(());
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::EmergencyStop, &false);
+
+        env.events().publish(
+            (Symbol::new(&env, "emergency_stop_disabled"),),
+            EmergencyStopDisabledEvent {
+                admin,
         Ok(SubscriptionSummary {
             subscription_id,
             subscriber: sub.subscriber,
@@ -519,6 +612,7 @@ impl SubscriptionVault {
             },
         );
 
+        Ok(())
         Ok(out)
     }
 
@@ -533,6 +627,8 @@ impl SubscriptionVault {
     // ── Subscription lifecycle ───────────────────────────────────────────
 
     /// Create a new subscription. Caller deposits initial USDC; contract stores agreement.
+    ///
+    /// **This function is disabled when the emergency stop is active.**
     ///
     /// # Arguments
     /// * `expiration` - Optional Unix timestamp (seconds). If `Some(ts)`, charges are blocked
@@ -556,6 +652,8 @@ impl SubscriptionVault {
         expiration: Option<u64>,
         _expiration: Option<u64>,
     ) -> Result<u32, Error> {
+        // Emergency stop check - block new subscriptions when active
+        require_not_emergency_stop(&env)?;
 
 
         subscriber.require_auth();
@@ -692,6 +790,8 @@ impl SubscriptionVault {
 
     /// Subscriber deposits more USDC into their prepaid vault.
     ///
+    /// **This function is disabled when the emergency stop is active.**
+    ///
     /// # Minimum top-up enforcement
     /// Rejects deposits below the configured minimum threshold to prevent inefficient
     /// micro-transactions that waste gas and complicate accounting. The minimum is set
@@ -704,6 +804,8 @@ impl SubscriptionVault {
         subscriber: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        // Emergency stop check - block deposits when active
+        require_not_emergency_stop(&env)?;
 
 
         subscriber.require_auth();
@@ -910,6 +1012,14 @@ impl SubscriptionVault {
     /// | `Replay` | This billing period has already been charged |
     /// | `InsufficientBalance` | `prepaid_balance < amount` |
     ///
+    /// **This function is disabled when the emergency stop is active.**
+    ///
+    /// Enforces strict interval timing and replay protection.
+    pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
+        // Emergency stop check - block charges when active
+        require_not_emergency_stop(&env)?;
+
+        charge_core::charge_one(&env, subscription_id, None)
     /// # Non-Destructive Failure Guarantee
     ///
     /// When a charge fails due to insufficient balance:
@@ -934,6 +1044,8 @@ impl SubscriptionVault {
     }
 
     /// Charge a metered usage amount against the subscription's prepaid balance.
+    ///
+    /// **This function is disabled when the emergency stop is active.**
     ///
     /// Designed for integration with an **off-chain usage metering service**:
     /// the service measures consumption, then calls this entrypoint with the
@@ -963,6 +1075,9 @@ impl SubscriptionVault {
     /// | `InvalidAmount` | `usage_amount` is zero or negative. |
     /// | `InsufficientPrepaidBalance` | Prepaid balance in the vault cannot cover the debit. |
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
+        // Emergency stop check - block usage charges when active
+        require_not_emergency_stop(&env)?;
+
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
 
@@ -980,6 +1095,30 @@ impl SubscriptionVault {
     // ── Queries ──────────────────────────────────────────────────────────
 
     /// Read subscription by id.
+    pub fn batch_withdraw_merchant_funds(
+        env: Env,
+        merchant: Address,
+        amounts: Vec<i128>,
+    ) -> Result<Vec<BatchWithdrawResult>, Error> {
+        merchant.require_auth();
+        let mut results: Vec<BatchWithdrawResult> = Vec::new(&env);
+        for i in 0..amounts.len() {
+            let amount = amounts.get(i).unwrap();
+            if amount <= 0 {
+                results.push_back(BatchWithdrawResult {
+                    success: false,
+                    error_code: 1003,
+                });
+            } else {
+                results.push_back(BatchWithdrawResult {
+                    success: true,
+                    error_code: 0,
+                });
+            }
+        }
+        Ok(results)
+    }
+
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
     }

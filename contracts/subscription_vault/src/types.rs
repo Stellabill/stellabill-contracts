@@ -11,6 +11,24 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
+    /// USDC token contract address. Discriminant 1.
+    Token,
+    /// Authorized admin address. Discriminant 2.
+    Admin,
+    /// Minimum deposit threshold. Discriminant 3.
+    MinTopup,
+    /// Auto-incrementing subscription ID counter. Discriminant 4.
+    NextId,
+    /// On-chain storage schema version. Discriminant 5.
+    SchemaVersion,
+    /// Subscription record keyed by its ID. Discriminant 6.
+    Sub(u32),
+    /// Last charged billing-period index for replay protection. Discriminant 7.
+    ChargedPeriod(u32),
+    /// Idempotency key stored per subscription. Discriminant 8.
+    IdemKey(u32),
+    /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
+    EmergencyStop,
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -69,6 +87,12 @@ pub enum Error {
     Replay = 1007,
     /// Invalid amount.
     InvalidRecoveryAmount = 1008,
+    /// Charge interval has not elapsed yet.
+    IntervalNotElapsed = 1001,
+    /// Subscription is not in the Active state.
+    NotActive = 1002,
+    /// Emergency stop is active - critical operations are blocked.
+    EmergencyStopActive = 1009,
     /// Already initialized.
     AlreadyInitialized = 1009,
     /// Recovery operation not allowed for this reason or context.
@@ -116,6 +140,7 @@ impl Error {
             Error::InsufficientPrepaidBalance => 1005,
             Error::Replay => 1007,
             Error::InvalidRecoveryAmount => 1008,
+            Error::EmergencyStopActive => 1009,
             Error::AlreadyInitialized => 1009,
             Error::RecoveryNotAllowed => 1011,
             Error::InvalidInput => 1015,
@@ -343,6 +368,33 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
         SubscriptionStatus::Cancelled => false,
     };
 
+/// Event emitted when emergency stop is enabled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyStopEnabledEvent {
+    /// The admin who enabled the emergency stop.
+    pub admin: Address,
+    /// Timestamp when emergency stop was enabled.
+    pub timestamp: u64,
+}
+
+/// Event emitted when emergency stop is disabled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyStopDisabledEvent {
+    /// The admin who disabled the emergency stop.
+    pub admin: Address,
+    /// Timestamp when emergency stop was disabled.
+    pub timestamp: u64,
+}
+
+/// Emitted when a merchant-initiated one-off charge is applied to a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OneOffChargedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,
