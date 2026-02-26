@@ -5,37 +5,40 @@
 
 use soroban_sdk::{contracterror, contracttype, Address};
 
-/// Increment this constant whenever the on-chain storage schema changes.
-///
-/// ⚠️ Upgrade-sensitive: written to [`DataKey::SchemaVersion`] during `init()`.
-/// Migration logic must read this value and branch on it before touching storage.
-pub const STORAGE_VERSION: u32 = 1;
-
-/// Canonical storage key enum for all contract state.
-///
-/// ⚠️ Upgrade-sensitive: discriminant order is fixed. Never remove or reorder
-/// variants — only append new ones. The integer comments are authoritative.
+/// Storage keys for secondary indices.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// Merchant → subscription ID list index. Discriminant 0. ⚠️ Must stay at 0.
+    /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
-    /// USDC token contract address. Discriminant 1.
-    Token,
-    /// Authorized admin address. Discriminant 2.
-    Admin,
-    /// Minimum deposit threshold. Discriminant 3.
-    MinTopup,
-    /// Auto-incrementing subscription ID counter. Discriminant 4.
-    NextId,
-    /// On-chain storage schema version. Discriminant 5.
-    SchemaVersion,
-    /// Subscription record keyed by its ID. Discriminant 6.
-    Sub(u32),
-    /// Last charged billing-period index for replay protection. Discriminant 7.
-    ChargedPeriod(u32),
-    /// Idempotency key stored per subscription. Discriminant 8.
-    IdemKey(u32),
+}
+
+/// Detailed error information for insufficient balance scenarios.
+///
+/// This struct provides machine-parseable information about why a charge failed
+/// due to insufficient balance, enabling better error handling in clients.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsufficientBalanceError {
+    /// The current available prepaid balance in the subscription vault.
+    pub available: i128,
+    /// The required amount to complete the charge.
+    pub required: i128,
+}
+
+impl InsufficientBalanceError {
+    /// Creates a new InsufficientBalanceError with the given available and required amounts.
+    pub const fn new(available: i128, required: i128) -> Self {
+        Self {
+            available,
+            required,
+        }
+    }
+
+    /// Returns the shortfall amount (required - available).
+    pub fn shortfall(&self) -> i128 {
+        self.required - self.available
+    }
 }
 
 #[contracterror]
@@ -61,40 +64,49 @@ pub enum Error {
     InvalidStatusTransition = 400,
     /// The top-up amount is below the minimum required threshold configured by the admin.
     BelowMinimumTopup = 402,
-    /// Arithmetic overflow in computation (e.g. amount * intervals).
-    Overflow = 403,
-    /// Charge failed due to insufficient prepaid balance.
-    InsufficientBalance = 1003,
-    /// Usage-based charge attempted on a subscription with `usage_enabled = false`.
-    UsageNotEnabled = 1004,
-    /// Usage-based charge amount exceeds the available prepaid balance.
-    InsufficientPrepaidBalance = 1005,
     /// The provided amount is zero or negative.
-    InvalidAmount = 1006,
-    /// Charge already processed for this billing period.
-    Replay = 1007,
-    /// Recovery amount is zero or negative.
-    InvalidRecoveryAmount = 1008,
+    InvalidAmount = 405,
+    /// Recovery amount is zero or negative (used in admin fund recovery).
+    InvalidRecoveryAmount = 406,
+    /// Usage-based charge attempted on a subscription where usage billing is disabled.
+    UsageNotEnabled = 407,
+    /// Invalid parameters provided to the function (e.g., a pagination limit of 0).
+    InvalidInput = 408,
+    /// Export limit exceeds allowed maximum.
+    InvalidExportLimit = 409,
+
+    // --- Insufficient Funds (10xx) ---
+    /// Subscription failed due to insufficient prepaid balance in the vault for a recurring charge.
+    /// This causes the subscription to transition to the 'InsufficientBalance' state.
+    InsufficientBalance = 1001,
+    /// Usage-based charge exceeds the current available prepaid balance.
+    InsufficientPrepaidBalance = 1002,
+
+    // --- Timing & Lifecycle Errors (11xx) ---
+    /// Charge attempted before the 'interval_seconds' has elapsed since the last payment.
+    IntervalNotElapsed = 1101,
+    /// Charge already processed for the current billing period (replay protection).
+    Replay = 1102,
+    /// Subscription is not in the 'Active' state (e.g. it is Paused or Cancelled).
+    NotActive = 1103,
+
+    // --- Algebra & Overflow (12xx) ---
+    /// Arithmetic overflow in computation (e.g. total amount calculation).
+    Overflow = 1201,
+    /// Arithmetic underflow (e.g. subtracting an amount greater than the balance).
+    Underflow = 1202,
+
+    // --- Configuration & System (13xx) ---
+    /// Contract is already initialized. The 'init' function can only be called once.
+    AlreadyInitialized = 1301,
+    /// Contract has not been initialized. Most operations require 'init' to be called first.
+    NotInitialized = 1302,
 }
 
 impl Error {
     /// Returns the numeric code for this error (for batch result reporting).
     pub const fn to_code(self) -> u32 {
-        match self {
-            Error::NotFound => 404,
-            Error::Unauthorized => 401,
-            Error::IntervalNotElapsed => 1001,
-            Error::NotActive => 1002,
-            Error::InvalidStatusTransition => 400,
-            Error::BelowMinimumTopup => 402,
-            Error::Overflow => 403,
-            Error::InsufficientBalance => 1003,
-            Error::UsageNotEnabled => 1004,
-            Error::InsufficientPrepaidBalance => 1005,
-            Error::InvalidAmount => 1006,
-            Error::Replay => 1007,
-            Error::InvalidRecoveryAmount => 1008,
-        }
+        self as u32
     }
 }
 
@@ -110,12 +122,14 @@ pub struct BatchChargeResult {
 
 /// Represents the lifecycle state of a subscription.
 ///
+/// See `docs/subscription_lifecycle.md` for how each status is entered and exited and for invariants.
+///
 /// # State Machine
 ///
 /// The subscription status follows a defined state machine with specific allowed transitions:
 ///
 /// - **Active**: Subscription is active and charges can be processed.
-///   - Can transition to: `Paused`, `Cancelled`, `InsufficientBalance`
+///   - Can transition to: `Paused`, `Cancelled`, `InsufficientBalance`, `GracePeriod`
 ///
 /// - **Paused**: Subscription is temporarily suspended, no charges are processed.
 ///   - Can transition to: `Active`, `Cancelled`
@@ -124,7 +138,26 @@ pub struct BatchChargeResult {
 ///   - No outgoing transitions (terminal state)
 ///
 /// - **InsufficientBalance**: Subscription failed due to insufficient funds.
-///   - Can transition to: `Active` (after deposit), `Cancelled`
+///   - This status is automatically set when a charge attempt fails due to insufficient
+///     prepaid balance.
+///   - Can transition to: `Active` (after deposit + resume), `Cancelled`
+///   - The subscription cannot be charged while in this status.
+///
+/// # When InsufficientBalance Occurs
+///
+/// A subscription transitions to `InsufficientBalance` when:
+/// 1. A [`crate::SubscriptionVault::charge_subscription`] call finds `prepaid_balance < amount`
+/// 2. A [`crate::SubscriptionVault::charge_usage`] call drains the balance to zero
+///
+/// # Recovery from InsufficientBalance
+///
+/// To recover from `InsufficientBalance`:
+/// 1. Subscriber calls [`crate::SubscriptionVault::deposit_funds`] to add funds
+/// 2. Subscriber calls [`crate::SubscriptionVault::resume_subscription`] to transition back to `Active`
+/// 3. Subsequent charges will succeed if sufficient balance exists
+///
+/// - **GracePeriod**: Subscription is in grace period after a missed charge.
+///   - Can transition to: `Active` (after deposit), `InsufficientBalance`, `Cancelled`
 ///
 /// Invalid transitions (e.g., `Cancelled` -> `Active`) are rejected with
 /// [`Error::InvalidStatusTransition`].
@@ -132,41 +165,66 @@ pub struct BatchChargeResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubscriptionStatus {
     /// Subscription is active and ready for charging.
+    ///
+    /// Only in this state can [`crate::SubscriptionVault::charge_subscription`] and
+    /// [`crate::SubscriptionVault::charge_usage`] successfully process charges.
     Active = 0,
     /// Subscription is temporarily paused, no charges processed.
+    ///
+    /// Pausing preserves the subscription agreement but prevents charges.
+    /// Use [`crate::SubscriptionVault::resume_subscription`] to return to Active.
     Paused = 1,
     /// Subscription is permanently cancelled (terminal state).
+    ///
+    /// Once cancelled, the subscription cannot be resumed or modified.
+    /// Remaining funds can be withdrawn by the subscriber.
     Cancelled = 2,
     /// Subscription failed due to insufficient balance for charging.
+    ///
+    /// This status indicates that the last charge attempt failed because the
+    /// prepaid balance was insufficient. The subscription cannot be charged
+    /// until the subscriber adds more funds.
+    ///
+    /// # Client Handling
+    ///
+    /// UI should:
+    /// - Display a "payment required" message to the subscriber
+    /// - Provide a way to initiate a deposit
+    /// - Optionally auto-retry after deposit (if using resume)
     InsufficientBalance = 3,
+    /// Subscription failed resulting in entry into grace period before suspension.
+    GracePeriod = 4,
 }
 
 /// Stores subscription details and current state.
 ///
-/// ⚠️ Upgrade-sensitive: field order and types are serialised as XDR by Soroban.
-/// Adding fields requires a migration; removing or retyping fields is always
-/// a breaking change.  New optional fields must default gracefully on old data.
-///
 /// The `status` field is managed by the state machine. Use the provided
 /// transition helpers to modify status, never set it directly.
+/// See `docs/subscription_lifecycle.md` for lifecycle and on-chain representation.
+///
+/// Serialization: This named-field struct is encoded on-ledger as a ScMap keyed
+/// by the field names. Renaming fields, reordering is inconsequential to map
+/// semantics but still alters the encoded bytes and will break golden vectors.
+/// Changing any field type or the representation of [`SubscriptionStatus`] is
+/// a storage-breaking change. To extend, prefer adding new optional fields at
+/// the end with conservative defaults; doing so still changes bytes and must
+/// be treated as a versioned change.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Subscription {
-    /// Subscriber's wallet address. ⚠️ Upgrade-sensitive: position 0.
+    /// Identity of the subscriber. Renaming or changing this field breaks the
+    /// encoded form and must be treated as a breaking change.
     pub subscriber: Address,
-    /// Merchant receiving payments. ⚠️ Upgrade-sensitive: position 1.
+    /// Identity of the merchant. Renaming or changing this field breaks the
+    /// encoded form and must be treated as a breaking change.
     pub merchant: Address,
-    /// Payment amount per billing interval (in token's smallest unit). ⚠️ Upgrade-sensitive: position 2.
     pub amount: i128,
-    /// Billing interval duration in seconds. ⚠️ Upgrade-sensitive: position 3.
     pub interval_seconds: u64,
-    /// Ledger timestamp of the last successful charge. ⚠️ Upgrade-sensitive: position 4.
     pub last_payment_timestamp: u64,
-    /// Current lifecycle state — modified only through state-machine transitions. ⚠️ Upgrade-sensitive: position 5.
+    /// Current lifecycle state. Modified only through state machine transitions.
+    /// Changing the enum or this field name affects the encoded form.
     pub status: SubscriptionStatus,
-    /// Deposited funds available for future charges. ⚠️ Upgrade-sensitive: position 6.
     pub prepaid_balance: i128,
-    /// Whether usage-based billing is enabled for this subscription. ⚠️ Upgrade-sensitive: position 7.
     pub usage_enabled: bool,
 }
 
@@ -309,11 +367,4 @@ pub struct NextChargeInfo {
     pub next_charge_timestamp: u64,
     /// Whether a charge is actually expected based on the subscription status.
     pub is_charge_expected: bool,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct BatchWithdrawResult {
-    pub success: bool,
-    pub error_code: u32,
 }

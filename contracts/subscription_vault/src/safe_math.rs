@@ -63,7 +63,7 @@ pub fn safe_add(a: i128, b: i128) -> Result<i128, Error> {
 /// Compatible with USDC-style fixed decimals (6 decimals). For example,
 /// 1 USDC = 1_000_000 smallest units, 1000 USDC = 1_000_000_000.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, Error> {
-    a.checked_sub(b).ok_or(Error::Overflow)
+    a.checked_sub(b).ok_or(Error::Underflow)
 }
 
 /// Validates that an amount is non-negative.
@@ -79,7 +79,7 @@ pub fn safe_sub(a: i128, b: i128) -> Result<i128, Error> {
 /// # Returns
 ///
 /// * `Ok(())` - If the amount is non-negative (>= 0)
-/// * `Err(Error::Overflow)` - If the amount is negative (< 0)
+/// * `Err(Error::Underflow)` - If the amount is negative (< 0)
 ///
 /// # Examples
 ///
@@ -89,11 +89,11 @@ pub fn safe_sub(a: i128, b: i128) -> Result<i128, Error> {
 ///
 /// assert_eq!(validate_non_negative(100), Ok(()));
 /// assert_eq!(validate_non_negative(0), Ok(()));
-/// assert_eq!(validate_non_negative(-1), Err(Error::Overflow));
+/// assert_eq!(validate_non_negative(-1), Err(Error::Underflow));
 /// ```
 pub fn validate_non_negative(amount: i128) -> Result<(), Error> {
     if amount < 0 {
-        Err(Error::Overflow)
+        Err(Error::Underflow)
     } else {
         Ok(())
     }
@@ -185,7 +185,7 @@ pub fn safe_sub_balance(balance: i128, amount: i128) -> Result<i128, Error> {
     validate_non_negative(amount)?;
     let result = safe_sub(balance, amount)?;
     if result < 0 {
-        Err(Error::Overflow)
+        Err(Error::Underflow)
     } else {
         Ok(result)
     }
