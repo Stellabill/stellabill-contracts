@@ -2,19 +2,34 @@
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
+#![allow(dead_code)]
+
 use crate::charge_core::charge_one;
-use crate::types::{
-    BatchChargeResult, DataKey, Error, RecoveryEvent, RecoveryReason, STORAGE_VERSION,
-};
+use crate::types::{BatchChargeResult, Error, RecoveryEvent, RecoveryReason};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
-    env.storage().instance().set(&DataKey::Token, &token);
-    env.storage().instance().set(&DataKey::Admin, &admin);
-    env.storage().instance().set(&DataKey::MinTopup, &min_topup);
-    env.storage()
-        .instance()
-        .set(&DataKey::SchemaVersion, &STORAGE_VERSION);
+pub fn do_init(
+    env: &Env,
+    token: Address,
+    token_decimals: u32,
+    admin: Address,
+    min_topup: i128,
+    grace_period: u64,
+) -> Result<(), Error> {
+    let instance = env.storage().instance();
+    if instance.has(&Symbol::new(env, "token")) || instance.has(&Symbol::new(env, "admin")) {
+        return Err(Error::AlreadyInitialized);
+    }
+    if min_topup < 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    instance.set(&Symbol::new(env, "token"), &token);
+    instance.set(&Symbol::new(env, "token_decimals"), &token_decimals);
+    instance.set(&Symbol::new(env, "admin"), &admin);
+    instance.set(&Symbol::new(env, "min_topup"), &min_topup);
+    instance.set(&Symbol::new(env, "grace_period"), &grace_period);
+
     env.events().publish(
         (Symbol::new(env, "initialized"),),
         (token, admin, min_topup, grace_period),
@@ -25,8 +40,8 @@ pub fn do_init(env: &Env, token: Address, admin: Address, min_topup: i128) -> Re
 pub fn require_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::Unauthorized)
+        .get(&Symbol::new(env, "admin"))
+        .ok_or(Error::NotInitialized)
 }
 
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
@@ -35,7 +50,9 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     if admin != stored {
         return Err(Error::Forbidden);
     }
-    env.storage().instance().set(&DataKey::MinTopup, &min_topup);
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "min_topup"), &min_topup);
     env.events()
         .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
     Ok(())
@@ -44,7 +61,34 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
 pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
     env.storage()
         .instance()
-        .get(&DataKey::MinTopup)
+        .get(&Symbol::new(env, "min_topup"))
+        .ok_or(Error::NotInitialized)
+}
+
+pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Forbidden);
+    }
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "grace_period"), &grace_period);
+    Ok(())
+}
+
+pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
+    Ok(env
+        .storage()
+        .instance()
+        .get(&Symbol::new(env, "grace_period"))
+        .unwrap_or(0))
+}
+
+pub fn get_token(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "token"))
         .ok_or(Error::NotFound)
 }
 
@@ -55,9 +99,10 @@ pub fn do_batch_charge(
     let auth_admin = require_admin(env)?;
     auth_admin.require_auth();
 
+    let now = env.ledger().timestamp();
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
-        let r = charge_one(env, id, None);
+        let r = charge_one(env, id, now, None);
         let res = match &r {
             Ok(()) => BatchChargeResult {
                 success: true,
@@ -76,8 +121,8 @@ pub fn do_batch_charge(
 pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotFound)
+        .get(&Symbol::new(env, "admin"))
+        .ok_or(Error::NotInitialized)
 }
 
 pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
@@ -86,14 +131,16 @@ pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) ->
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotFound)?;
+        .get(&Symbol::new(env, "admin"))
+        .ok_or(Error::NotInitialized)?;
 
     if current_admin != stored_admin {
         return Err(Error::Forbidden);
     }
 
-    env.storage().instance().set(&DataKey::Admin, &new_admin);
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "admin"), &new_admin);
 
     env.events().publish(
         (Symbol::new(env, "admin_rotation"), current_admin.clone()),
@@ -115,8 +162,8 @@ pub fn do_recover_stranded_funds(
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotFound)?;
+        .get(&Symbol::new(env, "admin"))
+        .ok_or(Error::NotInitialized)?;
 
     if admin != stored_admin {
         return Err(Error::Forbidden);

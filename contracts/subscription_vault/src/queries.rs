@@ -3,12 +3,12 @@
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
 use crate::types::{DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
-use soroban_sdk::{contracttype, Address, Env, Vec};
+use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     env.storage()
         .instance()
-        .get(&DataKey::Sub(subscription_id))
+        .get(&subscription_id)
         .ok_or(Error::NotFound)
 }
 
@@ -69,11 +69,7 @@ pub fn get_subscriptions_by_merchant(
     let mut i = start;
     while i < end {
         let sub_id = ids.get(i).unwrap();
-        if let Some(sub) = env
-            .storage()
-            .instance()
-            .get::<DataKey, Subscription>(&DataKey::Sub(sub_id))
-        {
+        if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&sub_id) {
             result.push_back(sub);
         }
         i += 1;
@@ -102,6 +98,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::GracePeriod => true,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
     };
@@ -168,37 +165,39 @@ pub fn list_subscriptions_by_subscriber(
         return Err(Error::InvalidInput);
     }
 
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    // Get the next_id counter to determine the range of valid subscription IDs
+    let next_id_key = Symbol::new(env, "next_id");
+    let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
 
     let mut subscription_ids = Vec::new(env);
     let mut count = 0u32;
     let mut last_found_id = start_from_id;
 
+    // Iterate through all subscription IDs from start_from_id (inclusive) and filter by subscriber
     for id in start_from_id..next_id {
-        if let Some(sub) = env
-            .storage()
-            .instance()
-            .get::<DataKey, Subscription>(&DataKey::Sub(id))
-        {
-            if sub.subscriber == subscriber {
-                subscription_ids.push_back(id);
-                count += 1;
-                last_found_id = id;
-                if count >= limit {
-                    break;
+        match env.storage().instance().get::<u32, Subscription>(&id) {
+            Some(sub) => {
+                if sub.subscriber == subscriber {
+                    subscription_ids.push_back(id);
+                    count += 1;
+                    last_found_id = id;
+                    if count >= limit {
+                        break;
+                    }
                 }
+            }
+            None => {
+                // Subscription was deleted or ID skipped; continue to next
             }
         }
     }
 
+    // Determine if there are more subscriptions by checking beyond the last found
     let has_next = if count >= limit {
+        // We hit the limit; check if there is at least one more subscriber match
         let mut found_next = false;
         for id in (last_found_id + 1)..next_id {
-            if let Some(sub) = env
-                .storage()
-                .instance()
-                .get::<DataKey, Subscription>(&DataKey::Sub(id))
-            {
+            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
                 if sub.subscriber == subscriber {
                     found_next = true;
                     break;

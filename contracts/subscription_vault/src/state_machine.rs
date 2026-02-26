@@ -1,5 +1,7 @@
 //! Subscription status state machine and transition validation.
 //!
+//! Full subscription lifecycle and on-chain representation are described in `docs/subscription_lifecycle.md`.
+//!
 //! Kept in a separate module so PRs touching state transitions do not conflict
 //! with PRs touching billing, batch charge, or top-up estimation.
 
@@ -42,6 +44,7 @@ pub fn validate_status_transition(
             SubscriptionStatus::Paused
                 | SubscriptionStatus::Cancelled
                 | SubscriptionStatus::InsufficientBalance
+                | SubscriptionStatus::GracePeriod
         ),
         SubscriptionStatus::Paused => {
             matches!(
@@ -54,6 +57,14 @@ pub fn validate_status_transition(
             matches!(
                 to,
                 SubscriptionStatus::Active | SubscriptionStatus::Cancelled
+            )
+        }
+        SubscriptionStatus::GracePeriod => {
+            matches!(
+                to,
+                SubscriptionStatus::Active
+                    | SubscriptionStatus::Cancelled
+                    | SubscriptionStatus::InsufficientBalance
             )
         }
     };
@@ -74,12 +85,18 @@ pub fn get_allowed_transitions(status: &SubscriptionStatus) -> &'static [Subscri
             SubscriptionStatus::Paused,
             SubscriptionStatus::Cancelled,
             SubscriptionStatus::InsufficientBalance,
+            SubscriptionStatus::GracePeriod,
         ],
         SubscriptionStatus::Paused => &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled],
         SubscriptionStatus::Cancelled => &[],
         SubscriptionStatus::InsufficientBalance => {
             &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled]
         }
+        SubscriptionStatus::GracePeriod => &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::InsufficientBalance,
+        ],
     }
 }
 
