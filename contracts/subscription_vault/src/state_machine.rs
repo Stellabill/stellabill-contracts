@@ -44,7 +44,6 @@ pub fn validate_status_transition(
             SubscriptionStatus::Paused
                 | SubscriptionStatus::Cancelled
                 | SubscriptionStatus::InsufficientBalance
-                | SubscriptionStatus::GracePeriod
         ),
         SubscriptionStatus::Paused => {
             matches!(
@@ -57,14 +56,6 @@ pub fn validate_status_transition(
             matches!(
                 to,
                 SubscriptionStatus::Active | SubscriptionStatus::Cancelled
-            )
-        }
-        SubscriptionStatus::GracePeriod => {
-            matches!(
-                to,
-                SubscriptionStatus::Active
-                    | SubscriptionStatus::Cancelled
-                    | SubscriptionStatus::InsufficientBalance
             )
         }
     };
@@ -85,18 +76,12 @@ pub fn get_allowed_transitions(status: &SubscriptionStatus) -> &'static [Subscri
             SubscriptionStatus::Paused,
             SubscriptionStatus::Cancelled,
             SubscriptionStatus::InsufficientBalance,
-            SubscriptionStatus::GracePeriod,
         ],
         SubscriptionStatus::Paused => &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled],
         SubscriptionStatus::Cancelled => &[],
         SubscriptionStatus::InsufficientBalance => {
             &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled]
         }
-        SubscriptionStatus::GracePeriod => &[
-            SubscriptionStatus::Active,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::InsufficientBalance,
-        ],
     }
 }
 
