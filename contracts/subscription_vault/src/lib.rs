@@ -1,5 +1,8 @@
 #![no_std]
 
+//! Prepaid subscription vault for recurring USDC billing.
+//! For subscription lifecycle, status transitions, and on-chain representation see `docs/subscription_lifecycle.md`.
+
 // ── Modules ──────────────────────────────────────────────────────────────────
 mod admin;
 mod charge_core;
@@ -294,7 +297,19 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::*;
 
 pub use queries::compute_next_charge_info;
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
+
+const STORAGE_VERSION: u32 = 1;
+const MAX_EXPORT_LIMIT: u32 = 100;
+
+fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored_admin = admin::require_admin(env)?;
+    if admin != &stored_admin {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
 
 // ── Contract ─────────────────────────────────────────────────────────────────
 
@@ -309,8 +324,15 @@ impl SubscriptionVault {
     // ── Admin / Config ───────────────────────────────────────────────────
 
     /// Initialize the contract: set token address, admin, and minimum top-up.
-    pub fn init(env: Env, token: Address, admin: Address, min_topup: i128) -> Result<(), Error> {
-        admin::do_init(&env, token, admin, min_topup)
+    pub fn init(
+        env: Env,
+        token: Address,
+        token_decimals: u32,
+        admin: Address,
+        min_topup: i128,
+        grace_period: u64,
+    ) -> Result<(), Error> {
+        admin::do_init(&env, token, token_decimals, admin, min_topup, grace_period)
     }
 
     /// Update the minimum top-up threshold. Only callable by admin.
@@ -374,6 +396,140 @@ impl SubscriptionVault {
         admin::do_batch_charge(&env, &subscription_ids)
     }
 
+    /// **ADMIN ONLY**: Export contract-level configuration for migration tooling.
+    ///
+    /// Read-only snapshot intended for carefully managed upgrades.
+    pub fn export_contract_snapshot(env: Env, admin: Address) -> Result<ContractSnapshot, Error> {
+        require_admin_auth(&env, &admin)?;
+
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "token"))
+            .ok_or(Error::NotFound)?;
+        let min_topup: i128 = admin::get_min_topup(&env)?;
+        let next_id: u32 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0);
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_contract_snapshot"),),
+            (admin.clone(), env.ledger().timestamp()),
+        );
+
+        Ok(ContractSnapshot {
+            admin,
+            token,
+            min_topup,
+            next_id,
+            storage_version: STORAGE_VERSION,
+            timestamp: env.ledger().timestamp(),
+        })
+    }
+
+    /// **ADMIN ONLY**: Export a single subscription summary for migration tooling.
+    pub fn export_subscription_summary(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+    ) -> Result<SubscriptionSummary, Error> {
+        require_admin_auth(&env, &admin)?;
+        let sub = queries::get_subscription(&env, subscription_id)?;
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin: admin.clone(),
+                start_id: subscription_id,
+                limit: 1,
+                exported: 1,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(SubscriptionSummary {
+            subscription_id,
+            subscriber: sub.subscriber,
+            merchant: sub.merchant,
+            amount: sub.amount,
+            interval_seconds: sub.interval_seconds,
+            last_payment_timestamp: sub.last_payment_timestamp,
+            status: sub.status,
+            prepaid_balance: sub.prepaid_balance,
+            usage_enabled: sub.usage_enabled,
+        })
+    }
+
+    /// **ADMIN ONLY**: Export a paginated list of subscription summaries.
+    pub fn export_subscription_summaries(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<Vec<SubscriptionSummary>, Error> {
+        require_admin_auth(&env, &admin)?;
+        if limit > MAX_EXPORT_LIMIT {
+            return Err(Error::InvalidExportLimit);
+        }
+        if limit == 0 {
+            return Ok(Vec::new(&env));
+        }
+
+        let next_id: u32 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0);
+        if start_id >= next_id {
+            return Ok(Vec::new(&env));
+        }
+
+        let end_id = start_id.saturating_add(limit).min(next_id);
+        let mut out = Vec::new(&env);
+        let mut exported = 0u32;
+        let mut id = start_id;
+        while id < end_id {
+            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+                out.push_back(SubscriptionSummary {
+                    subscription_id: id,
+                    subscriber: sub.subscriber,
+                    merchant: sub.merchant,
+                    amount: sub.amount,
+                    interval_seconds: sub.interval_seconds,
+                    last_payment_timestamp: sub.last_payment_timestamp,
+                    status: sub.status,
+                    prepaid_balance: sub.prepaid_balance,
+                    usage_enabled: sub.usage_enabled,
+                });
+                exported += 1;
+            }
+            id += 1;
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin,
+                start_id,
+                limit,
+                exported,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(out)
+    }
+
+    pub fn set_grace_period(env: Env, admin: Address, grace_period: u64) -> Result<(), Error> {
+        admin::do_set_grace_period(&env, admin, grace_period)
+    }
+
+    pub fn get_grace_period(env: Env) -> Result<u64, Error> {
+        admin::get_grace_period(&env)
+    }
+
     // ── Subscription lifecycle ───────────────────────────────────────────
 
     /// Create a new subscription. Caller deposits initial USDC; contract stores agreement.
@@ -398,6 +554,7 @@ impl SubscriptionVault {
         interval_seconds: u64,
         usage_enabled: bool,
         expiration: Option<u64>,
+        _expiration: Option<u64>,
     ) -> Result<u32, Error> {
 
 
@@ -450,6 +607,87 @@ impl SubscriptionVault {
         env.storage().instance().set(&id, &sub);
         Ok(id)
         )
+    }
+
+    /// Creates a plan template that can be used to instantiate subscriptions.
+    ///
+    /// Plan templates allow merchants to define reusable subscription offerings
+    /// with predefined parameters. This ensures consistency and reduces the need
+    /// for repeated parameter input when creating similar subscriptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` - The merchant address that owns this plan template
+    /// * `amount` - The recurring charge amount per interval
+    /// * `interval_seconds` - The billing interval in seconds
+    /// * `usage_enabled` - Whether usage-based charging is enabled
+    ///
+    /// # Returns
+    ///
+    /// The unique plan template ID that can be used to create subscriptions
+    ///
+    /// # Example Use Cases
+    ///
+    /// - "Basic Plan": $9.99/month with standard features
+    /// - "Premium Plan": $29.99/month with advanced features
+    /// - "Enterprise Plan": Custom pricing with usage-based billing
+    pub fn create_plan_template(
+        env: Env,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+    ) -> Result<u32, Error> {
+        subscription::do_create_plan_template(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            usage_enabled,
+        )
+    }
+
+    /// Creates a subscription from a predefined plan template.
+    ///
+    /// This function instantiates a new subscription using the parameters defined
+    /// in a plan template. The subscriber only needs to provide their address and
+    /// the template ID, while all other parameters (amount, interval, usage settings)
+    /// are inherited from the template.
+    ///
+    /// # Arguments
+    ///
+    /// * `subscriber` - The subscriber address for the new subscription
+    /// * `plan_template_id` - The ID of the plan template to use
+    ///
+    /// # Returns
+    ///
+    /// The unique subscription ID for the newly created subscription
+    ///
+    /// # Benefits
+    ///
+    /// - Reduces parameter input errors
+    /// - Ensures consistency across subscriptions using the same plan
+    /// - Simplifies the subscription creation process for end users
+    /// - Allows merchants to update plan offerings centrally
+    pub fn create_subscription_from_plan(
+        env: Env,
+        subscriber: Address,
+        plan_template_id: u32,
+    ) -> Result<u32, Error> {
+        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
+    }
+
+    /// Retrieves a plan template by its ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `plan_template_id` - The ID of the plan template to retrieve
+    ///
+    /// # Returns
+    ///
+    /// The plan template details
+    pub fn get_plan_template(env: Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
+        subscription::get_plan_template(&env, plan_template_id)
     }
 
     /// Subscriber deposits more USDC into their prepaid vault.
@@ -635,11 +873,64 @@ impl SubscriptionVault {
 
     // ── Charging ─────────────────────────────────────────────────────────
 
-    /// Billing engine calls this to charge one interval.
+    /// Charge a subscription for one billing interval.
     ///
-    /// Enforces strict interval timing and replay protection.
+    /// This function attempts to charge the subscriber's prepaid balance for the
+    /// recurring subscription fee. It enforces:
+    /// - The subscription must be in `Active` status
+    /// - The billing interval must have elapsed since the last charge
+    /// - The prepaid balance must be sufficient to cover the charge amount
+    ///
+    /// # Preconditions
+    ///
+    /// - The subscription must exist and be in `Active` status
+    /// - `last_payment_timestamp + interval_seconds` must be <= current ledger timestamp
+    /// - `prepaid_balance >= amount` (the subscription's recurring charge amount)
+    ///
+    /// # Behavior
+    ///
+    /// On success:
+    /// - `prepaid_balance` is reduced by `amount`
+    /// - `last_payment_timestamp` is updated to current timestamp
+    /// - A `SubscriptionChargedEvent` is emitted
+    /// - The subscription remains `Active`
+    ///
+    /// On failure (insufficient balance):
+    /// - No changes are made to the subscription's prepaid balance
+    /// - Status transitions to `InsufficientBalance`
+    /// - An `Error::InsufficientBalance` error is returned
+    ///
+    /// # Error Cases
+    ///
+    /// | Error | Condition |
+    /// |-------|-----------|
+    /// | `NotFound` | Subscription ID does not exist |
+    /// | `NotActive` | Subscription is not in `Active` status (Paused, Cancelled, or InsufficientBalance) |
+    /// | `IntervalNotElapsed` | Not enough time has passed since last charge |
+    /// | `Replay` | This billing period has already been charged |
+    /// | `InsufficientBalance` | `prepaid_balance < amount` |
+    ///
+    /// # Non-Destructive Failure Guarantee
+    ///
+    /// When a charge fails due to insufficient balance:
+    /// - The subscriber's prepaid balance is NOT deducted
+    /// - No tokens are transferred to the merchant
+    /// - The subscription metadata remains unchanged (except status)
+    /// - The failure is atomic - no partial state updates occur
+    ///
+    /// # Recovery
+    ///
+    /// If the charge fails due to insufficient balance:
+    /// 1. Subscriber calls `deposit_funds` to add more funds
+    /// 2. Subscriber calls `resume_subscription` to transition back to `Active`
+    /// 3. The next charge attempt will succeed (if balance is sufficient)
+    ///
+    /// # Gas Efficiency
+    ///
+    /// The function uses early validation to avoid unnecessary state modifications.
+    /// Balance check is performed before any state changes.
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
-        charge_core::charge_one(&env, subscription_id, None)
+        charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
     }
 
     /// Charge a metered usage amount against the subscription's prepaid balance.
@@ -666,11 +957,11 @@ impl SubscriptionVault {
     ///
     /// | Variant | Reason |
     /// |---------|--------|
-    /// | `NotFound` | Subscription ID does not exist. |
-    /// | `NotActive` | Subscription is not `Active`. |
-    /// | `UsageNotEnabled` | `usage_enabled` is `false`. |
+    /// | `NotFound` | Subscription ID does not exist in storage. |
+    /// | `NotActive` | Subscription is not in the `Active` state. |
+    /// | `UsageNotEnabled` | `usage_enabled` is flag is set to `false`. |
     /// | `InvalidAmount` | `usage_amount` is zero or negative. |
-    /// | `InsufficientPrepaidBalance` | Prepaid balance cannot cover the debit. |
+    /// | `InsufficientPrepaidBalance` | Prepaid balance in the vault cannot cover the debit. |
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
@@ -772,6 +1063,16 @@ impl SubscriptionVault {
         queries::get_merchant_subscription_count(&env, merchant)
     }
 
+    /// Merchant-initiated one-off charge.
+    pub fn charge_one_off(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
+    }
+
     /// List all subscription IDs for a given subscriber with pagination support.
     ///
     /// This read-only function retrieves subscription IDs owned by a subscriber in a paginated manner.
@@ -810,13 +1111,6 @@ impl SubscriptionVault {
         limit: u32,
     ) -> Result<crate::queries::SubscriptionsPage, Error> {
         crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
-    }
-
-    fn _next_id(env: &Env) -> u32 {
-        let key = soroban_sdk::Symbol::new(env, "next_id");
-        let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-        env.storage().instance().set(&key, &(id + 1));
-        id
     }
 }
 

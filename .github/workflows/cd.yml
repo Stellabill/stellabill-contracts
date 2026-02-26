@@ -16,10 +16,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          targets: wasm32-unknown-unknown
+
+      - name: Add WASM target
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4

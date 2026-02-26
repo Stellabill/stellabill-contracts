@@ -1,5 +1,7 @@
 # Subscription State Machine Documentation
 
+For full lifecycle, on-chain representation, and invariants see [subscription_lifecycle.md](subscription_lifecycle.md).
+
 ## Overview
 
 This document describes the state machine for `SubscriptionStatus` in the SubscriptionVault contract. The state machine enforces valid lifecycle transitions to prevent invalid states and ensure data integrity.
@@ -80,13 +82,19 @@ pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> boo
 
 ### Error Handling
 
-Invalid transitions return `Error::InvalidStatusTransition` (error code 400) without mutating storage:
+Invalid transitions return `Error::InvalidStatusTransition` (error code 400) without mutating storage. Lifecycle-related errors from `contracts/subscription_vault/src/types.rs`:
 
 ```rust
 pub enum Error {
     NotFound = 404,
     Unauthorized = 401,
+    IntervalNotElapsed = 1001,
+    NotActive = 1002,
     InvalidStatusTransition = 400,
+    BelowMinimumTopup = 402,
+    Overflow = 403,
+    Underflow = 1004,
+    InsufficientBalance = 1003,
 }
 ```
 

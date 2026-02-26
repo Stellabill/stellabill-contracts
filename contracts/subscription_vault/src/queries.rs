@@ -2,8 +2,6 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-#![allow(dead_code)]
-
 use crate::types::{DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
@@ -100,6 +98,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::GracePeriod => true,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
     };
@@ -163,7 +162,7 @@ pub fn list_subscriptions_by_subscriber(
     limit: u32,
 ) -> Result<SubscriptionsPage, Error> {
     if limit == 0 {
-        return Err(Error::NotFound);
+        return Err(Error::InvalidInput);
     }
 
     // Get the next_id counter to determine the range of valid subscription IDs

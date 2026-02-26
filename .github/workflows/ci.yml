@@ -5,19 +5,29 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      toolchain:
+        description: Rust toolchain version
+        required: true
+        default: stable
 
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      TOOLCHAIN: ${{ inputs.toolchain || 'stable' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
+          toolchain: ${{ env.TOOLCHAIN }}
+
+      - name: Add WASM target
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
