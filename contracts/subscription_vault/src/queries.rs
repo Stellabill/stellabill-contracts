@@ -2,7 +2,10 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
+use crate::types::{
+    BillingPeriodSnapshot, CapInfo, DataKey, Error, NextChargeInfo, Subscription,
+    SubscriptionStatus,
+};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
@@ -236,4 +239,15 @@ pub fn list_subscriptions_by_subscriber(
         subscription_ids,
         has_next,
     })
+}
+
+pub fn get_billing_period_snapshot(
+    env: &Env,
+    subscription_id: u32,
+    period_index: u32,
+) -> Result<BillingPeriodSnapshot, Error> {
+    env.storage()
+        .instance()
+        .get(&(Symbol::new(env, "bps"), subscription_id, period_index))
+        .ok_or(Error::NotFound)
 }

@@ -77,6 +77,47 @@ pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Resu
     Ok(())
 }
 
+pub fn do_set_treasury(env: &Env, admin: Address, treasury: Address) -> Result<(), Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Forbidden);
+    }
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "treasury"), &treasury);
+    Ok(())
+}
+
+pub fn do_get_treasury(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "treasury"))
+        .ok_or(Error::TreasuryNotConfigured)
+}
+
+pub fn do_set_protocol_fee_bps(env: &Env, admin: Address, fee_bps: u32) -> Result<(), Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Forbidden);
+    }
+    if fee_bps > 10_000 {
+        return Err(Error::InvalidFeeBps);
+    }
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, "protocol_fee_bps"), &fee_bps);
+    Ok(())
+}
+
+pub fn get_protocol_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "protocol_fee_bps"))
+        .unwrap_or(0)
+}
+
 pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
     Ok(env
         .storage()

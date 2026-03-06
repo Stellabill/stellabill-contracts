@@ -175,6 +175,39 @@
                             },
                             {
                               "key": {
+                                "symbol": "billing_anchor_timestamp"
+                              },
+                              "val": {
+                                "u64": 1000
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "current_period_index"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "current_period_usage_units"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "expiration"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "interval_seconds"
                               },
                               "val": {
@@ -243,10 +276,30 @@
                             },
                             {
                               "key": {
+                                "symbol": "usage_cap_units"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "usage_enabled"
                               },
                               "val": {
                                 "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "usage_rate_limit_max_calls"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
+                                "symbol": "usage_rate_window_secs"
+                              },
+                              "val": {
+                                "u64": 0
                               }
                             }
                           ]

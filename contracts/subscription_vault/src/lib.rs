@@ -7,8 +7,8 @@
 //!
 //! For lifetime charge cap semantics see `docs/lifetime_caps.md`.
 
-// ── Modules ──────────────────────────────────────────────────────────────────
 mod admin;
+mod blocklist;
 mod charge_core;
 mod merchant;
 mod queries;
@@ -21,12 +21,12 @@ mod types;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
 
-// ── Re-exports ────────────────────────────────────────────────────────────────
+pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
 pub use queries::compute_next_charge_info;
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    BatchChargeResult, BatchWithdrawResult, CapInfo, ContractSnapshot, DataKey,
-    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
+    BatchChargeResult, BatchWithdrawResult, BillingPeriodSnapshot, CapInfo, ContractSnapshot,
+    DataKey, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
     LifetimeCapReachedEvent, MerchantWithdrawalEvent, MigrationExportEvent, NextChargeInfo,
     OneOffChargedEvent, PlanTemplate, RecoveryEvent, RecoveryReason, ReferralConfig,
     ReferralRecord, ReferralRegisteredEvent, ReferralRewardCreditedEvent,
@@ -34,17 +34,12 @@ pub use types::{
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
     SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
 };
+pub use types::{BILLING_SNAPSHOT_FLAG_CLOSED, BILLING_SNAPSHOT_FLAG_USAGE_CHARGED};
 
-/// Maximum subscription ID this contract will ever allocate.
-///
-/// When the counter reaches this value [`SubscriptionVault::create_subscription`]
-/// returns [`Error::SubscriptionLimitReached`] instead of wrapping or panicking.
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 
 const STORAGE_VERSION: u32 = 2;
 const MAX_EXPORT_LIMIT: u32 = 100;
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
 
 fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     admin.require_auth();
@@ -69,16 +64,11 @@ fn require_not_emergency_stop(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
-// ── Contract ──────────────────────────────────────────────────────────────────
-
 #[contract]
 pub struct SubscriptionVault;
 
 #[contractimpl]
 impl SubscriptionVault {
-    // ── Admin / Config ────────────────────────────────────────────────────────
-
-    /// Initialize the contract: set token address, admin, minimum top-up, and grace period.
     pub fn init(
         env: Env,
         token: Address,
@@ -90,27 +80,46 @@ impl SubscriptionVault {
         admin::do_init(&env, token, token_decimals, admin, min_topup, grace_period)
     }
 
-    /// Update the minimum top-up threshold. Only callable by admin.
     pub fn set_min_topup(env: Env, admin: Address, min_topup: i128) -> Result<(), Error> {
         admin::do_set_min_topup(&env, admin, min_topup)
     }
 
-    /// Get the current minimum top-up threshold.
     pub fn get_min_topup(env: Env) -> Result<i128, Error> {
         admin::get_min_topup(&env)
     }
 
-    /// Get the current admin address.
+    pub fn set_grace_period(env: Env, admin: Address, grace_period: u64) -> Result<(), Error> {
+        admin::do_set_grace_period(&env, admin, grace_period)
+    }
+
+    pub fn get_grace_period(env: Env) -> Result<u64, Error> {
+        admin::get_grace_period(&env)
+    }
+
+    pub fn set_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), Error> {
+        admin::do_set_treasury(&env, admin, treasury)
+    }
+
+    pub fn get_treasury(env: Env) -> Result<Address, Error> {
+        admin::do_get_treasury(&env)
+    }
+
+    pub fn set_protocol_fee_bps(env: Env, admin: Address, fee_bps: u32) -> Result<(), Error> {
+        admin::do_set_protocol_fee_bps(&env, admin, fee_bps)
+    }
+
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        admin::get_protocol_fee_bps(&env)
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         admin::do_get_admin(&env)
     }
 
-    /// Rotate admin to a new address. Only callable by current admin.
     pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin)
     }
 
-    /// Recover stranded funds from the contract. Admin only.
     pub fn recover_stranded_funds(
         env: Env,
         admin: Address,
@@ -121,12 +130,6 @@ impl SubscriptionVault {
         admin::do_recover_stranded_funds(&env, admin, recipient, amount, reason)
     }
 
-    /// Charge a batch of subscriptions in one transaction. Admin only.
-    ///
-    /// **Disabled when emergency stop is active.**
-    ///
-    /// Returns a per-subscription result vector so callers can identify
-    /// which charges succeeded and which failed (with error codes).
     pub fn batch_charge(
         env: Env,
         subscription_ids: Vec<u32>,
@@ -135,14 +138,10 @@ impl SubscriptionVault {
         admin::do_batch_charge(&env, &subscription_ids)
     }
 
-    // ── Emergency Stop ────────────────────────────────────────────────────────
-
-    /// Get the current emergency stop status.
     pub fn get_emergency_stop_status(env: Env) -> bool {
         get_emergency_stop(&env)
     }
 
-    /// Enable the emergency stop (circuit breaker). Admin only.
     pub fn enable_emergency_stop(env: Env, admin: Address) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         if get_emergency_stop(&env) {
@@ -160,10 +159,6 @@ impl SubscriptionVault {
         Ok(())
     }
 
-    /// Disable the emergency stop (circuit breaker). Admin only.
-    ///
-    /// When disabled, normal contract operations resume. This should only be used
-    /// after the incident has been resolved and the contract is safe to operate.
     pub fn disable_emergency_stop(env: Env, admin: Address) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
 
@@ -186,9 +181,6 @@ impl SubscriptionVault {
         Ok(())
     }
 
-    // ── Migration / Export ────────────────────────────────────────────────────
-
-    /// **ADMIN ONLY**: Export contract-level configuration for migration tooling.
     pub fn export_contract_snapshot(env: Env, admin: Address) -> Result<ContractSnapshot, Error> {
         require_admin_auth(&env, &admin)?;
 
@@ -219,7 +211,6 @@ impl SubscriptionVault {
         })
     }
 
-    /// Export a single subscription summary for migration tooling. Admin only.
     pub fn export_subscription_summary(
         env: Env,
         admin: Address,
@@ -254,7 +245,6 @@ impl SubscriptionVault {
         })
     }
 
-    /// Export a paginated list of subscription summaries. Admin only.
     pub fn export_subscription_summaries(
         env: Env,
         admin: Address,
@@ -316,22 +306,6 @@ impl SubscriptionVault {
         Ok(out)
     }
 
-    // ── Subscription Lifecycle ────────────────────────────────────────────────
-
-    /// Create a new subscription.
-    ///
-    /// **Disabled when emergency stop is active.**
-    ///
-    /// # Arguments
-    ///
-    /// * `lifetime_cap` - Optional maximum total amount (token base units) that may ever be
-    ///   charged for this subscription. `None` means no cap. When the cumulative charged
-    ///   amount reaches this value, the subscription is cancelled automatically.
-    ///   See `docs/lifetime_caps.md` for full semantics.
-    ///
-    /// # Errors
-    /// Returns [`Error::SubscriptionLimitReached`] if the contract has already allocated
-    /// [`MAX_SUBSCRIPTION_ID`] subscriptions and can issue no more unique IDs.
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -354,9 +328,6 @@ impl SubscriptionVault {
         )
     }
 
-    /// Subscriber deposits USDC into their prepaid vault.
-    ///
-    /// **Disabled when emergency stop is active.**
     pub fn deposit_funds(
         env: Env,
         subscription_id: u32,
@@ -367,12 +338,6 @@ impl SubscriptionVault {
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
-    /// Creates a plan template that can be used to instantiate subscriptions.
-    ///
-    /// # Arguments
-    ///
-    /// * `lifetime_cap` - Optional default lifetime cap applied to subscriptions
-    ///   created from this template. `None` means template subscriptions have no cap.
     pub fn create_plan_template(
         env: Env,
         merchant: Address,
@@ -391,7 +356,6 @@ impl SubscriptionVault {
         )
     }
 
-    /// Creates a subscription from a predefined plan template.
     pub fn create_subscription_from_plan(
         env: Env,
         subscriber: Address,
@@ -400,13 +364,10 @@ impl SubscriptionVault {
         subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
     }
 
-    /// Retrieves a plan template by its ID.
     pub fn get_plan_template(env: Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
         subscription::get_plan_template(&env, plan_template_id)
     }
 
-    /// Cancel the subscription. Allowed from Active, Paused, or InsufficientBalance.
-    /// Transitions to the terminal `Cancelled` state.
     pub fn cancel_subscription(
         env: Env,
         subscription_id: u32,
@@ -415,16 +376,6 @@ impl SubscriptionVault {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
-    /// Subscriber withdraws their remaining prepaid balance after cancellation.
-    pub fn withdraw_subscriber_funds(
-        env: Env,
-        subscription_id: u32,
-        subscriber: Address,
-    ) -> Result<(), Error> {
-        subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
-    }
-
-    /// Pause subscription (no charges until resumed). Allowed from Active.
     pub fn pause_subscription(
         env: Env,
         subscription_id: u32,
@@ -433,7 +384,6 @@ impl SubscriptionVault {
         subscription::do_pause_subscription(&env, subscription_id, authorizer)
     }
 
-    /// Resume a subscription to Active. Allowed from Paused or InsufficientBalance.
     pub fn resume_subscription(
         env: Env,
         subscription_id: u32,
@@ -442,7 +392,39 @@ impl SubscriptionVault {
         subscription::do_resume_subscription(&env, subscription_id, authorizer)
     }
 
-    /// Merchant-initiated one-off charge against the subscription's prepaid balance.
+    pub fn withdraw_subscriber_funds(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
+    }
+
+    pub fn set_usage_cap(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        usage_cap_units: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_usage_cap(&env, subscription_id, authorizer, usage_cap_units)
+    }
+
+    pub fn set_usage_rate_limit(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        max_calls: Option<u32>,
+        window_seconds: u64,
+    ) -> Result<(), Error> {
+        subscription::do_set_usage_rate_limit(
+            &env,
+            subscription_id,
+            authorizer,
+            max_calls,
+            window_seconds,
+        )
+    }
+
     pub fn charge_one_off(
         env: Env,
         subscription_id: u32,
@@ -452,46 +434,36 @@ impl SubscriptionVault {
         subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
     }
 
-    // ── Charging ──────────────────────────────────────────────────────────────
-
-    /// Charge a subscription for one billing interval.
-    ///
-    /// **This function is disabled when the emergency stop is active.**
-    ///
-    /// Enforces strict interval timing and replay protection.
     pub fn charge_subscription(env: Env, subscription_id: u32) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
     }
 
-    /// Charge a metered usage amount against the subscription's prepaid balance.
-    ///
-    /// **This function is disabled when the emergency stop is active.**
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
 
-    // ── Merchant ──────────────────────────────────────────────────────────────
-
-    /// Merchant withdraws accumulated USDC to their wallet.
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
-    /// Get the merchant's accumulated (uncharged) balance.
+    pub fn withdraw_treasury_funds(env: Env, admin: Address, amount: i128) -> Result<(), Error> {
+        merchant::withdraw_treasury_funds(&env, admin, amount)
+    }
+
     pub fn get_merchant_balance(env: Env, merchant: Address) -> i128 {
         merchant::get_merchant_balance(&env, &merchant)
     }
 
-    // ── Queries ──────────────────────────────────────────────────────────────
+    pub fn get_treasury_balance(env: Env) -> i128 {
+        merchant::get_treasury_balance(&env)
+    }
 
-    /// Read subscription by id.
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
     }
 
-    /// Estimate how much a subscriber needs to deposit to cover N future intervals.
     pub fn estimate_topup_for_intervals(
         env: Env,
         subscription_id: u32,
@@ -500,13 +472,11 @@ impl SubscriptionVault {
         queries::estimate_topup_for_intervals(&env, subscription_id, num_intervals)
     }
 
-    /// Get estimated next charge info (timestamp + whether charge is expected).
     pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
         let sub = queries::get_subscription(&env, subscription_id)?;
-        Ok(compute_next_charge_info(&sub))
+        Ok(queries::compute_next_charge_info(&sub))
     }
 
-    /// Return subscriptions for a merchant, paginated.
     pub fn get_subscriptions_by_merchant(
         env: Env,
         merchant: Address,
@@ -516,31 +486,32 @@ impl SubscriptionVault {
         queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
     }
 
-    /// Return the total number of subscriptions ever created.
     pub fn get_subscription_count(env: Env) -> u32 {
         let key = Symbol::new(&env, "next_id");
         env.storage().instance().get(&key).unwrap_or(0u32)
     }
 
-    /// Return the total number of subscriptions for a merchant.
     pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
         queries::get_merchant_subscription_count(&env, merchant)
     }
 
-    /// List all subscription IDs for a given subscriber with pagination.
     pub fn list_subscriptions_by_subscriber(
         env: Env,
         subscriber: Address,
         start_from_id: u32,
         limit: u32,
-    ) -> Result<crate::queries::SubscriptionsPage, Error> {
-        crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
+    ) -> Result<queries::SubscriptionsPage, Error> {
+        queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
     }
 
-    /// Get lifetime cap information for a subscription.
-    ///
-    /// Returns a [`CapInfo`] summary suitable for off-chain dashboards and UX displays.
-    /// When no cap is configured all cap-related fields return `None` / `false`.
+    pub fn get_billing_period_snapshot(
+        env: Env,
+        subscription_id: u32,
+        period_index: u32,
+    ) -> Result<BillingPeriodSnapshot, Error> {
+        queries::get_billing_period_snapshot(&env, subscription_id, period_index)
+    }
+
     pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> {
         queries::get_cap_info(&env, subscription_id)
     }
@@ -609,6 +580,29 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         referral::do_withdraw_referral_rewards(&env, referrer, amount)
+    pub fn add_to_blocklist(
+        env: Env,
+        authorizer: Address,
+        subscriber: Address,
+        reason: Option<soroban_sdk::String>,
+    ) -> Result<(), Error> {
+        blocklist::do_add_to_blocklist(&env, authorizer, subscriber, reason)
+    }
+
+    pub fn remove_from_blocklist(
+        env: Env,
+        admin: Address,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        blocklist::do_remove_from_blocklist(&env, admin, subscriber)
+    }
+
+    pub fn is_blocklisted(env: Env, subscriber: Address) -> bool {
+        blocklist::is_blocklisted(&env, &subscriber)
+    }
+
+    pub fn get_blocklist_entry(env: Env, subscriber: Address) -> Result<BlocklistEntry, Error> {
+        blocklist::get_blocklist_entry(&env, subscriber)
     }
 }
 
