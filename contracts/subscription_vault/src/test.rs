@@ -1,9 +1,10 @@
 use crate::{
-    SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
-    BILLING_SNAPSHOT_FLAG_CLOSED, BILLING_SNAPSHOT_FLAG_USAGE_CHARGED,
+    can_transition, compute_next_charge_info, get_allowed_transitions, validate_status_transition,
+    Error, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
+    SubscriptionVaultClient, MAX_SUBSCRIPTION_ID,
 };
-use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+use soroban_sdk::{Address, Env, Vec as SorobanVec};
 
 const INTERVAL: u64 = 10;
 
@@ -27,7 +28,15 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 
     client.init(&token, &6, &admin, &1, &0);
     client.set_treasury(&admin, &treasury);
-    (env, contract_id, admin, subscriber, merchant, treasury, token)
+    (
+        env,
+        contract_id,
+        admin,
+        subscriber,
+        merchant,
+        treasury,
+        token,
+    )
 }
 
 fn create_usage_sub(
@@ -36,17 +45,13 @@ fn create_usage_sub(
     merchant: &Address,
     amount: i128,
 ) -> u32 {
-    client.create_subscription(subscriber, merchant, &amount, &INTERVAL, &true, &None)
-    can_transition, compute_next_charge_info, get_allowed_transitions, validate_status_transition,
-    Error, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
-    SubscriptionVaultClient, MAX_SUBSCRIPTION_ID,
-};
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, Vec as SorobanVec};
+    client.create_subscription(
+        subscriber, merchant, &amount, &INTERVAL, &true, &None, &None,
+    )
+}
 
 // ── constants ─────────────────────────────────────────────────────────────────
 const T0: u64 = 1_000;
-const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days
 const AMOUNT: i128 = 10_000_000; // 10 USDC (6 decimals)
 const PREPAID: i128 = 50_000_000; // 50 USDC
 
@@ -106,6 +111,7 @@ fn create_test_subscription(
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     if status != SubscriptionStatus::Active {
@@ -532,6 +538,13 @@ fn test_subscription_struct_status_field() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -553,6 +566,13 @@ fn test_subscription_struct_with_lifetime_cap() {
         usage_enabled: false,
         lifetime_cap: Some(cap),
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -596,8 +616,15 @@ fn test_cancel_subscription_by_subscriber() {
     let (env, client, _, _) = setup_test_env();
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<i128>);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1000,
+        &86400,
+        &true,
+        &None,
+        &None::<i128>,
+    );
     client.cancel_subscription(&sub_id, &subscriber);
     assert_eq!(
         client.get_subscription(&sub_id).status,
@@ -611,8 +638,15 @@ fn test_cancel_subscription_unauthorized() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     let other = Address::generate(&env);
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<i128>);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1000,
+        &86400,
+        &true,
+        &None,
+        &None::<i128>,
+    );
     let result = client.try_cancel_subscription(&sub_id, &other);
     assert_eq!(result, Err(Ok(Error::Forbidden)));
 }
@@ -644,8 +678,15 @@ fn test_withdraw_subscriber_funds() {
     );
     token_admin.mint(&subscriber, &5000);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<i128>);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1000,
+        &86400,
+        &true,
+        &None,
+        &None::<i128>,
+    );
     client.deposit_funds(&sub_id, &subscriber, &5000);
     client.cancel_subscription(&sub_id, &subscriber);
     client.withdraw_subscriber_funds(&sub_id, &subscriber);
@@ -673,28 +714,8 @@ fn snapshots_written_after_successful_close() {
     let snap0 = client.get_billing_period_snapshot(&sub_id, &0);
     assert_eq!(snap0.total_usage_units, 25);
     assert_eq!(snap0.total_amount_charged, 25);
-    assert!(snap0.status_flags & BILLING_SNAPSHOT_FLAG_CLOSED != 0);
-    assert!(snap0.status_flags & BILLING_SNAPSHOT_FLAG_USAGE_CHARGED != 0);
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let min_topup = 5_000_000i128;
-
-    client.init(&token_addr, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &10_000_000i128,
-        &(30 * 24 * 60 * 60),
-        &false,
-        &None::<i128>,
-    );
-    client.cancel_subscription(&id, &merchant);
-    let result = client.try_deposit_funds(&id, &subscriber, &4_999_999);
-    assert!(result.is_err());
+    assert!(snap0.status_flags & crate::types::BILLING_SNAPSHOT_FLAG_CLOSED != 0);
+    assert!(snap0.status_flags & crate::types::BILLING_SNAPSHOT_FLAG_USAGE_CHARGED != 0);
 }
 
 #[test]
@@ -706,28 +727,6 @@ fn failed_charge_does_not_create_snapshot() {
     env.ledger().with_mut(|li| li.timestamp += INTERVAL + 1);
     assert!(client.try_charge_subscription(&sub_id).is_err());
     assert!(client.try_get_billing_period_snapshot(&sub_id, &0).is_err());
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let min_topup = 5_000_000i128;
-
-    client.init(&token_addr, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
-    token_admin.mint(&subscriber, &min_topup);
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &10_000_000i128,
-        &(30 * 24 * 60 * 60),
-        &false,
-        &None::<i128>,
-    );
-    assert!(client
-        .try_deposit_funds(&id, &subscriber, &min_topup)
-        .is_ok());
 }
 
 #[test]
@@ -789,30 +788,6 @@ fn status_becomes_insufficient_after_full_usage_debit() {
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::InsufficientBalance);
 }
-    let admin = Address::generate(&env);
-    let token_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    let min_topup = 5_000_000i128;
-    let deposit_amount = 10_000_000i128;
-
-    client.init(&token_addr, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
-    token_admin.mint(&subscriber, &deposit_amount);
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &deposit_amount,
-        &(30 * 24 * 60 * 60),
-        &false,
-        &None::<i128>,
-    );
-    assert!(client
-        .try_deposit_funds(&id, &subscriber, &deposit_amount)
-        .is_ok());
-}
 
 // ── Usage-charge tests ─────────────────────────────────────────────────────────
 
@@ -831,6 +806,7 @@ fn setup_usage(env: &Env) -> (SubscriptionVaultClient<'_>, u32) {
         &AMOUNT,
         &INTERVAL,
         &true,
+        &None,
         &None::<i128>,
     );
     seed_balance(env, &client, id, PREPAID);
@@ -852,6 +828,7 @@ fn setup_interval(env: &Env, interval: u64) -> (SubscriptionVaultClient<'_>, u32
         &AMOUNT,
         &interval,
         &false,
+        &None,
         &None::<i128>,
     );
     seed_balance(env, &client, id, PREPAID);
@@ -931,6 +908,13 @@ fn test_compute_next_charge_info_active() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -951,6 +935,13 @@ fn test_compute_next_charge_info_paused() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -971,6 +962,13 @@ fn test_compute_next_charge_info_cancelled() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -990,6 +988,13 @@ fn test_compute_next_charge_info_insufficient_balance() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -1009,6 +1014,13 @@ fn test_compute_next_charge_info_overflow_protection() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
+        billing_anchor_timestamp: 0,
+        current_period_index: 0,
+        current_period_usage_units: 0,
+        usage_cap_units: None,
+        usage_rate_limit_max_calls: None,
+        usage_rate_window_secs: 0,
+        expiration: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -1027,6 +1039,7 @@ fn test_get_next_charge_info_contract_method() {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     let info = client.get_next_charge_info(&id);
@@ -1052,6 +1065,7 @@ fn quick_create(env: &Env, client: &SubscriptionVaultClient) -> u32 {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     )
 }
@@ -1109,6 +1123,7 @@ fn test_id_at_max_returns_limit_reached() {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     assert!(
@@ -1137,6 +1152,7 @@ fn test_no_id_reuse_after_limit() {
             &AMOUNT,
             &INTERVAL,
             &false,
+            &None,
             &None::<i128>,
         );
         assert!(
@@ -1177,7 +1193,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1008)")]
+#[should_panic(expected = "Error(Contract, #405)")]
 fn test_recover_stranded_funds_zero_amount() {
     let (env, client, _, admin) = setup_test_env();
     let recipient = Address::generate(&env);
@@ -1241,6 +1257,7 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
         &1000i128,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     client.deposit_funds(&id0, &subscriber, &10_000_000i128);
@@ -1250,6 +1267,7 @@ fn setup_batch_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, u32
         &1000i128,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     env.ledger().set_timestamp(T0 + INTERVAL);
@@ -1287,6 +1305,7 @@ fn test_batch_charge_small_batch_5_subscriptions() {
             &1000i128,
             &INTERVAL,
             &false,
+            &None,
             &None::<i128>,
         );
         client.deposit_funds(&id, &subscriber, &10_000_000i128);
@@ -1335,7 +1354,15 @@ fn setup_capped(
 
     let merchant = Address::generate(env);
     env.ledger().set_timestamp(T0);
-    let id = client.create_subscription(&subscriber, &merchant, &amount, &interval, &false, &cap);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval,
+        &false,
+        &None,
+        &cap,
+    );
 
     // Deposit 1000 USDC so balance is never the constraint
     client.deposit_funds(&id, &subscriber, &1_000_000_000i128);
@@ -1605,6 +1632,7 @@ fn test_cap_enforced_for_usage_charges() {
         &AMOUNT,
         &INTERVAL,
         &true,
+        &None,
         &Some(cap),
     );
     client.deposit_funds(&id, &subscriber, &1_000_000_000i128);
@@ -1651,6 +1679,7 @@ fn test_cap_exact_hit_usage_cancels() {
         &AMOUNT,
         &INTERVAL,
         &true,
+        &None,
         &Some(cap),
     );
     client.deposit_funds(&id, &subscriber, &1_000_000_000i128);
@@ -1739,6 +1768,7 @@ fn test_cap_cancelled_subscriber_can_withdraw() {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &Some(cap),
     );
     client.deposit_funds(&id, &subscriber, &100_000_000i128);
@@ -1785,6 +1815,7 @@ fn test_batch_charge_respects_lifetime_cap() {
         &1000i128,
         &INTERVAL,
         &false,
+        &None,
         &None::<i128>,
     );
     client.deposit_funds(&id_uncapped, &subscriber, &100_000_000i128);
@@ -1796,6 +1827,7 @@ fn test_batch_charge_respects_lifetime_cap() {
         &1000i128,
         &INTERVAL,
         &false,
+        &None,
         &Some(1000i128),
     );
     client.deposit_funds(&id_capped, &subscriber, &100_000_000i128);
@@ -1838,6 +1870,7 @@ fn test_create_subscription_zero_cap_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &Some(0i128),
     );
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
@@ -1855,6 +1888,7 @@ fn test_create_subscription_negative_cap_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
+        &None,
         &Some(-1i128),
     );
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
@@ -1895,6 +1929,7 @@ fn test_deposit_funds_state_committed_before_transfer() {
         &(30 * 24 * 60 * 60u64),
         &false,
         &None,
+        &None,
     );
 
     // Deposit funds
@@ -1929,6 +1964,7 @@ fn test_withdraw_merchant_funds_state_committed_before_transfer() {
         &100_000000i128,
         &(30 * 24 * 60 * 60u64),
         &false,
+        &None,
         &None,
     );
 
@@ -1969,6 +2005,7 @@ fn test_withdraw_subscriber_funds_state_committed_before_transfer() {
         &(30 * 24 * 60 * 60u64),
         &false,
         &None,
+        &None,
     );
 
     // Deposit funds
@@ -2004,6 +2041,7 @@ fn test_multiple_deposits_maintain_consistent_state() {
         &(30 * 24 * 60 * 60u64),
         &false,
         &None,
+        &None,
     );
 
     // Make multiple deposits
@@ -2032,8 +2070,15 @@ fn test_charge_and_withdrawal_atomic_sequence() {
     const INTERVAL: u64 = 30 * 24 * 60 * 60;
     const AMOUNT: i128 = 10_000000i128;
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None,
+        &None,
+    );
 
     // Deposit enough for one charge
     client.deposit_funds(&sub_id, &subscriber, &50_000000i128);
@@ -2072,4 +2117,93 @@ fn test_reentrancy_protection_documentation() {
     // - withdraw_subscriber_funds: updates balance before transfer ✓
 
     assert!(true); // Placeholder to indicate test passed
+}
+
+// ── Blocklist Tests ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_merchant_can_block_and_unblock_subscriber() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    assert_eq!(client.is_subscriber_blocked(&merchant, &subscriber), false);
+
+    client.block_subscriber(&merchant, &subscriber);
+    assert_eq!(client.is_subscriber_blocked(&merchant, &subscriber), true);
+
+    client.unblock_subscriber(&merchant, &subscriber);
+    assert_eq!(client.is_subscriber_blocked(&merchant, &subscriber), false);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1022)")]
+fn test_blocked_subscriber_cannot_create_subscription() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    client.block_subscriber(&merchant, &subscriber);
+
+    client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None,
+        &None,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1022)")]
+fn test_blocked_subscriber_cannot_deposit_funds() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None,
+        &None,
+    );
+
+    client.block_subscriber(&merchant, &subscriber);
+
+    client.deposit_funds(&id, &subscriber, &AMOUNT);
+}
+
+#[test]
+fn test_blocklist_isolation_between_merchants() {
+    let (env, client, _, _) = setup_test_env();
+    let merchant_a = Address::generate(&env);
+    let merchant_b = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    client.block_subscriber(&merchant_a, &subscriber);
+
+    // Should be blocked for A but not B
+    assert_eq!(client.is_subscriber_blocked(&merchant_a, &subscriber), true);
+    assert_eq!(
+        client.is_subscriber_blocked(&merchant_b, &subscriber),
+        false
+    );
+
+    // Can still create subscription for B
+    let id_b = client.create_subscription(
+        &subscriber,
+        &merchant_b,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None,
+        &None,
+    );
+
+    // We proved isolation by being able to create a subscription for B
 }

@@ -55,17 +55,17 @@ pub fn do_create_subscription(
     interval_seconds: u64,
     usage_enabled: bool,
     expiration: Option<u64>,
+    lifetime_cap: Option<i128>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
+    if crate::merchant::is_subscriber_blocked(env, &merchant, &subscriber) {
+        return Err(Error::SubscriberBlocked);
+    }
     validate_non_negative(amount)?;
     if interval_seconds == 0 {
         return Err(Error::InvalidInput);
     }
     let now = env.ledger().timestamp();
-    lifetime_cap: Option<i128>,
-) -> Result<u32, Error> {
-    subscriber.require_auth();
-    validate_non_negative(amount)?;
 
     // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
@@ -146,6 +146,9 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
+    if crate::merchant::is_subscriber_blocked(env, &sub.merchant, &subscriber) {
+        return Err(Error::SubscriberBlocked);
+    }
     let token_addr: Address = env
         .storage()
         .instance()
@@ -350,6 +353,9 @@ pub fn do_create_subscription_from_plan(
     subscriber.require_auth();
 
     let plan = get_plan_template(env, plan_template_id)?;
+    if crate::merchant::is_subscriber_blocked(env, &plan.merchant, &subscriber) {
+        return Err(Error::SubscriberBlocked);
+    }
 
     let now = env.ledger().timestamp();
     let key = Symbol::new(env, "next_id");

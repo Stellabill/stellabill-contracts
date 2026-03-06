@@ -41,6 +41,43 @@ pub fn get_treasury_balance(env: &Env) -> i128 {
         .unwrap_or(0i128)
 }
 
+pub fn is_subscriber_blocked(env: &Env, merchant: &Address, subscriber: &Address) -> bool {
+    let key = crate::types::DataKey::MerchantBlocklist(merchant.clone(), subscriber.clone());
+    env.storage().instance().get(&key).unwrap_or(false)
+}
+
+pub fn block_subscriber(env: &Env, merchant: Address, subscriber: Address) -> Result<(), Error> {
+    merchant.require_auth();
+    let key = crate::types::DataKey::MerchantBlocklist(merchant.clone(), subscriber.clone());
+    env.storage().instance().set(&key, &true);
+    env.events().publish(
+        (Symbol::new(env, "subscriber_blocked"), merchant.clone()),
+        crate::types::MerchantBlocklistUpdatedEvent {
+            merchant,
+            subscriber,
+            is_blocked: true,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn unblock_subscriber(env: &Env, merchant: Address, subscriber: Address) -> Result<(), Error> {
+    merchant.require_auth();
+    let key = crate::types::DataKey::MerchantBlocklist(merchant.clone(), subscriber.clone());
+    env.storage().instance().set(&key, &false);
+    env.events().publish(
+        (Symbol::new(env, "subscriber_unblocked"), merchant.clone()),
+        crate::types::MerchantBlocklistUpdatedEvent {
+            merchant,
+            subscriber,
+            is_blocked: false,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
 pub fn credit_treasury_balance(env: &Env, amount: i128) -> Result<(), Error> {
     validate_non_negative(amount)?;
     let current = get_treasury_balance(env);
@@ -79,7 +116,9 @@ pub fn credit_merchant_and_treasury(
         .checked_mul(fee_bps as i128)
         .ok_or(Error::Overflow)?
         / 10_000;
-    let net_amount = gross_amount.checked_sub(fee_amount).ok_or(Error::Underflow)?;
+    let net_amount = gross_amount
+        .checked_sub(fee_amount)
+        .ok_or(Error::Underflow)?;
 
     credit_merchant_balance(env, merchant, net_amount)?;
     if fee_amount > 0 {

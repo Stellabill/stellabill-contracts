@@ -2,8 +2,10 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 
-use crate::types::{BillingPeriodSnapshot, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
-use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
+use crate::types::{
+    BillingPeriodSnapshot, CapInfo, DataKey, Error, NextChargeInfo, Subscription,
+    SubscriptionStatus,
+};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {

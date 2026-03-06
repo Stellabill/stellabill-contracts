@@ -13,30 +13,24 @@ mod charge_core;
 mod merchant;
 mod queries;
 mod reentrancy;
-mod safe_math;
 pub mod safe_math;
 mod state_machine;
 mod subscription;
 mod types;
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
-
-pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
-pub use types::*;
-
-pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use queries::compute_next_charge_info;
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    BatchChargeResult, BatchWithdrawResult, CapInfo, ContractSnapshot, DataKey,
-    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
-    LifetimeCapReachedEvent, MerchantWithdrawalEvent, MigrationExportEvent, NextChargeInfo,
-    OneOffChargedEvent, PlanTemplate, RecoveryEvent, RecoveryReason, Subscription,
-    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
-    SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
+    BatchChargeResult, BatchWithdrawResult, BillingPeriodSnapshot, CapInfo, ContractSnapshot,
+    DataKey, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
+    LifetimeCapReachedEvent, MerchantBlocklistUpdatedEvent, MerchantWithdrawalEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, PlanTemplate, RecoveryEvent,
+    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargedEvent,
+    SubscriptionCreatedEvent, SubscriptionPausedEvent, SubscriptionResumedEvent,
+    SubscriptionStatus, SubscriptionSummary,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -371,6 +365,7 @@ impl SubscriptionVault {
         amount: i128,
         interval_seconds: u64,
         usage_enabled: bool,
+        expiration: Option<u64>,
         lifetime_cap: Option<i128>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
@@ -387,15 +382,12 @@ impl SubscriptionVault {
             interval_seconds,
             usage_enabled,
             expiration,
+            lifetime_cap,
         )?;
         if id == MAX_SUBSCRIPTION_ID {
             return Err(Error::SubscriptionLimitReached);
         }
         Ok(id)
-    }
-
-            lifetime_cap,
-        )
     }
 
     /// Subscriber deposits USDC into their prepaid vault.
@@ -425,9 +417,6 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
     ) -> Result<u32, Error> {
-        subscription::do_create_plan_template(&env, merchant, amount, interval_seconds, usage_enabled)
-    }
-
         subscription::do_create_plan_template(
             &env,
             merchant,
@@ -452,16 +441,6 @@ impl SubscriptionVault {
         subscription::get_plan_template(&env, plan_template_id)
     }
 
-    pub fn deposit_funds(
-        env: Env,
-        subscription_id: u32,
-        subscriber: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
-        require_not_emergency_stop(&env)?;
-        subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
-    }
-
     /// Cancel the subscription. Allowed from Active, Paused, or InsufficientBalance.
     /// Transitions to the terminal `Cancelled` state.
     pub fn cancel_subscription(
@@ -473,8 +452,6 @@ impl SubscriptionVault {
     }
 
     pub fn pause_subscription(
-    /// Subscriber withdraws their remaining prepaid balance after cancellation.
-    pub fn withdraw_subscriber_funds(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -545,23 +522,23 @@ impl SubscriptionVault {
         charge_core::charge_usage_one(&env, subscription_id, usage_amount)
     }
 
-    pub fn batch_charge(
-        env: Env,
-        subscription_ids: Vec<u32>,
-    ) -> Result<Vec<BatchChargeResult>, Error> {
-        require_not_emergency_stop(&env)?;
-        admin::do_batch_charge(&env, &subscription_ids)
+    // ── Merchant ──────────────────────────────────────────────────────────────
+
+    pub fn is_subscriber_blocked(env: Env, merchant: Address, subscriber: Address) -> bool {
+        merchant::is_subscriber_blocked(&env, &merchant, &subscriber)
     }
 
-    pub fn charge_one_off(
-        env: Env,
-        subscription_id: u32,
-        merchant: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
-        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
+    pub fn block_subscriber(env: Env, merchant: Address, subscriber: Address) -> Result<(), Error> {
+        merchant::block_subscriber(&env, merchant, subscriber)
     }
-    // ── Merchant ──────────────────────────────────────────────────────────────
+
+    pub fn unblock_subscriber(
+        env: Env,
+        merchant: Address,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        merchant::unblock_subscriber(&env, merchant, subscriber)
+    }
 
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         merchant::withdraw_merchant_funds(&env, merchant, amount)
