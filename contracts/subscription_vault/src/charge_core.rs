@@ -155,6 +155,7 @@ pub fn charge_one(
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
             crate::merchant::credit_merchant_balance(env, &sub.merchant, sub.amount)?;
+            crate::referral::try_credit_referral_reward(env, subscription_id, sub.amount)?;
             sub.last_payment_timestamp = now;
 
             // Accumulate lifetime charged amount

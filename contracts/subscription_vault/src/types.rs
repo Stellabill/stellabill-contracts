@@ -29,6 +29,12 @@ pub enum DataKey {
     IdemKey(u32),
     /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
+    /// Global referral program configuration. Discriminant 10.
+    ReferralCfg,
+    /// Per-subscription referral record keyed by subscription ID. Discriminant 11.
+    Referral(u32),
+    /// Per-referrer accumulated reward balance. Discriminant 12.
+    ReferralBalance(Address),
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -113,6 +119,8 @@ pub enum Error {
     AlreadyInitialized = 1018,
     /// The contract has allocated the maximum number of subscriptions.
     SubscriptionLimitReached = 429,
+    /// A referral has already been registered for this subscription.
+    ReferralAlreadyRegistered = 1019,
 }
 
 impl Error {
@@ -143,6 +151,7 @@ impl Error {
             Error::LifetimeCapReached => 1017,
             Error::AlreadyInitialized => 1018,
             Error::SubscriptionLimitReached => 429,
+            Error::ReferralAlreadyRegistered => 1019,
         }
     }
 }
@@ -451,4 +460,68 @@ pub struct LifetimeCapReachedEvent {
     pub lifetime_charged: i128,
     /// Timestamp when the cap was reached.
     pub timestamp: u64,
+}
+
+// ── Referral Rewards ──────────────────────────────────────────────────────────
+
+/// Global configuration for the referral rewards program.
+///
+/// Set by admin via `configure_referral_program`. Controls how referral rewards
+/// are computed and whether the program is currently active.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferralConfig {
+    /// Reward rate in basis points (1 bp = 0.01%). Range: 0–10 000.
+    ///
+    /// Applied to the first successful charge amount.
+    /// E.g., 500 = 5%, 100 = 1%, 10000 = 100%.
+    pub reward_bps: u32,
+    /// Optional per-referral reward ceiling in token base units.
+    ///
+    /// When `Some(cap)`, the computed reward is clamped to at most `cap`.
+    /// `None` means no ceiling — reward is exactly `charge_amount * reward_bps / 10_000`.
+    pub max_reward: Option<i128>,
+    /// Whether the program is currently active and credits rewards.
+    pub enabled: bool,
+}
+
+/// Tracks a single referral relationship for one subscription.
+///
+/// Stored per subscription. Records who referred the subscriber and whether
+/// the one-time reward has already been credited.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferralRecord {
+    /// Address of the referrer who will receive the reward.
+    pub referrer: Address,
+    /// True once the first qualifying charge has been processed and reward credited.
+    pub rewarded: bool,
+    /// Reward amount credited. Zero until the first qualifying charge.
+    pub reward_amount: i128,
+}
+
+/// Event emitted when a referrer is registered for a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ReferralRegisteredEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub referrer: Address,
+}
+
+/// Event emitted when a referral reward is credited to a referrer's balance.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ReferralRewardCreditedEvent {
+    pub subscription_id: u32,
+    pub referrer: Address,
+    pub amount: i128,
+}
+
+/// Event emitted when a referrer withdraws accumulated rewards.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ReferralRewardWithdrawnEvent {
+    pub referrer: Address,
+    pub amount: i128,
 }

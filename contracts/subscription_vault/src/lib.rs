@@ -13,6 +13,7 @@ mod charge_core;
 mod merchant;
 mod queries;
 mod reentrancy;
+pub mod referral;
 pub mod safe_math;
 mod state_machine;
 mod subscription;
@@ -27,9 +28,11 @@ pub use types::{
     BatchChargeResult, BatchWithdrawResult, CapInfo, ContractSnapshot, DataKey,
     EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
     LifetimeCapReachedEvent, MerchantWithdrawalEvent, MigrationExportEvent, NextChargeInfo,
-    OneOffChargedEvent, PlanTemplate, RecoveryEvent, RecoveryReason, Subscription,
-    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
-    SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
+    OneOffChargedEvent, PlanTemplate, RecoveryEvent, RecoveryReason, ReferralConfig,
+    ReferralRecord, ReferralRegisteredEvent, ReferralRewardCreditedEvent,
+    ReferralRewardWithdrawnEvent, Subscription, SubscriptionCancelledEvent,
+    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
+    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -540,6 +543,72 @@ impl SubscriptionVault {
     /// When no cap is configured all cap-related fields return `None` / `false`.
     pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> {
         queries::get_cap_info(&env, subscription_id)
+    }
+
+    // ── Referral Rewards ──────────────────────────────────────────────────────
+
+    /// Configure (or update) the referral reward program. Admin only.
+    ///
+    /// # Arguments
+    /// * `reward_bps`  – Reward rate in basis points (0–10 000). E.g. 500 = 5 %.
+    /// * `max_reward`  – Optional per-referral ceiling in token base units.
+    /// * `enabled`     – Activate or pause the referral program.
+    ///
+    /// Calling this again replaces the previous configuration atomically.
+    pub fn configure_referral_program(
+        env: Env,
+        admin: Address,
+        reward_bps: u32,
+        max_reward: Option<i128>,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        referral::do_configure_referral_program(&env, admin, reward_bps, max_reward, enabled)
+    }
+
+    /// Return the current referral program configuration, or `None` if not set.
+    pub fn get_referral_config(env: Env) -> Option<ReferralConfig> {
+        referral::get_referral_config(&env)
+    }
+
+    /// Register a referrer for a subscription.
+    ///
+    /// Only the subscription's subscriber may call this, and only once per
+    /// subscription. The referral should be registered before the first charge
+    /// to qualify for a reward.
+    ///
+    /// **Disabled when emergency stop is active.**
+    pub fn register_referral(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        referrer: Address,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        referral::do_register_referral(&env, subscription_id, subscriber, referrer)
+    }
+
+    /// Return the referral record for a subscription, or `None` if none registered.
+    pub fn get_referral_record(env: Env, subscription_id: u32) -> Option<ReferralRecord> {
+        referral::get_referral_record(&env, subscription_id)
+    }
+
+    /// Return the accumulated (unclaimed) referral reward balance for a referrer.
+    pub fn get_referral_balance(env: Env, referrer: Address) -> i128 {
+        referral::get_referral_balance(&env, &referrer)
+    }
+
+    /// Referrer withdraws accumulated rewards to their wallet.
+    ///
+    /// Follows the Checks-Effects-Interactions (CEI) pattern.
+    ///
+    /// **Disabled when emergency stop is active.**
+    pub fn withdraw_referral_rewards(
+        env: Env,
+        referrer: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        referral::do_withdraw_referral_rewards(&env, referrer, amount)
     }
 }
 

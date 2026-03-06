@@ -1971,3 +1971,707 @@ fn test_reentrancy_protection_documentation() {
 
     assert!(true); // Placeholder to indicate test passed
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REFERRAL REWARDS LEDGER TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Coverage:
+//   - Referral program configuration (admin only, bps validation)
+//   - Referral registration (subscriber only, no self-referral, no duplicates)
+//   - Reward credited on first charge only (no double-counting)
+//   - No-referrer flow does not error
+//   - Multiple referrers get separate, independent balances
+//   - Reward correctly applies max_reward ceiling
+//   - Disabled program does not credit rewards
+//   - Referrer withdrawal follows CEI and updates balance correctly
+//   - Balance is separate from merchant earnings
+//   - Emergency stop blocks register_referral and withdraw_referral_rewards
+
+/// Build a complete referral-enabled test environment.
+///
+/// Returns (env, client, token_client, admin, subscriber, merchant, referrer).
+fn setup_referral_env() -> (
+    Env,
+    SubscriptionVaultClient<'static>,
+    soroban_sdk::token::Client<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0);
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_sac = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    token_sac.mint(&subscriber, &1_000_000_000i128);
+    // Mint to contract so referral withdrawals work (contract holds token balance)
+    token_sac.mint(&contract_id, &1_000_000_000i128);
+
+    client.init(&token_addr, &6, &admin, &1_000_000i128, &0u64);
+
+    let merchant = Address::generate(&env);
+    let referrer = Address::generate(&env);
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    (
+        env,
+        client,
+        token_client,
+        admin,
+        subscriber,
+        merchant,
+        referrer,
+    )
+}
+
+// ── Configuration ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_configure_referral_program_sets_config() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let cfg = client.get_referral_config().unwrap();
+    assert_eq!(cfg.reward_bps, 500);
+    assert_eq!(cfg.max_reward, None);
+    assert!(cfg.enabled);
+}
+
+#[test]
+fn test_configure_referral_program_with_max_reward() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    client.configure_referral_program(&admin, &1000u32, &Some(500_000i128), &true);
+    let cfg = client.get_referral_config().unwrap();
+    assert_eq!(cfg.reward_bps, 1000);
+    assert_eq!(cfg.max_reward, Some(500_000i128));
+}
+
+#[test]
+fn test_configure_referral_program_can_be_updated() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    client.configure_referral_program(&admin, &200u32, &Some(1_000_000i128), &false);
+    let cfg = client.get_referral_config().unwrap();
+    assert_eq!(cfg.reward_bps, 200);
+    assert!(!cfg.enabled);
+}
+
+#[test]
+fn test_configure_referral_program_non_admin_rejected() {
+    let (env, client, _, _, _, _, _) = setup_referral_env();
+    let non_admin = Address::generate(&env);
+    let result = client.try_configure_referral_program(&non_admin, &500u32, &None::<i128>, &true);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_configure_referral_program_bps_above_10000_rejected() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    let result = client.try_configure_referral_program(&admin, &10_001u32, &None::<i128>, &true);
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn test_configure_referral_program_exactly_10000_bps_allowed() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    let result = client.try_configure_referral_program(&admin, &10_000u32, &None::<i128>, &true);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_configure_referral_program_zero_bps_allowed() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    let result = client.try_configure_referral_program(&admin, &0u32, &None::<i128>, &true);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_configure_referral_program_zero_max_reward_rejected() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    let result = client.try_configure_referral_program(&admin, &500u32, &Some(0i128), &true);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_configure_referral_program_negative_max_reward_rejected() {
+    let (_, client, _, admin, _, _, _) = setup_referral_env();
+    let result = client.try_configure_referral_program(&admin, &500u32, &Some(-1i128), &true);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_get_referral_config_returns_none_before_setup() {
+    let (_, client, _, _, _, _, _) = setup_referral_env();
+    assert!(client.get_referral_config().is_none());
+}
+
+// ── Registration ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_register_referral_stores_record() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.register_referral(&id, &subscriber, &referrer);
+
+    let record = client.get_referral_record(&id).unwrap();
+    assert_eq!(record.referrer, referrer);
+    assert!(!record.rewarded);
+    assert_eq!(record.reward_amount, 0);
+    let _ = env; // suppress unused warning
+}
+
+#[test]
+fn test_register_referral_non_subscriber_rejected() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    let impostor = Address::generate(&env);
+    let result = client.try_register_referral(&id, &impostor, &referrer);
+    assert_eq!(result, Err(Ok(Error::Forbidden)));
+}
+
+#[test]
+fn test_register_referral_self_referral_rejected() {
+    let (_, client, _, admin, subscriber, merchant, _) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    let result = client.try_register_referral(&id, &subscriber, &subscriber);
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn test_register_referral_duplicate_rejected() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.register_referral(&id, &subscriber, &referrer);
+    let second_referrer = Address::generate(&env);
+    let result = client.try_register_referral(&id, &subscriber, &second_referrer);
+    assert_eq!(result, Err(Ok(Error::ReferralAlreadyRegistered)));
+}
+
+#[test]
+fn test_register_referral_nonexistent_subscription_rejected() {
+    let (_, client, _, admin, subscriber, _, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let result = client.try_register_referral(&9999, &subscriber, &referrer);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_register_referral_without_program_config_succeeds() {
+    // Registration should succeed even if no program is configured yet.
+    let (_, client, _, _, subscriber, merchant, referrer) = setup_referral_env();
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    let result = client.try_register_referral(&id, &subscriber, &referrer);
+    assert!(result.is_ok());
+}
+
+// ── Reward crediting on first charge ─────────────────────────────────────────
+
+#[test]
+fn test_referral_reward_credited_on_first_charge() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    // 5% reward, no ceiling
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    // Expected reward: AMOUNT * 500 / 10_000 = 10_000_000 * 5% = 500_000
+    let expected_reward = AMOUNT * 500 / 10_000;
+    assert_eq!(client.get_referral_balance(&referrer), expected_reward);
+
+    let record = client.get_referral_record(&id).unwrap();
+    assert!(record.rewarded);
+    assert_eq!(record.reward_amount, expected_reward);
+}
+
+#[test]
+fn test_referral_no_double_credit_on_second_charge() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    // First charge — reward credited
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+    let balance_after_first = client.get_referral_balance(&referrer);
+
+    // Second charge — reward must NOT be credited again
+    env.ledger().set_timestamp(T0 + 2 * INTERVAL);
+    client.charge_subscription(&id);
+    let balance_after_second = client.get_referral_balance(&referrer);
+
+    assert_eq!(
+        balance_after_first, balance_after_second,
+        "balance must not change after the first charge"
+    );
+}
+
+#[test]
+fn test_no_referrer_flow_does_not_error() {
+    let (env, client, _, admin, subscriber, merchant, _) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    // No register_referral call
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    // Should succeed without any referral-related error
+    let result = client.try_charge_subscription(&id);
+    assert!(
+        result.is_ok(),
+        "charge without referral must succeed: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_referral_program_disabled_no_reward_credited() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &false); // disabled
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    assert_eq!(
+        client.get_referral_balance(&referrer),
+        0,
+        "disabled program must not credit rewards"
+    );
+    // Record should still be marked rewarded to prevent re-triggering if program re-enabled.
+    let record = client.get_referral_record(&id).unwrap();
+    assert!(record.rewarded);
+}
+
+#[test]
+fn test_referral_no_program_config_no_reward_no_error() {
+    let (env, client, _, _, subscriber, merchant, referrer) = setup_referral_env();
+    // No configure_referral_program call
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    let result = client.try_charge_subscription(&id);
+    assert!(result.is_ok());
+    assert_eq!(client.get_referral_balance(&referrer), 0);
+}
+
+#[test]
+fn test_referral_max_reward_cap_applied() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    // 10% rate but capped at 200_000 (0.2 USDC)
+    let max_cap = 200_000i128;
+    client.configure_referral_program(&admin, &1000u32, &Some(max_cap), &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    // Uncapped reward would be: 10_000_000 * 1000 / 10_000 = 1_000_000
+    // But it's capped at 200_000
+    assert_eq!(client.get_referral_balance(&referrer), max_cap);
+}
+
+#[test]
+fn test_referral_reward_without_max_cap() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    // 1% rate, no ceiling
+    client.configure_referral_program(&admin, &100u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    // 10_000_000 * 100 / 10_000 = 100_000 (0.1 USDC)
+    assert_eq!(client.get_referral_balance(&referrer), 100_000i128);
+}
+
+// ── Multiple referrers: independent balances ──────────────────────────────────
+
+#[test]
+fn test_multiple_referrers_get_separate_balances() {
+    let (env, client, _, admin, _, merchant, _) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+
+    // Create two subscriptions each with a different subscriber and referrer
+    let sub1_subscriber = Address::generate(&env);
+    let referrer1 = Address::generate(&env);
+    let token_addr: Address = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::Symbol::new(&env, "token"))
+            .unwrap()
+    });
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&sub1_subscriber, &PREPAID);
+
+    let sub2_subscriber = Address::generate(&env);
+    let referrer2 = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&sub2_subscriber, &PREPAID);
+
+    let id1 = client.create_subscription(
+        &sub1_subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id1, &sub1_subscriber, &PREPAID);
+    client.register_referral(&id1, &sub1_subscriber, &referrer1);
+
+    let id2 = client.create_subscription(
+        &sub2_subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id2, &sub2_subscriber, &PREPAID);
+    client.register_referral(&id2, &sub2_subscriber, &referrer2);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id1);
+    client.charge_subscription(&id2);
+
+    let expected = AMOUNT * 500 / 10_000;
+    assert_eq!(client.get_referral_balance(&referrer1), expected);
+    assert_eq!(client.get_referral_balance(&referrer2), expected);
+
+    // One referrer's balance does not affect the other
+    assert_eq!(
+        client.get_referral_balance(&referrer1),
+        client.get_referral_balance(&referrer2)
+    );
+}
+
+#[test]
+fn test_same_referrer_multiple_subscriptions_balance_accumulates() {
+    let (env, client, _, admin, _, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+
+    let token_addr: Address = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::Symbol::new(&env, "token"))
+            .unwrap()
+    });
+
+    let sub1 = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&sub1, &PREPAID);
+    let sub2 = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&sub2, &PREPAID);
+
+    let id1 =
+        client.create_subscription(&sub1, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    client.deposit_funds(&id1, &sub1, &PREPAID);
+    client.register_referral(&id1, &sub1, &referrer);
+
+    let id2 =
+        client.create_subscription(&sub2, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    client.deposit_funds(&id2, &sub2, &PREPAID);
+    client.register_referral(&id2, &sub2, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id1);
+    client.charge_subscription(&id2);
+
+    let per_reward = AMOUNT * 500 / 10_000;
+    assert_eq!(client.get_referral_balance(&referrer), per_reward * 2);
+}
+
+// ── Withdrawal ────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_referrer_can_withdraw_full_balance() {
+    let (env, client, token_client, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    let balance = client.get_referral_balance(&referrer);
+    assert!(balance > 0);
+
+    let before = token_client.balance(&referrer);
+    client.withdraw_referral_rewards(&referrer, &balance);
+    let after = token_client.balance(&referrer);
+
+    assert_eq!(after - before, balance);
+    assert_eq!(client.get_referral_balance(&referrer), 0);
+}
+
+#[test]
+fn test_referrer_can_withdraw_partial_balance() {
+    let (env, client, token_client, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    let total = client.get_referral_balance(&referrer);
+    let partial = total / 2;
+
+    let before = token_client.balance(&referrer);
+    client.withdraw_referral_rewards(&referrer, &partial);
+    let after = token_client.balance(&referrer);
+
+    assert_eq!(after - before, partial);
+    assert_eq!(client.get_referral_balance(&referrer), total - partial);
+}
+
+#[test]
+fn test_withdraw_referral_rewards_zero_balance_returns_not_found() {
+    let (_, client, _, _, _, _, referrer) = setup_referral_env();
+    let result = client.try_withdraw_referral_rewards(&referrer, &1_000i128);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_withdraw_referral_rewards_exceeds_balance_returns_insufficient() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    let balance = client.get_referral_balance(&referrer);
+    let result = client.try_withdraw_referral_rewards(&referrer, &(balance + 1));
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_withdraw_referral_rewards_zero_amount_rejected() {
+    let (_, client, _, _, _, _, referrer) = setup_referral_env();
+    let result = client.try_withdraw_referral_rewards(&referrer, &0i128);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+// ── Fund separation from merchant earnings ────────────────────────────────────
+
+#[test]
+fn test_referral_balance_separate_from_merchant_balance() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    let merchant_balance = client.get_merchant_balance(&merchant);
+    let referral_balance = client.get_referral_balance(&referrer);
+
+    // Merchant receives the full charge amount
+    assert_eq!(merchant_balance, AMOUNT);
+    // Referral is funded independently (rewards come from protocol, not from merchant's share)
+    assert!(referral_balance > 0);
+    // The two balances are tracked independently
+    assert_ne!(merchant_balance, referral_balance);
+}
+
+// ── Emergency stop ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_register_referral_blocked_during_emergency_stop() {
+    let (_, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.enable_emergency_stop(&admin);
+
+    let result = client.try_register_referral(&id, &subscriber, &referrer);
+    assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
+}
+
+#[test]
+fn test_withdraw_referral_rewards_blocked_during_emergency_stop() {
+    let (env, client, _, admin, subscriber, merchant, referrer) = setup_referral_env();
+    client.configure_referral_program(&admin, &500u32, &None::<i128>, &true);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.register_referral(&id, &subscriber, &referrer);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    let balance = client.get_referral_balance(&referrer);
+    assert!(balance > 0);
+
+    client.enable_emergency_stop(&admin);
+    let result = client.try_withdraw_referral_rewards(&referrer, &balance);
+    assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
+}
