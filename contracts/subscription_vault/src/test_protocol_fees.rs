@@ -34,7 +34,7 @@ fn test_protocol_fee_interval_charge_distribution() {
     let fee_bps = 1000; // 10%
     test_env.client.set_protocol_fee(&test_env.admin, &treasury, &fee_bps);
 
-    let (id, subscriber, merchant) = fixtures::create_subscription_detailed(
+    let (id, _subscriber, merchant) = fixtures::create_subscription_detailed(
         &test_env.env,
         &test_env.client,
         crate::types::SubscriptionStatus::Active,
@@ -50,7 +50,7 @@ fn test_protocol_fee_interval_charge_distribution() {
     test_env.client.charge_subscription(&id);
     let events = test_env.env.events().all();
 
-    // Verify balances
+    // Verify balances.
     // Treasury should have 10% of 10M = 1M
     assert_eq!(test_env.client.get_merchant_balance_by_token(&treasury, &test_env.token), 1_000_000);
     // Merchant should have 90% of 10M = 9M
@@ -192,7 +192,7 @@ fn test_protocol_fee_rounding_floor() {
 
     test_env.client.set_protocol_fee(&test_env.admin, &treasury, &fee_bps);
 
-    let (id, subscriber, merchant) = fixtures::create_test_subscription(
+    let (id, _subscriber, merchant) = fixtures::create_test_subscription(
         &test_env.env,
         &test_env.client,
         crate::types::SubscriptionStatus::Active,
@@ -218,7 +218,7 @@ fn test_protocol_fee_zero_bps_disabled() {
 
     test_env.client.set_protocol_fee(&test_env.admin, &treasury, &fee_bps);
 
-    let (id, subscriber, merchant) = fixtures::create_test_subscription(
+    let (id, _subscriber, merchant) = fixtures::create_test_subscription(
         &test_env.env,
         &test_env.client,
         crate::types::SubscriptionStatus::Active,

@@ -456,7 +456,7 @@ impl SubscriptionVault {
             .get(&Symbol::new(&env, "next_id"))
             .unwrap_or(0);
 
-        let protocol_fee_config: Option<VaultFeeConfig> = admin::get_protocol_fee_config(&env);
+        let _protocol_fee_config: Option<VaultFeeConfig> = admin::get_protocol_fee_config(&env);
 
         env.events().publish(
             (Symbol::new(&env, "migration_contract_snapshot"),),

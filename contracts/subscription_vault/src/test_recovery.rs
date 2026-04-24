@@ -12,7 +12,7 @@ use soroban_sdk::{
 extern crate alloc;
 use alloc::format;
 
-const INTERVAL: u64 = 30 * 24 * 60 * 60;
+
 
 #[test]
 fn test_recovery_success_all_reasons() {

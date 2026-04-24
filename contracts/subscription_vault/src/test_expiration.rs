@@ -124,7 +124,7 @@ fn test_cleanup_and_archival() {
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)
-    let deposit_balance = (min_topup * 5) - 0; // no charges made before expiry
+    let _deposit_balance = (min_topup * 5) - 0; // no charges made before expiry
     let sub_balance = sub_archived.prepaid_balance;
     if sub_balance > 0 {
         let initial_balance = token.balance(&subscriber);
@@ -135,11 +135,11 @@ fn test_cleanup_and_archival() {
 
 #[test]
 fn test_expiration_vs_cancellation() {
-    let (env, client, token, token_admin, _) = setup_test_env();
+    let (env, client, token, _token_admin, _) = setup_test_env();
     let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
-    let expires_at = T0 + 2 * INTERVAL;
+    let _expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
     let sub_id1 = client.create_subscription_with_token(

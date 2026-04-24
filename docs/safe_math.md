@@ -56,6 +56,23 @@ Each helper function provides specific guarantees:
   - `Error::Underflow` if subtraction would go below `i128::MIN`
 - **Use Case**: Deducting funds from balances (charges, withdrawals)
 
+### `calculate_fee(gross: i128, bps: u32) -> Result<(i128, i128), Error>`
+- **Guarantee**: Calculates the net amount and protocol fee safely without overflow.
+- **Rounding Direction**: Uses truncation towards zero (floor rounding for positive numbers). Fractional smallest units are dropped.
+- **Errors**: `Error::Underflow` if `gross` is negative, `Error::Overflow` for multiplication overflow.
+- **Use Case**: Applying protocol fees to subscription charges.
+
+### `safe_prorate(amount: i128, elapsed: u64, total: u64) -> Result<i128, Error>`
+- **Guarantee**: Returns an amount scaled by `elapsed/total`, strictly bounded by `amount`.
+- **Rounding Direction**: Uses truncation towards zero (floor rounding).
+- **Errors**: `Error::Underflow` if `amount` is negative, `Error::InvalidInput` if `total` is 0.
+- **Use Case**: Prorating usage or time-based charges.
+
+### Unit Boundary Conversions
+- **`to_internal_units(amount: i128) -> i128`** & **`from_internal_units(amount: i128) -> i128`**
+- **Guarantee**: Currently performs a direct 1:1 identity mapping between token base units and internal accounting units.
+- **Use Case**: Ensures clarity in boundary transitions (e.g., from external token interfaces into internal ledger arithmetic).
+
 ## Error Handling
 
 ### Error Types

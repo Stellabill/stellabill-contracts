@@ -851,8 +851,6 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::InvalidAmount);
     }
 
-    let token_addr = sub.token.clone();
-
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
     let token_addr = sub.token.clone();

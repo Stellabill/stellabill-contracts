@@ -1835,8 +1835,8 @@ fn test_batch_charge_mixed_results_preserve_single_path_order_and_error_codes() 
         ]
     );
 
-    let tracked_batch = [valid_batch, low_batch, paused_batch];
-    let tracked_single = [valid_single, low_single, paused_single];
+    let _tracked_batch = [valid_batch, low_batch, paused_batch];
+    let _tracked_single = [valid_single, low_single, paused_single];
     assert_eq!(
         test_env_batch
             .client
@@ -3081,7 +3081,7 @@ fn test_cancel_from_various_states() {
     let merchant = Address::generate(&test_env.env);
 
     // Cancel from Active
-    let id1 = test_env.client.create_subscription(
+    let _id1 = test_env.client.create_subscription(
         &subscriber,
         &merchant,
         &AMOUNT,

@@ -55,15 +55,8 @@ pub(crate) fn apply_protocol_fee(
 
     if let Some(config) = fee_config {
         if config.fee_bps > 0 {
-            // Floor rounding: gross * bps / 10,000
-            let fee_amount = gross_amount
-                .checked_mul(config.fee_bps as i128)
-                .ok_or(Error::Overflow)?
-                / 10_000i128;
-
-            let net_amount = gross_amount
-                .checked_sub(fee_amount)
-                .ok_or(Error::Underflow)?;
+            // Use safe_math helper for consistent rounding and overflow protection
+            let (net_amount, fee_amount) = crate::safe_math::calculate_fee(gross_amount, config.fee_bps)?;
 
             if fee_amount > 0 {
                 crate::merchant::credit_merchant_balance_for_token(

@@ -234,6 +234,46 @@ pub fn safe_pow(base: i128, exp: u32) -> Result<i128, Error> {
     })
 }
 
+/// Calculates the protocol fee and net amount using floor rounding for positive numbers.
+/// Returns `(net_amount, fee_amount)`.
+pub fn calculate_fee(gross: i128, bps: u32) -> Result<(i128, i128), Error> {
+    validate_non_negative(gross)?;
+    if bps == 0 {
+        return Ok((gross, 0));
+    }
+    let fee_amount = safe_div(safe_mul(gross, bps as i128)?, 10_000)?;
+    let net_amount = safe_sub(gross, fee_amount)?;
+    Ok((net_amount, fee_amount))
+}
+
+/// Safely prorates an amount based on elapsed time over a total period.
+/// Uses floor rounding towards zero.
+pub fn safe_prorate(amount: i128, elapsed: u64, total: u64) -> Result<i128, Error> {
+    validate_non_negative(amount)?;
+    if total == 0 {
+        return Err(Error::InvalidInput);
+    }
+    if elapsed >= total {
+        return Ok(amount);
+    }
+    let prorated = safe_div(safe_mul(amount, elapsed as i128)?, total as i128)?;
+    Ok(prorated)
+}
+
+/// Converts token base units to internal accounting units.
+/// Currently a 1:1 mapping, provided for boundary conversion validation and future scaling.
+#[inline(always)]
+pub const fn to_internal_units(amount: i128) -> i128 {
+    amount
+}
+
+/// Converts internal accounting units back to token base units.
+/// Currently a 1:1 mapping, provided for boundary conversion validation.
+#[inline(always)]
+pub const fn from_internal_units(amount: i128) -> i128 {
+    amount
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
