@@ -5,8 +5,8 @@
 #![allow(dead_code)]
 
 use crate::types::{
-    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason,
+    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, ProtocolFeeConfiguredEvent,
+    RecoveryEvent, RecoveryReason, VaultFeeConfig,
 };
 use crate::{charge_core::charge_one, ChargeExecutionResult};
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -308,30 +308,29 @@ pub fn do_recover_stranded_funds(
 }
 
 // ── Protocol fee helpers ──────────────────────────────────────────────────────
+pub const MAX_PROTOCOL_FEE_BPS: u32 = 5000; // 50% max fee
 
 /// Set protocol fee basis points and treasury address. Admin only.
 ///
-/// fee_bps must be in 0..=10_000. Setting fee_bps to 0 disables fee collection.
+/// fee_bps must be in 0..=MAX_PROTOCOL_FEE_BPS. Setting fee_bps to 0 disables fee collection.
 pub fn set_protocol_fee(
     env: &Env,
     admin: Address,
     treasury: Address,
     fee_bps: u32,
-) -> Result<(), crate::types::Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(crate::types::Error::Forbidden);
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    if fee_bps > MAX_PROTOCOL_FEE_BPS {
+        return Err(Error::InvalidInput);
     }
-    if fee_bps > 10_000 {
-        return Err(crate::types::Error::InvalidInput);
-    }
-    let storage = env.storage().instance();
-    storage.set(&Symbol::new(env, "fee_bps"), &fee_bps);
-    storage.set(&Symbol::new(env, "treasury"), &treasury);
+    let config = VaultFeeConfig {
+        treasury: treasury.clone(),
+        fee_bps,
+    };
+    env.storage().instance().set(&DataKey::ProtocolFee, &config);
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
-        crate::types::ProtocolFeeConfiguredEvent {
+        ProtocolFeeConfiguredEvent {
             admin,
             treasury,
             fee_bps,
@@ -341,17 +340,16 @@ pub fn set_protocol_fee(
     Ok(())
 }
 
+pub fn get_protocol_fee_config(env: &Env) -> Option<VaultFeeConfig> {
+    env.storage().instance().get(&DataKey::ProtocolFee)
+}
+
 /// Return the configured protocol fee in basis points (0 = disabled).
 pub fn get_protocol_fee_bps(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&Symbol::new(env, "fee_bps"))
-        .unwrap_or(0u32)
+    get_protocol_fee_config(env).map(|c| c.fee_bps).unwrap_or(0)
 }
 
 /// Return the configured treasury address, or None if not set.
 pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&Symbol::new(env, "treasury"))
+    get_protocol_fee_config(env).map(|c| c.treasury)
 }

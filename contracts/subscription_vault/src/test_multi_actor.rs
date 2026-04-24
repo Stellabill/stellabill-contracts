@@ -18,13 +18,13 @@ struct MultiActorSetup {
 fn setup_multi_actor_env() -> MultiActorSetup {
     let test_env = TestEnv::default();
     let merchants = [
-        Address::generate(&test_env.env),
-        Address::generate(&test_env.env),
+        <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env),
+        <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env),
     ];
     let subscribers = [
-        Address::generate(&test_env.env),
-        Address::generate(&test_env.env),
-        Address::generate(&test_env.env),
+        <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env),
+        <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env),
+        <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env),
     ];
 
     let token_admin = test_env.stellar_token_client();
@@ -37,7 +37,7 @@ fn setup_multi_actor_env() -> MultiActorSetup {
     let topology = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)];
 
     for (i, (s_idx, m_idx)) in topology.iter().enumerate() {
-        let sub_id = test_env.client.create_subscription(&subscribers[*s_idx], &merchants[*m_idx], &BATCH_AMOUNT, &BATCH_INTERVAL, &false, &None, &None::<u64>);
+        let sub_id = test_env.client.create_subscription(&subscribers[*s_idx], &merchants[*m_idx], &BATCH_AMOUNT, &BATCH_INTERVAL, &false, &None::<i128>, &None::<u64>);
         test_env
             .client
             .deposit_funds(&sub_id, &subscribers[*s_idx], &DEPOSIT_AMOUNT);

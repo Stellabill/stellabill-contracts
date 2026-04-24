@@ -428,6 +428,9 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
     
     let now = env.ledger().timestamp();
     // Expiration guard
@@ -680,6 +683,14 @@ pub fn do_charge_one_off(
     if sub.merchant != merchant {
         return Err(Error::Unauthorized);
     }
+    
+    // Enforce lifetime cap for one-off charges
+    if let Some(cap) = sub.lifetime_cap {
+        if sub.lifetime_charged >= cap {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
         return Err(Error::NotActive);
     }
@@ -705,17 +716,35 @@ pub fn do_charge_one_off(
 
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
+    let (merchant_amount, fee_amount) = crate::charge_core::apply_protocol_fee(
+        env,
+        amount,
+        &sub.token,
+        subscription_id,
+        BillingChargeKind::OneOff,
+    )?;
+
     crate::merchant::credit_merchant_balance_for_token(
         env,
         &sub.merchant,
         &sub.token,
-        amount,
+        merchant_amount,
         BillingChargeKind::OneOff,
     )?;
 
     if cap_reached {
         validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
         sub.status = SubscriptionStatus::Cancelled;
+
+        env.events().publish(
+            (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+            crate::types::LifetimeCapReachedEvent {
+                subscription_id,
+                lifetime_cap: sub.lifetime_cap.unwrap(),
+                lifetime_charged: sub.lifetime_charged,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     env.storage().instance().set(&subscription_id, &sub);
@@ -735,6 +764,8 @@ pub fn do_charge_one_off(
             subscription_id,
             merchant: sub.merchant.clone(),
             amount,
+            fee: fee_amount,
+            net_amount: merchant_amount,
         },
     );
 

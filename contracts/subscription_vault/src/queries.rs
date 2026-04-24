@@ -184,7 +184,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::GracePeriod => true,
-        SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::InsufficientBalance => false,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
         SubscriptionStatus::Expired => false,

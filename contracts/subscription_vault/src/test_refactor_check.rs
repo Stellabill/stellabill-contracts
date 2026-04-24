@@ -1,4 +1,4 @@
-use crate::test_utils::{assertions, fixtures, TestEnv};
+use crate::test_utils::{assertions, fixtures, setup::TestEnv};
 use crate::SubscriptionStatus;
 
 #[test]

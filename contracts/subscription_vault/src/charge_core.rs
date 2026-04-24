@@ -44,6 +44,56 @@ use soroban_sdk::{symbol_short, Env, String, Symbol};
 const KEY_CHARGED_PERIOD: Symbol = symbol_short!("cp");
 const KEY_IDEM: Symbol = symbol_short!("idem");
 
+pub(crate) fn apply_protocol_fee(
+    env: &Env,
+    gross_amount: i128,
+    token: &soroban_sdk::Address,
+    sub_id: u32,
+    kind: BillingChargeKind,
+) -> Result<(i128, i128), Error> {
+    let fee_config = crate::admin::get_protocol_fee_config(env);
+
+    if let Some(config) = fee_config {
+        if config.fee_bps > 0 {
+            // Floor rounding: gross * bps / 10,000
+            let fee_amount = gross_amount
+                .checked_mul(config.fee_bps as i128)
+                .ok_or(Error::Overflow)?
+                / 10_000i128;
+
+            let net_amount = gross_amount
+                .checked_sub(fee_amount)
+                .ok_or(Error::Underflow)?;
+
+            if fee_amount > 0 {
+                crate::merchant::credit_merchant_balance_for_token(
+                    env,
+                    &config.treasury,
+                    token,
+                    fee_amount,
+                    kind,
+                )?;
+
+                env.events().publish(
+                    (Symbol::new(env, "protocol_fee_charged"), sub_id),
+                    crate::types::ProtocolFeeChargedEvent {
+                        subscription_id: sub_id,
+                        treasury: config.treasury,
+                        gross_amount,
+                        fee_amount,
+                        net_amount,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+            }
+
+            return Ok((net_amount, fee_amount));
+        }
+    }
+
+    Ok((gross_amount, 0))
+}
+
 fn charged_period_key(subscription_id: u32) -> (Symbol, u32) {
     (KEY_CHARGED_PERIOD, subscription_id)
 }
@@ -79,6 +129,10 @@ pub fn charge_one(
     }
 
     let charge_amount = crate::oracle::resolve_charge_amount(env, &sub)?;
+
+    if sub.status == SubscriptionStatus::InsufficientBalance {
+        return Err(Error::InsufficientBalance);
+    }
 
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::GracePeriod {
         return Err(Error::NotActive);
@@ -147,19 +201,15 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let fee_bps = crate::admin::get_protocol_fee_bps(env);
-            let treasury_opt = crate::admin::get_treasury(env);
-            let (merchant_amount, fee_amount) = if fee_bps > 0 {
-                if let Some(ref _t) = treasury_opt {
-                    let fee = charge_amount * fee_bps as i128 / 10_000i128;
-                    let net = charge_amount - fee;
-                    (net, fee)
-                } else {
-                    (charge_amount, 0i128)
-                }
-            } else {
-                (charge_amount, 0i128)
-            };
+
+            let (merchant_amount, fee_amount) = apply_protocol_fee(
+                env,
+                charge_amount,
+                &sub.token,
+                subscription_id,
+                BillingChargeKind::Interval,
+            )?;
+
             crate::merchant::credit_merchant_balance_for_token(
                 env,
                 &sub.merchant,
@@ -167,27 +217,7 @@ pub fn charge_one(
                 merchant_amount,
                 BillingChargeKind::Interval,
             )?;
-            if fee_amount > 0 {
-                if let Some(ref treasury) = treasury_opt {
-                    crate::merchant::credit_merchant_balance_for_token(
-                        env,
-                        treasury,
-                        &sub.token,
-                        fee_amount,
-                        BillingChargeKind::Interval,
-                    )?;
-                    env.events().publish(
-                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                        crate::types::ProtocolFeeChargedEvent {
-                            subscription_id,
-                            treasury: treasury.clone(),
-                            fee_amount,
-                            merchant_amount,
-                            timestamp: now,
-                        },
-                    );
-                }
-            }
+
             sub.last_payment_timestamp = now;
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
@@ -207,6 +237,16 @@ pub fn charge_one(
             if cap_reached {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
                 sub.status = SubscriptionStatus::Cancelled;
+                
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: sub.lifetime_cap.unwrap(),
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
             }
 
             storage.set(&subscription_id, &sub);
@@ -232,6 +272,8 @@ pub fn charge_one(
                     subscription_id,
                     merchant: sub.merchant.clone(),
                     amount: charge_amount,
+                    fee: fee_amount,
+                    net_amount: merchant_amount,
                     lifetime_charged: sub.lifetime_charged,
                 },
             );
@@ -448,11 +490,20 @@ pub fn charge_usage_one(
     match crate::safe_math::safe_sub_balance(sub.prepaid_balance, usage_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
+
+            let (merchant_amount, fee_amount) = apply_protocol_fee(
+                env,
+                usage_amount,
+                &sub.token,
+                subscription_id,
+                BillingChargeKind::Usage,
+            )?;
+
             crate::merchant::credit_merchant_balance_for_token(
                 env,
                 &sub.merchant,
                 &sub.token,
-                usage_amount,
+                merchant_amount,
                 BillingChargeKind::Usage,
             )?;
 
@@ -465,6 +516,16 @@ pub fn charge_usage_one(
             if cap_reached {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
                 sub.status = SubscriptionStatus::Cancelled;
+                
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: sub.lifetime_cap.unwrap(),
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
             } else if new_balance == 0 {
                 // Without a cap hit, zero remaining prepaid means underfunded for future usage.
                 validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
@@ -490,6 +551,8 @@ pub fn charge_usage_one(
                     subscription_id,
                     merchant: sub.merchant.clone(),
                     usage_amount,
+                    fee: fee_amount,
+                    net_amount: merchant_amount,
                     token: sub.token.clone(),
                     timestamp: now,
                     reference,

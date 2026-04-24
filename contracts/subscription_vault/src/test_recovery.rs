@@ -18,7 +18,7 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -31,7 +31,7 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 #[test]
 fn test_recovery_success_all_reasons() {
     let (env, client, token, admin) = setup_env();
-    let recipient = Address::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token_admin = admin.clone();
     let token_client = token::StellarAssetClient::new(&env, &token);
 
@@ -70,8 +70,8 @@ fn test_recovery_success_all_reasons() {
 #[test]
 fn test_recovery_unauthorized() {
     let (env, client, token, admin) = setup_env();
-    let recipient = Address::generate(&env);
-    let fake_admin = Address::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let fake_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
 
     token_client.mint(&client.address, &100_000_000);
@@ -79,13 +79,13 @@ fn test_recovery_unauthorized() {
     let recovery_id = String::from_str(&env, "rec_unauth");
     
     let result = client.try_recover_stranded_funds(&fake_admin, &token, &recipient, &10_000_000, &recovery_id, &RecoveryReason::UserOverpayment);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
 fn test_recovery_amount_validation() {
     let (env, client, token, admin) = setup_env();
-    let recipient = Address::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
 
     token_client.mint(&client.address, &100_000_000);
@@ -110,7 +110,7 @@ fn test_recovery_amount_validation() {
 #[test]
 fn test_recovery_replay_protection() {
     let (env, client, token, admin) = setup_env();
-    let recipient = Address::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
 
     token_client.mint(&client.address, &100_000_000);
@@ -128,15 +128,15 @@ fn test_recovery_replay_protection() {
 #[test]
 fn test_state_consistency() {
     let (env, client, token, admin) = setup_env();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
-    let recipient = Address::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
     // 1. Setup subscription and deposit
     token_client.mint(&subscriber, &50_000_000);
     
-    let sub_id = client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     
     client.deposit_funds(&sub_id, &subscriber, &50_000_000);
     

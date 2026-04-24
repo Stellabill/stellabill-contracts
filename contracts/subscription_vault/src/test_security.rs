@@ -20,7 +20,7 @@ fn setup_security_env() -> (Env, SubscriptionVaultClient<'static>, Address, Addr
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -33,8 +33,8 @@ fn create_security_subscription(
     env: &Env,
     client: &SubscriptionVaultClient,
 ) -> (u32, Address, Address) {
-    let subscriber = Address::generate(env);
-    let merchant = Address::generate(env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
     let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     (id, subscriber, merchant)
 }
@@ -82,7 +82,7 @@ fn test_pause_subscription_unauthorized_stranger() {
     env.mock_auths(&[]); // Disable mock_all_auths for explicit check
 
     let (id, _, _) = create_security_subscription(&env, &client);
-    let stranger = Address::generate(&env);
+    let stranger = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
     client.pause_subscription(&id, &stranger);
 }
@@ -91,8 +91,8 @@ fn test_pause_subscription_unauthorized_stranger() {
 #[should_panic(expected = "Error(Contract, #401)")]
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_security_env();
-    let stranger = Address::generate(&env);
-    let new_admin = Address::generate(&env);
+    let stranger = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let new_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
     // We need to mock auth for the stranger to bypass the Auth check,
     // then the contract should fail with Error::Unauthorized (401).

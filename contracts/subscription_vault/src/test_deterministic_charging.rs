@@ -7,8 +7,8 @@ use soroban_sdk::{testutils::Address as _, Address, String};
 #[test]
 fn test_interval_charge_determinism() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let amount = 100_000_000i128; // 100 USDC
     let interval = 30 * 24 * 60 * 60; // 30 days
@@ -34,14 +34,14 @@ fn test_interval_charge_determinism() {
 #[test]
 fn test_usage_charge_determinism() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let amount = 100_000_000i128; // 100 USDC
     let interval = 30 * 24 * 60 * 60;
     let sub_id = test_env
         .client
-        .create_subscription(&subscriber, &merchant, &amount, &interval, &true, &None, &None);
+        .create_subscription(&subscriber, &merchant, &amount, &interval, &true, &None::<i128>, &None::<u64>);
 
     test_env.stellar_token_client().mint(&subscriber, &500_000_000i128);
     test_env.client.deposit_funds(&sub_id, &subscriber, &500_000_000i128);
@@ -64,8 +64,8 @@ fn test_usage_charge_determinism() {
 #[test]
 fn test_idempotent_failure_codes() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let sub_id = test_env
         .client
@@ -87,8 +87,8 @@ fn test_idempotent_failure_codes() {
 #[test]
 fn test_boundary_period_transitions() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let interval = 3600;
     let sub_id = test_env
@@ -121,13 +121,13 @@ fn test_boundary_period_transitions() {
 #[test]
 fn test_same_timestamp_repeated_calls() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let interval = 4000;
     let sub_id = test_env
         .client
-        .create_subscription(&subscriber, &merchant, &50_000_000, &interval, &true, &None, &None);
+        .create_subscription(&subscriber, &merchant, &50_000_000, &interval, &true, &None::<i128>, &None::<u64>);
 
     test_env.stellar_token_client().mint(&subscriber, &1_000_000_000i128);
     test_env.client.deposit_funds(&sub_id, &subscriber, &1_000_000_000i128);
@@ -154,12 +154,12 @@ fn test_same_timestamp_repeated_calls() {
 #[test]
 fn test_usage_charging_parity() {
     let test_env = TestEnv::default();
-    let subscriber = Address::generate(&test_env.env);
-    let merchant = Address::generate(&test_env.env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&test_env.env);
 
     let sub_id = test_env
         .client
-        .create_subscription(&subscriber, &merchant, &100_000_000, &3600, &true, &None, &None);
+        .create_subscription(&subscriber, &merchant, &100_000_000, &3600, &true, &None::<i128>, &None::<u64>);
 
     test_env.stellar_token_client().mint(&subscriber, &1_000_000_000i128);
     test_env.client.deposit_funds(&sub_id, &subscriber, &1_000_000_000i128);

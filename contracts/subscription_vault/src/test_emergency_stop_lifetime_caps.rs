@@ -44,6 +44,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &INTERVAL,
         &true,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
 
@@ -65,7 +66,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -77,7 +79,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -166,6 +169,7 @@ fn test_emergency_stop_blocks_batch_charge() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -189,6 +193,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -218,6 +223,7 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &INTERVAL,
         &false,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
 
@@ -257,6 +263,7 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &INTERVAL,
         &true,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
     client.charge_usage_with_reference(
@@ -287,6 +294,7 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &INTERVAL,
         &true,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
 
@@ -325,6 +333,7 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
         &INTERVAL,
         &false,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
     client.charge_one_off(&sub_id, &merchant, &cap);
@@ -338,7 +347,9 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
     let events = env.events().all();
     let mut cap_events = 0u32;
     for event in events.iter() {
-        if topic0(&env, &event) == Symbol::new(&env, "lifetime_cap_reached") {
+        if event.0 != client.address { continue; }
+        let topic: Symbol = Symbol::from_val(&env, &event.1.get(0).unwrap());
+        if topic == Symbol::new(&env, "lifetime_cap_reached") {
             cap_events += 1;
         }
     }

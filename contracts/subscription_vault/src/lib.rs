@@ -91,13 +91,13 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
 #[cfg(test)]
 mod test_governance;
+#[cfg(test)]
+mod test_protocol_fees;
 #[cfg(test)]
 mod test_insufficient_balance;
 #[cfg(test)]
@@ -137,6 +137,7 @@ pub use types::{
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
+    VaultFeeConfig,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
 };
 
@@ -449,6 +450,8 @@ impl SubscriptionVault {
             .get(&Symbol::new(&env, "next_id"))
             .unwrap_or(0);
 
+        let protocol_fee_config: Option<VaultFeeConfig> = admin::get_protocol_fee_config(&env);
+
         env.events().publish(
             (Symbol::new(&env, "migration_contract_snapshot"),),
             (admin.clone(), env.ledger().timestamp()),
@@ -461,6 +464,8 @@ impl SubscriptionVault {
             next_id,
             storage_version: STORAGE_VERSION,
             timestamp: env.ledger().timestamp(),
+            protocol_fee_bps: admin::get_protocol_fee_bps(&env),
+            protocol_fee_treasury: admin::get_treasury(&env),
         })
     }
 

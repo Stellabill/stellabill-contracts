@@ -54,6 +54,23 @@ pub enum Operation {
     RemoveAcceptedToken,
     SetSubscriberCreditLimit,
     ExportContractSnapshot,
+    SetProtocolFee,
+    RecoverStrandedFunds,
+    SetBillingRetention,
+    CompactBillingStatements,
+    SetOracleConfig,
+    SetMerchantConfig,
+    CreatePlanTemplateWithToken,
+    UpdatePlanTemplate,
+    SetPlanMaxActiveSubs,
+    MigrateSubscriptionToPlan,
+    CleanupSubscription,
+    ChargeUsage,
+    WithdrawMerchantTokenFunds,
+    SetMetadata,
+    DeleteMetadata,
+    AddToBlocklist,
+    RemoveFromBlocklist,
 }
 
 impl Operation {
@@ -80,6 +97,23 @@ impl Operation {
             Operation::RemoveAcceptedToken,
             Operation::SetSubscriberCreditLimit,
             Operation::ExportContractSnapshot,
+            Operation::SetProtocolFee,
+            Operation::RecoverStrandedFunds,
+            Operation::SetBillingRetention,
+            Operation::CompactBillingStatements,
+            Operation::SetOracleConfig,
+            Operation::SetMerchantConfig,
+            Operation::CreatePlanTemplateWithToken,
+            Operation::UpdatePlanTemplate,
+            Operation::SetPlanMaxActiveSubs,
+            Operation::MigrateSubscriptionToPlan,
+            Operation::CleanupSubscription,
+            Operation::ChargeUsage,
+            Operation::WithdrawMerchantTokenFunds,
+            Operation::SetMetadata,
+            Operation::DeleteMetadata,
+            Operation::AddToBlocklist,
+            Operation::RemoveFromBlocklist,
         ]
     }
 }
@@ -95,6 +129,7 @@ pub struct FuzzHarness {
     pub stranger: Address,
     pub new_admin: Address,
     pub token: Address,
+    pub plan_id: u32,
     pub subscription_id: u32,
 }
 
@@ -110,11 +145,11 @@ impl FuzzHarness {
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-        let admin = Address::generate(&env);
-        let subscriber = Address::generate(&env);
-        let merchant = Address::generate(&env);
-        let stranger = Address::generate(&env);
-        let new_admin = Address::generate(&env);
+        let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        let stranger = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        let new_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
         
         let token = env
             .register_stellar_asset_contract_v2(admin.clone())
@@ -123,7 +158,7 @@ impl FuzzHarness {
         client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
         
         // Use true for usage_tracking_enabled
-        let plan_id = client.create_plan_template(&merchant, &10_000_000, &2592000, &true, &None);
+        let plan_id = client.create_plan_template(&merchant, &10_000_000, &2592000, &true, &None::<i128>);
         let subscription_id = client.create_subscription_from_plan(&subscriber, &plan_id);
 
         let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
@@ -140,6 +175,7 @@ impl FuzzHarness {
             stranger,
             new_admin,
             token,
+            plan_id,
             subscription_id,
         }
     }
@@ -279,6 +315,119 @@ impl FuzzHarness {
             Operation::ExportContractSnapshot => {
                 std::format!("{:?}", self.client.try_export_contract_snapshot(&address))
             }
+            Operation::SetProtocolFee => {
+                let treasury = Address::generate(env);
+                std::format!("{:?}", self.client.try_set_protocol_fee(&address, &treasury, &500))
+            }
+            Operation::RecoverStrandedFunds => {
+                let recipient = Address::generate(env);
+                let recovery_id = soroban_sdk::String::from_str(env, "fuzz_recovery");
+                std::format!("{:?}", self.client.try_recover_stranded_funds(&address, &self.token, &recipient, &1_000_000, &recovery_id, &crate::RecoveryReason::UserOverpayment))
+            }
+            Operation::SetBillingRetention => {
+                std::format!("{:?}", self.client.try_set_billing_retention(&address, &100))
+            }
+            Operation::CompactBillingStatements => {
+                std::format!("{:?}", self.client.try_compact_billing_statements(&address, &self.subscription_id, &None))
+            }
+            Operation::SetOracleConfig => {
+                std::format!("{:?}", self.client.try_set_oracle_config(&address, &true, &Some(Address::generate(env)), &300))
+            }
+            Operation::SetMerchantConfig => {
+                let redirect = soroban_sdk::String::from_str(env, "https://example.com");
+                std::format!("{:?}", self.client.try_set_merchant_config(&address, &None, &redirect, &false))
+            }
+            Operation::CreatePlanTemplateWithToken => {
+                std::format!("{:?}", self.client.try_create_plan_template_with_token(&address, &self.token, &10_000_000, &2592000, &true, &None))
+            }
+            Operation::UpdatePlanTemplate => {
+                // For allowed callers (Merchant), create their own plan; for others use
+                // the harness plan (owned by self.merchant) so non-merchants get Forbidden.
+                let target_plan_id = if is_allowed {
+                    self.env.mock_all_auths();
+                    let pid = self.client.create_plan_template(&address, &10_000_000, &2592000, &true, &None);
+                    if !is_allowed { self.env.mock_auths(&[]); }
+                    pid
+                } else {
+                    self.env.mock_auths(&[]);
+                    self.plan_id // owned by self.merchant, so non-merchants get Forbidden
+                };
+                std::format!("{:?}", self.client.try_update_plan_template(&address, &target_plan_id, &15_000_000, &2592000, &true, &None))
+            }
+            Operation::SetPlanMaxActiveSubs => {
+                let target_plan_id = if is_allowed {
+                    self.env.mock_all_auths();
+                    let pid = self.client.create_plan_template(&address, &10_000_000, &2592000, &true, &None);
+                    if !is_allowed { self.env.mock_auths(&[]); }
+                    pid
+                } else {
+                    self.env.mock_auths(&[]);
+                    self.plan_id // owned by self.merchant, so non-merchants get Forbidden
+                };
+                std::format!("{:?}", self.client.try_set_plan_max_active_subs(&address, &target_plan_id, &5))
+            }
+            Operation::MigrateSubscriptionToPlan => {
+                // Build a fresh plan family and sub so every role iteration is independent.
+                self.env.mock_all_auths();
+                let fresh_plan_id = self.client.create_plan_template(&self.merchant, &10_000_000, &2592000, &true, &None);
+                let fresh_sub_id = self.client.create_subscription_from_plan(&self.subscriber, &fresh_plan_id);
+                let new_plan_id = self.client.update_plan_template(&self.merchant, &fresh_plan_id, &12_000_000, &2592000, &true, &None);
+                if !is_allowed { self.env.mock_auths(&[]); }
+                std::format!("{:?}", self.client.try_migrate_subscription_to_plan(&address, &fresh_sub_id, &new_plan_id))
+            }
+            Operation::CleanupSubscription => {
+                // Create a fresh sub, cancel it (sets terminal state), then try cleanup.
+                // Subs created from plan templates have no expires_at so we cancel to reach
+                // a terminal state that cleanup_subscription can archive.
+                self.env.mock_all_auths();
+                let cleanup_sub_id = self.client.create_subscription_from_plan(&self.subscriber, &self.plan_id);
+                self.client.cancel_subscription(&cleanup_sub_id, &self.subscriber);
+                if !is_allowed { self.env.mock_auths(&[]); }
+                let r = std::format!("{:?}", self.client.try_cleanup_subscription(&cleanup_sub_id, &address));
+                r
+            }
+            Operation::ChargeUsage => {
+                // Deposit funds first so the balance check passes (no auth gate on charge_usage).
+                self.env.mock_all_auths();
+                let _ = self.client.try_deposit_funds(&self.subscription_id, &self.subscriber, &10_000_000);
+                // charge_usage has no caller auth check — it succeeds/fails on business logic only.
+                // Restore mock state for the actual call.
+                if !is_allowed {
+                    self.env.mock_auths(&[]);
+                } else {
+                    self.env.mock_all_auths();
+                }
+                std::format!("{:?}", self.client.try_charge_usage(&self.subscription_id, &1_000_000))
+            }
+            Operation::WithdrawMerchantTokenFunds => {
+                self.env.mock_all_auths();
+                let _ = self.client.try_deposit_funds(&self.subscription_id, &self.subscriber, &50_000_000);
+                let _ = self.client.try_charge_one_off(&self.subscription_id, &self.merchant, &10_000_000);
+                if !is_allowed { self.env.mock_auths(&[]); }
+                std::format!("{:?}", self.client.try_withdraw_merchant_token_funds(&address, &self.token, &1_000_000))
+            }
+            Operation::SetMetadata => {
+                let k = soroban_sdk::String::from_str(env, "test_key");
+                let v = soroban_sdk::String::from_str(env, "test_val");
+                std::format!("{:?}", self.client.try_set_metadata(&self.subscription_id, &address, &k, &v))
+            }
+            Operation::DeleteMetadata => {
+                let k = soroban_sdk::String::from_str(env, "test_key");
+                let v = soroban_sdk::String::from_str(env, "test_val");
+                self.env.mock_all_auths();
+                self.client.set_metadata(&self.subscription_id, &self.subscriber, &k, &v);
+                if !is_allowed { self.env.mock_auths(&[]); }
+                std::format!("{:?}", self.client.try_delete_metadata(&self.subscription_id, &address, &k))
+            }
+            Operation::AddToBlocklist => {
+                std::format!("{:?}", self.client.try_add_to_blocklist(&address, &self.subscriber, &None))
+            }
+            Operation::RemoveFromBlocklist => {
+                self.env.mock_all_auths();
+                self.client.add_to_blocklist(&self.admin, &self.subscriber, &None);
+                if !is_allowed { self.env.mock_auths(&[]); }
+                std::format!("{:?}", self.client.try_remove_from_blocklist(&address, &self.subscriber))
+            }
         };
 
         if res.contains("Ok(Ok(") || res.contains("Ok(())") {
@@ -293,21 +442,37 @@ impl FuzzHarness {
             Operation::SetMinTopup | Operation::RotateAdmin | Operation::EnableEmergencyStop | 
             Operation::DisableEmergencyStop | Operation::PartialRefund | Operation::BatchCharge | 
             Operation::AddAcceptedToken | Operation::RemoveAcceptedToken | Operation::SetSubscriberCreditLimit |
-            Operation::ExportContractSnapshot => {
+            Operation::ExportContractSnapshot | Operation::SetProtocolFee | Operation::RecoverStrandedFunds |
+            Operation::SetBillingRetention | Operation::CompactBillingStatements | Operation::SetOracleConfig => {
                 caller == Role::Admin
             }
             Operation::DepositFunds | Operation::WithdrawSubscriberFunds => {
                 caller == Role::Subscriber
             }
-            Operation::CancelSubscription | Operation::PauseSubscription | Operation::ResumeSubscription => {
+            Operation::CancelSubscription | Operation::PauseSubscription | Operation::ResumeSubscription |
+            Operation::CleanupSubscription | Operation::SetMetadata | Operation::DeleteMetadata => {
                 caller == Role::Subscriber || caller == Role::Merchant
             }
             Operation::ChargeOneOff | Operation::WithdrawMerchantFunds | Operation::PauseMerchant | 
-            Operation::UnpauseMerchant | Operation::ConfigureUsageLimits => {
+            Operation::UnpauseMerchant | Operation::ConfigureUsageLimits | Operation::SetMerchantConfig |
+            Operation::CreatePlanTemplateWithToken | Operation::UpdatePlanTemplate | Operation::SetPlanMaxActiveSubs |
+            Operation::WithdrawMerchantTokenFunds => {
                 caller == Role::Merchant
             }
             Operation::MerchantRefund => {
                 caller == Role::Merchant
+            }
+            Operation::MigrateSubscriptionToPlan => {
+                caller == Role::Subscriber
+            }
+            Operation::ChargeUsage => {
+                true // Current implementation has no auth checks
+            }
+            Operation::AddToBlocklist => {
+                caller == Role::Admin || caller == Role::Merchant
+            }
+            Operation::RemoveFromBlocklist => {
+                caller == Role::Admin
             }
         }
     }
@@ -360,8 +525,8 @@ fn test_identity_collision_subscriber_is_merchant() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
-    let person = Address::generate(&env); 
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let person = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env); 
     
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -369,7 +534,7 @@ fn test_identity_collision_subscriber_is_merchant() {
         
     client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
     
-    let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None, &None::<u64>);
+    let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None::<i128>);
     let sub_id = client.create_subscription_from_plan(&person, &plan_id);
     
     client.pause_subscription(&sub_id, &person);

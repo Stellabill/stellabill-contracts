@@ -14,7 +14,7 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address) {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -24,8 +24,8 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address) {
 }
 
 fn create_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Address) {
-    let subscriber = Address::generate(env);
-    let merchant = Address::generate(env);
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
     let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     (id, subscriber, merchant)
 }
