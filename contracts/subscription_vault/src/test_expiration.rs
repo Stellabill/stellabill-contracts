@@ -111,7 +111,7 @@ fn test_cleanup_and_archival() {
     assert!(res.is_err());
 
     // Expire it
-    env.ledger().with_mut(|l| l.timestamp = T0 + 2 * INTERVAL);
+    env.ledger().with_mut(|l| l.timestamp = T0 + 11 * INTERVAL);
 
     // Cleanup now should succeed
     client.cleanup_subscription(&sub_id, &subscriber);

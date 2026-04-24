@@ -13,12 +13,12 @@ use crate::types::{
 use soroban_sdk::{Env, String, Symbol, Vec};
 
 /// Storage key for the list of metadata keys for a subscription.
-fn metadata_keys_key(env: &Env, subscription_id: u32) -> (Symbol, u32) {
+pub fn metadata_keys_key(env: &Env, subscription_id: u32) -> (Symbol, u32) {
     (Symbol::new(env, "mk"), subscription_id)
 }
 
 /// Storage key for a single metadata value.
-fn metadata_value_key(env: &Env, subscription_id: u32, key: &String) -> (Symbol, u32, String) {
+pub fn metadata_value_key(env: &Env, subscription_id: u32, key: &String) -> (Symbol, u32, String) {
     (Symbol::new(env, "mv"), subscription_id, key.clone())
 }
 

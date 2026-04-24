@@ -116,6 +116,12 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_query_performance;
+#[cfg(test)]
+mod test_reentrancy_invariants;
+#[cfg(test)]
+mod test_metadata_fixtures;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -1843,7 +1849,7 @@ impl SubscriptionVault {
     ///
     /// * [`Error::NotFound`] — Subscription does not exist, or key is not set.
     pub fn get_metadata(env: Env, subscription_id: u32, key: String) -> Result<String, Error> {
-        metadata::do_get_metadata(&env, subscription_id, key)
+        queries::get_metadata(&env, subscription_id, key)
     }
 
     /// List all metadata keys for a subscription.
@@ -1856,7 +1862,7 @@ impl SubscriptionVault {
     ///
     /// * [`Error::NotFound`] — Subscription does not exist.
     pub fn list_metadata_keys(env: Env, subscription_id: u32) -> Result<Vec<String>, Error> {
-        metadata::do_list_metadata_keys(&env, subscription_id)
+        queries::list_metadata_keys(&env, subscription_id)
     }
 
     // ── Protocol Fees ──────────────────────────────────────────────────────────

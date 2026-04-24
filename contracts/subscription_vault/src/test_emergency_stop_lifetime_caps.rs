@@ -1,54 +1,33 @@
 #![cfg(test)]
 
-use crate::{ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec};
+use crate::{ChargeExecutionResult, Error, SubscriptionStatus};
+use crate::test_utils::{fixtures, setup::TestEnv};
+use soroban_sdk::{
+    testutils::Events,
+    FromVal, String, Symbol, Val, Vec,
+    Address,
+};
 
 const T0: u64 = 1_700_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
 const DEPOSIT: i128 = 100_000_000;
 
-fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
-
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-
-    (env, client, token, admin)
-}
-
-fn topic0(env: &Env, event: &(Address, Vec<Val>, Val)) -> Symbol {
+fn topic0(env: &soroban_sdk::Env, event: &(Address, Vec<Val>, Val)) -> Symbol {
     Symbol::from_val(env, &event.1.get(0).unwrap())
 }
 
 #[test]
 fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
-    let (env, client, token, admin) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
-
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &INTERVAL,
-        &true,
-        &None::<i128>,
-        &None::<u64>,
+    let (sub_id, subscriber, merchant) = fixtures::create_usage_subscription(
+        &test_env.env, &test_env.client, SubscriptionStatus::Active, 1_000_000i128, INTERVAL
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
+    test_env.client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
 
-    let plan_id = client.create_plan_template(
+    let plan_id = test_env.client.create_plan_template(
         &merchant,
         &1_000_000i128,
         &INTERVAL,
@@ -56,11 +35,11 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &None::<i128>,
     );
 
-    client.enable_emergency_stop(&admin);
-    assert!(client.get_emergency_stop_status());
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    assert!(test_env.client.get_emergency_stop_status());
 
     assert_eq!(
-        client.try_create_subscription(
+        test_env.client.try_create_subscription(
             &subscriber,
             &merchant,
             &1_000_000i128,
@@ -72,10 +51,10 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_create_subscription_with_token(
+        test_env.client.try_create_subscription_with_token(
             &subscriber,
             &merchant,
-            &token,
+            &test_env.token,
             &1_000_000i128,
             &INTERVAL,
             &false,
@@ -85,271 +64,235 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_create_subscription_from_plan(&subscriber, &plan_id),
+        test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128),
+        test_env.client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        test_env.client.try_charge_subscription(&sub_id),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_usage(&sub_id, &100_000i128),
+        test_env.client.try_charge_usage(&sub_id, &100_000i128),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_usage_with_reference(
+        test_env.client.try_charge_usage_with_reference(
             &sub_id,
             &100_000i128,
-            &String::from_str(&env, "usage-ref"),
+            &String::from_str(&test_env.env, "usage-ref"),
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_one_off(&sub_id, &merchant, &100_000i128),
+        test_env.client.try_charge_one_off(&sub_id, &merchant, &100_000i128),
         Err(Ok(Error::EmergencyStopActive))
     );
 
     // Read paths remain available during emergency stop.
-    let sub = client.get_subscription(&sub_id);
+    let sub = test_env.client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Active);
-    assert_eq!(client.get_admin(), admin);
+    assert_eq!(test_env.client.get_admin(), test_env.admin);
 
-    client.disable_emergency_stop(&admin);
-    assert!(!client.get_emergency_stop_status());
+    test_env.client.disable_emergency_stop(&test_env.admin);
+    assert!(!test_env.client.get_emergency_stop_status());
 
-    let resumed_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-    assert_eq!(client.get_subscription(&resumed_id).status, SubscriptionStatus::Active);
+    let resumed_id = test_env.client.create_subscription_from_plan(&subscriber, &plan_id);
+    assert_eq!(test_env.client.get_subscription(&resumed_id).status, SubscriptionStatus::Active);
 }
 
 #[test]
 fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition() {
-    let (env, client, _, admin) = setup();
+    let test_env = TestEnv::default();
 
-    client.enable_emergency_stop(&admin);
-    let enabled_events = env.events().all();
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    let enabled_events = test_env.env.events().all();
     assert_eq!(enabled_events.len(), 1);
     assert_eq!(
-        topic0(&env, &enabled_events.get(0).unwrap()),
-        Symbol::new(&env, "emergency_stop_enabled")
+        topic0(&test_env.env, &enabled_events.get(0).unwrap()),
+        Symbol::new(&test_env.env, "emergency_stop_enabled")
     );
 
-    client.enable_emergency_stop(&admin);
-    assert!(env.events().all().is_empty());
-    assert!(client.get_emergency_stop_status());
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    assert!(test_env.env.events().all().is_empty());
+    assert!(test_env.client.get_emergency_stop_status());
 
-    client.disable_emergency_stop(&admin);
-    let disabled_events = env.events().all();
+    test_env.client.disable_emergency_stop(&test_env.admin);
+    let disabled_events = test_env.env.events().all();
     assert_eq!(disabled_events.len(), 1);
     assert_eq!(
-        topic0(&env, &disabled_events.get(0).unwrap()),
-        Symbol::new(&env, "emergency_stop_disabled")
+        topic0(&test_env.env, &disabled_events.get(0).unwrap()),
+        Symbol::new(&test_env.env, "emergency_stop_disabled")
     );
 
-    client.disable_emergency_stop(&admin);
-    assert!(env.events().all().is_empty());
-    assert!(!client.get_emergency_stop_status());
+    test_env.client.disable_emergency_stop(&test_env.admin);
+    assert!(test_env.env.events().all().is_empty());
+    assert!(!test_env.client.get_emergency_stop_status());
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #1009)")]
 fn test_emergency_stop_blocks_batch_charge() {
-    let (env, client, token, admin) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &INTERVAL,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
+    let (sub_id, subscriber, _) = fixtures::create_test_subscription(
+        &test_env.env, &test_env.client, SubscriptionStatus::Active
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
 
-    client.enable_emergency_stop(&admin);
-    let ids = Vec::from_array(&env, [sub_id]);
-    client.batch_charge(&ids);
+    test_env.client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    test_env.set_timestamp(T0 + INTERVAL + 1);
+
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    let ids = Vec::from_array(&test_env.env, [sub_id]);
+    test_env.client.batch_charge(&ids);
 }
 
 #[test]
 fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
-    let (env, client, token, admin) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &INTERVAL,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
+    let (sub_id, subscriber, _) = fixtures::create_test_subscription(
+        &test_env.env, &test_env.client, SubscriptionStatus::Active
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
 
-    client.enable_emergency_stop(&admin);
-    client.disable_emergency_stop(&admin);
+    test_env.client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    test_env.set_timestamp(T0 + INTERVAL + 1);
 
-    let ids = Vec::from_array(&env, [sub_id]);
-    let results = client.batch_charge(&ids);
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    test_env.client.disable_emergency_stop(&test_env.admin);
+
+    let ids = Vec::from_array(&test_env.env, [sub_id]);
+    let results = test_env.client.batch_charge(&ids);
     assert_eq!(results.len(), 1);
     assert!(results.get(0).unwrap().success);
 }
 
 #[test]
 fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
-    let (env, client, token, _) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
     let amount = 10_000_000i128;
     let cap = (2 * amount) - 1;
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &amount,
-        &INTERVAL,
-        &false,
-        &Some(cap),
-        &None::<u64>,
+    let (sub_id, subscriber, merchant) = fixtures::create_capped_subscription(
+        &test_env.env, &test_env.client, amount, INTERVAL, Some(cap), false
     );
-    client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
 
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    test_env.client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
+
+    test_env.set_timestamp(T0 + INTERVAL + 1);
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        test_env.client.try_charge_subscription(&sub_id),
         Ok(Ok(ChargeExecutionResult::Charged))
     );
-    let after_first = client.get_subscription(&sub_id);
-    let merchant_after_first = client.get_merchant_balance(&merchant);
+    let after_first = test_env.client.get_subscription(&sub_id);
+    let merchant_after_first = test_env.client.get_merchant_balance(&merchant);
 
-    env.ledger().set_timestamp(T0 + (2 * INTERVAL) + 1);
+    test_env.set_timestamp(T0 + (2 * INTERVAL) + 1);
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        test_env.client.try_charge_subscription(&sub_id),
         Ok(Ok(ChargeExecutionResult::Charged))
     );
 
-    let after_second = client.get_subscription(&sub_id);
+    let after_second = test_env.client.get_subscription(&sub_id);
     assert_eq!(after_second.status, SubscriptionStatus::Cancelled);
     assert_eq!(after_second.prepaid_balance, after_first.prepaid_balance);
     assert_eq!(after_second.lifetime_charged, after_first.lifetime_charged);
-    assert_eq!(client.get_merchant_balance(&merchant), merchant_after_first);
+    assert_eq!(test_env.client.get_merchant_balance(&merchant), merchant_after_first);
 }
 
 #[test]
 fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
-    let (env, client, token, _) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
     let cap = 50_000_000i128;
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1i128,
-        &INTERVAL,
-        &true,
-        &Some(cap),
-        &None::<u64>,
+    let (sub_id, subscriber, merchant) = fixtures::create_capped_subscription(
+        &test_env.env, &test_env.client, 1i128, INTERVAL, Some(cap), true
     );
-    client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
-    client.charge_usage_with_reference(
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
+
+    test_env.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    test_env.client.charge_usage_with_reference(
         &sub_id,
         &cap,
-        &String::from_str(&env, "cap-exact-usage"),
+        &String::from_str(&test_env.env, "cap-exact-usage"),
     );
 
-    let sub = client.get_subscription(&sub_id);
+    let sub = test_env.client.get_subscription(&sub_id);
     assert_eq!(sub.prepaid_balance, DEPOSIT - cap);
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-    assert_eq!(client.get_merchant_balance(&merchant), cap);
+    assert_eq!(test_env.client.get_merchant_balance(&merchant), cap);
 }
 
 #[test]
 fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
-    let (env, client, token, _) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
     let cap = 50_000_000i128;
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1i128,
-        &INTERVAL,
-        &true,
-        &Some(cap),
-        &None::<u64>,
+    let (sub_id, subscriber, merchant) = fixtures::create_capped_subscription(
+        &test_env.env, &test_env.client, 1i128, INTERVAL, Some(cap), true
     );
-    client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
+
+    test_env.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
 
     // Simulate a nearly exhausted cap while still active.
-    let mut sub = client.get_subscription(&sub_id);
+    let mut sub = test_env.client.get_subscription(&sub_id);
     sub.lifetime_charged = cap - 1;
-    env.as_contract(&client.address, || {
-        env.storage().instance().set(&sub_id, &sub);
+    test_env.env.as_contract(&test_env.client.address, || {
+        test_env.env.storage().instance().set(&sub_id, &sub);
     });
 
-    client.charge_usage_with_reference(
+    test_env.client.charge_usage_with_reference(
         &sub_id,
         &2i128,
-        &String::from_str(&env, "cap-overrun-usage"),
+        &String::from_str(&test_env.env, "cap-overrun-usage"),
     );
 
-    let updated = client.get_subscription(&sub_id);
+    let updated = test_env.client.get_subscription(&sub_id);
     assert_eq!(updated.status, SubscriptionStatus::Cancelled);
     assert_eq!(updated.prepaid_balance, DEPOSIT);
     assert_eq!(updated.lifetime_charged, cap - 1);
-    assert_eq!(client.get_merchant_balance(&merchant), 0);
+    assert_eq!(test_env.client.get_merchant_balance(&merchant), 0);
 }
 
 #[test]
 fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() {
-    let (env, client, token, _) = setup();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
 
     let cap = 5_000_000i128;
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &1_000_000i128,
-        &INTERVAL,
-        &false,
-        &Some(cap),
-        &None::<u64>,
+    let (sub_id, subscriber, merchant) = fixtures::create_capped_subscription(
+        &test_env.env, &test_env.client, 1_000_000i128, INTERVAL, Some(cap), false
     );
-    client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
-    client.charge_one_off(&sub_id, &merchant, &cap);
+    test_env.stellar_token_client().mint(&subscriber, &DEPOSIT);
 
-    let sub = client.get_subscription(&sub_id);
+    test_env.client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
+    test_env.client.charge_one_off(&sub_id, &merchant, &cap);
+    let events = test_env.env.events().all();
+
+    let sub = test_env.client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.prepaid_balance, 15_000_000i128);
-    assert_eq!(client.get_merchant_balance(&merchant), cap);
-
-    let events = env.events().all();
+    assert_eq!(test_env.client.get_merchant_balance(&merchant), cap);
     let mut cap_events = 0u32;
     for event in events.iter() {
-        if event.0 != client.address { continue; }
-        let topic: Symbol = Symbol::from_val(&env, &event.1.get(0).unwrap());
-        if topic == Symbol::new(&env, "lifetime_cap_reached") {
+        if event.0 != test_env.client.address { continue; }
+        if event.1.len() == 0 { continue; }
+        let topic: Symbol = Symbol::from_val(&test_env.env, &event.1.get(0).unwrap());
+        if topic == Symbol::new(&test_env.env, "lifetime_cap_reached") {
             cap_events += 1;
         }
     }

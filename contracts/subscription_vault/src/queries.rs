@@ -39,7 +39,7 @@
 
 use crate::safe_math::{safe_mul, safe_sub};
 use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
-use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Env, String, Symbol, Vec};
 
 /// Maximum `limit` for [`get_subscriptions_by_merchant`] and [`get_subscriptions_by_token`]
 /// (aligned with [`list_subscriptions_by_subscriber`]).
@@ -308,4 +308,19 @@ pub fn list_subscriptions_by_subscriber(
         subscription_ids,
         next_start_id,
     })
+}
+
+/// Get a metadata value by key for a subscription.
+///
+/// Returns `Error::NotFound` if the key is not set or the subscription doesn't exist.
+pub fn get_metadata(env: &Env, subscription_id: u32, key: String) -> Result<String, Error> {
+    crate::metadata::do_get_metadata(env, subscription_id, key)
+}
+
+/// List all metadata keys for a subscription.
+///
+/// Returns an empty vector if no metadata is set.
+/// Returns `Error::NotFound` if the subscription doesn't exist.
+pub fn list_metadata_keys(env: &Env, subscription_id: u32) -> Result<Vec<String>, Error> {
+    crate::metadata::do_list_metadata_keys(env, subscription_id)
 }

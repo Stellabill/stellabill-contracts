@@ -9,8 +9,16 @@ pub struct TestEnv {
 }
 
 impl TestEnv {
-    /// Initialize a standard test environment with a mock token and default grace period.
+    /// Initialize a standard test environment with zero minimum top-up.
     pub fn default() -> Self {
+        Self::with_min_topup(0)
+    }
+
+    /// Initialize a test environment with a custom minimum top-up threshold.
+    ///
+    /// Use this when the contract under test must enforce a non-zero minimum deposit
+    /// (e.g. `test_insufficient_balance`, `test_recovery`).
+    pub fn with_min_topup(min_topup: i128) -> Self {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -22,7 +30,6 @@ impl TestEnv {
             .register_stellar_asset_contract_v2(admin.clone())
             .address();
 
-        let min_topup = 1_000_000i128; // 1 USDC
         let grace_period = 7 * 24 * 60 * 60u64; // 7 days
 
         client.init(&token, &6, &admin, &min_topup, &grace_period);

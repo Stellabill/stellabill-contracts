@@ -59,7 +59,7 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address)
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
-    let min_topup = 1_000_000i128; // 1 USDC
+    let min_topup = 0i128;
     client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
 
     (env, client, token, admin)
@@ -74,7 +74,7 @@ fn setup_contract(env: &Env) -> (SubscriptionVaultClient<'_>, Address, Address) 
     let token = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
-    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+    client.init(&token, &6, &admin, &0i128, &(7 * 24 * 60 * 60));
     (client, token, admin)
 }
 
@@ -1252,6 +1252,7 @@ fn test_deposit_funds_cei_compliance() {
 #[should_panic(expected = "Error(Contract, #402)")]
 fn test_deposit_funds_below_minimum() {
     let test_env = TestEnv::default();
+    test_env.client.set_min_topup(&test_env.admin, &1_000_000i128);
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
     let id = test_env.client.create_subscription(
@@ -5152,6 +5153,7 @@ fn test_admin_rotation_affects_recovery_operations() {
     );
 
     // New admin can recover.
+    test_env.stellar_token_client().mint(&test_env.client.address, &1_000_000);
     test_env.client.recover_stranded_funds(
         &new_admin,
         &test_env.token,

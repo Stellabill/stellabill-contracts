@@ -432,6 +432,10 @@ pub fn do_deposit_funds(
         return Err(Error::Unauthorized);
     }
     
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
@@ -770,17 +774,7 @@ pub fn do_charge_one_off(
     );
 
     if cap_reached {
-        if let Some(cap) = sub.lifetime_cap {
-            env.events().publish(
-                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
-                LifetimeCapReachedEvent {
-                    subscription_id,
-                    lifetime_cap: cap,
-                    lifetime_charged: sub.lifetime_charged,
-                    timestamp: now,
-                },
-            );
-        }
+        // Handled above during status transition
     }
 
     Ok(())

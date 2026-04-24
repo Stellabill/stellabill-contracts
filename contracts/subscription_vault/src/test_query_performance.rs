@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+extern crate std;
+
 use crate::{
     queries::{MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE},
     subscription::MAX_WRITE_PATH_SCAN_DEPTH,
@@ -16,7 +18,7 @@ const T0: u64 = 1700000000;
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    env.ledger().set_timestamp(T0);
+    env.ledger().with_mut(|li| li.timestamp = T0);
     // Needed to avoid gas limits when doing deep mock pagination in tests
     env.budget().reset_unlimited();
 
@@ -341,4 +343,39 @@ fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     // This creation should fail with InvalidInput because we simulated an oversized contract
     // AND we forced the scan path by configuring a credit limit.
     client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>);
+}
+
+#[test]
+fn test_metadata_lookups_performance() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    // Create a subscription
+    let id = client.create_subscription(&subscriber, &merchant, &1000, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>);
+
+    // Set max metadata keys (10)
+    for i in 0..10 {
+        let key = String::from_str(&env, &std::format!("key_{}", i));
+        let val = String::from_str(&env, &std::format!("val_{}", i));
+        client.set_metadata(&id, &subscriber, &key, &val);
+    }
+
+    // Verify listing
+    let keys = client.list_metadata_keys(&id);
+    assert_eq!(keys.len(), 10);
+
+    // Verify getting each key
+    for i in 0..10 {
+        let key = String::from_str(&env, &std::format!("key_{}", i));
+        let val = client.get_metadata(&id, &key);
+        assert_eq!(val, String::from_str(&env, &std::format!("val_{}", i)));
+    }
+
+    // Ensure we can update an existing key without exceeding limit
+    let key0 = String::from_str(&env, "key_0");
+    let new_val = String::from_str(&env, "new_val_0");
+    client.set_metadata(&id, &subscriber, &key0, &new_val);
+    assert_eq!(client.get_metadata(&id, &key0), new_val);
+    assert_eq!(client.list_metadata_keys(&id).len(), 10);
 }

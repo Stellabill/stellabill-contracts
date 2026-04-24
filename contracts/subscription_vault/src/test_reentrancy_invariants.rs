@@ -16,7 +16,7 @@
 use crate::{
     Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
 
 // ── constants ────────────────────────────────────────────────────────────────
 const T0: u64 = 1_000;
@@ -178,7 +178,7 @@ fn test_charge_token_conservation_invariant() {
     soroban_sdk::token::StellarAssetClient::new(&env, &token)
         .mint(&client.address, &PREPAID);
 
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
     let vault_before = token_client.balance(&client.address);
 
     client.charge_subscription(&id);
@@ -204,7 +204,7 @@ fn test_charge_insufficient_balance_no_partial_debit() {
     // Zero balance, past grace period
     seed_balance(&env, &client, id, 0);
     let grace = 7 * 24 * 60 * 60u64;
-    env.ledger().set_timestamp(T0 + INTERVAL + grace + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + grace + 1);
 
     let result = client.try_charge_subscription(&id);
     assert!(result.is_ok()); // returns InsufficientBalance result, not Err
@@ -225,7 +225,7 @@ fn test_charge_replay_rejected_no_state_mutation() {
     soroban_sdk::token::StellarAssetClient::new(&env, &token)
         .mint(&client.address, &PREPAID);
 
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
     client.charge_subscription(&id);
 
     let sub_after_first = client.get_subscription(&id);
@@ -269,7 +269,7 @@ fn test_charge_lifetime_charged_monotonically_increases() {
 
     let mut prev_lifetime = 0i128;
     for i in 1..=4 {
-        env.ledger().set_timestamp(T0 + (i as u64 * INTERVAL) + 1);
+        env.ledger().with_mut(|li| li.timestamp = T0 + (i as u64 * INTERVAL) + 1);
         client.charge_subscription(&id);
         let sub = client.get_subscription(&id);
         assert!(sub.lifetime_charged > prev_lifetime);
@@ -548,7 +548,7 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
 #[test]
 fn test_charge_nonexistent_subscription_errors_cleanly() {
     let (env, client, _, _) = setup();
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
     let result = client.try_charge_subscription(&9999u32);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
@@ -571,7 +571,7 @@ fn test_charge_blocked_by_emergency_stop_no_mutation() {
     seed_balance(&env, &client, id, PREPAID);
 
     client.enable_emergency_stop(&admin);
-    env.ledger().set_timestamp(T0 + INTERVAL + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
 
     let result = client.try_charge_subscription(&id);
     assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
@@ -607,7 +607,7 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
     // Zero balance — charge will fail
     seed_balance(&env, &client, id, 0);
     let grace = 7 * 24 * 60 * 60u64;
-    env.ledger().set_timestamp(T0 + INTERVAL + grace + 1);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + grace + 1);
     let _ = client.try_charge_subscription(&id);
     assert_eq!(
         client.get_subscription(&id).status,
@@ -624,7 +624,7 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
     );
 
     // Next interval — charge must succeed cleanly
-    env.ledger().set_timestamp(T0 + INTERVAL + grace + 1 + INTERVAL);
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + grace + 1 + INTERVAL);
     let result = client.try_charge_subscription(&id);
     assert!(result.is_ok());
     assert_eq!(

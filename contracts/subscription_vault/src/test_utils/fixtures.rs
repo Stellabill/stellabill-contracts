@@ -116,3 +116,61 @@ pub fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
             .set(&Symbol::new(env, "next_id"), &value);
     });
 }
+
+/// Create a usage-enabled subscription with explicit amount and interval.
+///
+/// Equivalent to `create_subscription_detailed` but with `usage_enabled = true`.
+/// Used by tests that exercise `charge_usage*` paths.
+pub fn create_usage_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    status: SubscriptionStatus,
+    amount: i128,
+    interval: u64,
+) -> (u32, Address, Address) {
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    if status != SubscriptionStatus::Active {
+        patch_status(env, client, id, status);
+    }
+
+    (id, subscriber, merchant)
+}
+
+/// Create a subscription with an explicit lifetime cap and configurable usage flag.
+///
+/// Used by tests that verify `lifetime_cap_reached` cancellation behaviour.
+pub fn create_capped_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    amount: i128,
+    interval: u64,
+    lifetime_cap: Option<i128>,
+    usage_enabled: bool,
+) -> (u32, Address, Address) {
+    let subscriber = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+    let merchant = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(env);
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval,
+        &usage_enabled,
+        &lifetime_cap,
+        &None::<u64>,
+    );
+
+    (id, subscriber, merchant)
+}
