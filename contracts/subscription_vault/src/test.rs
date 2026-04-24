@@ -1203,7 +1203,7 @@ fn test_deposit_funds_event_payload() {
     );
 
     // Verify event data: FundsDepositedEvent { subscription_id, subscriber, amount, prepaid_balance }
-    let event_data: crate::FundsDepositedEvent = deposit_event.2.into_val(&env);
+    let event_data: crate::FundsDepositedEvent = deposit_event.2.from_val(&env);
     assert_eq!(event_data.subscription_id, id);
     assert_eq!(event_data.subscriber, subscriber);
     assert_eq!(event_data.amount, 15_000_000);
@@ -1308,7 +1308,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
         Symbol::new(&test_env.env, "blocklist_added")
     );
-    let added: crate::BlocklistAddedEvent = add_event.2.into_val(&test_env.env);
+    let added: crate::BlocklistAddedEvent = add_event.2.from_val(&test_env.env);
     assert_eq!(added.subscriber, subscriber);
     assert_eq!(added.added_by, test_env.admin);
     assert_eq!(added.timestamp, T0);
@@ -1331,7 +1331,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         ),
         Symbol::new(&test_env.env, "blocklist_removed")
     );
-    let removed: crate::BlocklistRemovedEvent = remove_event.2.into_val(&test_env.env);
+    let removed: crate::BlocklistRemovedEvent = remove_event.2.from_val(&test_env.env);
     assert_eq!(removed.subscriber, subscriber);
     assert_eq!(removed.removed_by, test_env.admin);
     assert_eq!(removed.timestamp, T0 + 60);
