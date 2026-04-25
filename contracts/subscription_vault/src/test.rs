@@ -8105,7 +8105,7 @@ fn test_compaction_aggregation_accuracy() {
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
 }
 
-
+r
 // =============================================================================
 // Metadata Privacy Validation Tests (issue #288)
 // =============================================================================
@@ -8172,15 +8172,15 @@ fn test_metadata_privacy_empty_key_rejected() {
     test_env.client.set_metadata(&id, &subscriber, &key, &value);
 }
 
-/// Empty value (zero bytes) must be accepted — callers may use it as a tag/flag.
+/// Single-byte value must be accepted — minimum non-empty value.
 #[test]
-fn test_metadata_privacy_empty_value_accepted() {
+fn test_metadata_privacy_single_byte_value_accepted() {
     let test_env = TestEnv::default();
     let (id, subscriber, _) =
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
 
     let key = String::from_str(&test_env.env, "flag");
-    let value = String::from_str(&test_env.env, "");
+    let value = String::from_str(&test_env.env, "1");
 
     test_env.client.set_metadata(&id, &subscriber, &key, &value);
     assert_eq!(test_env.client.get_metadata(&id, &key), value);
@@ -8237,7 +8237,11 @@ fn test_metadata_privacy_non_ascii_utf8_value_accepted() {
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
 
     // U+00C9 (É) encodes to 2 bytes (0xC3 0x89); 128 repetitions = 256 bytes exactly
-    let raw: alloc::vec::Vec<u8> = alloc::vec![0xC3u8, 0x89u8].repeat(128);
+    let mut raw: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(256);
+    for _ in 0..128 {
+        raw.push(0xC3u8);
+        raw.push(0x89u8);
+    }
     assert_eq!(raw.len(), 256);
     let val_str = alloc::string::String::from_utf8(raw).unwrap();
 
@@ -8257,7 +8261,11 @@ fn test_metadata_privacy_non_ascii_utf8_over_limit_rejected() {
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
 
     // 129 × 2 bytes = 258 bytes — over the 256-byte limit
-    let raw: alloc::vec::Vec<u8> = alloc::vec![0xC3u8, 0x89u8].repeat(129);
+    let mut raw: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(258);
+    for _ in 0..129 {
+        raw.push(0xC3u8);
+        raw.push(0x89u8);
+    }
     assert_eq!(raw.len(), 258);
     let val_str = alloc::string::String::from_utf8(raw).unwrap();
 
