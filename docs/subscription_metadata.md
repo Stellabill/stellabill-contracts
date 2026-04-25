@@ -103,3 +103,84 @@ Use metadata for lightweight off-chain references:
 
 Metadata is visible on-chain to anyone who can read ledger state.
 Treat all metadata values as **public and non-sensitive**.
+
+---
+
+## Privacy Constraints
+
+Metadata is stored **on-chain and is permanently public**. Every key-value pair
+written to ledger state is visible to any node operator, indexer, or block explorer
+for the lifetime of the ledger entry. There is no encryption, access control, or
+expiry at the storage layer.
+
+### What must never be stored on-chain
+
+The following categories of data are **strictly prohibited** as metadata values:
+
+| Category | Examples |
+|----------|---------|
+| Personally Identifiable Information (PII) | Full name, email address, phone number, postal address, date of birth, national ID |
+| Authentication secrets | API keys, tokens, passwords, private keys, seed phrases |
+| Financial account data | Credit card numbers, bank account numbers, IBAN, CVV |
+| Health or biometric data | Medical records, biometric identifiers |
+| Large structured blobs | Base64-encoded images, JSON payloads, XML documents |
+| Mutable operational state | Subscription status, balance, charge timestamps (use on-chain fields) |
+
+Storing any of the above violates user privacy, may breach data-protection
+regulations (GDPR, CCPA, etc.), and cannot be undone once written to ledger.
+
+### Allowlist of permitted metadata fields
+
+Only use metadata for **opaque, non-sensitive off-chain references**. The following
+fields are explicitly approved:
+
+| Key | Max value length | Purpose |
+|-----|-----------------|---------|
+| `invoice_id` | 64 bytes | Link to billing system invoice (e.g. `INV-2025-001`) |
+| `customer_id` | 64 bytes | External customer reference (opaque ID, not name/email) |
+| `external_ref` | 64 bytes | Cross-system subscription ID (e.g. `stripe_sub_xyz`) |
+| `campaign_tag` | 32 bytes | Marketing campaign attribution tag |
+| `plan_name` | 64 bytes | Human-readable plan label (non-PII) |
+| `merchant_ref` | 64 bytes | Merchant-side reference ID |
+| `note` | 128 bytes | Short operational note (must not contain PII) |
+
+All values must stay within the global 256-byte value limit. Keys must be ≤ 32 bytes.
+Values outside this allowlist require explicit review before use.
+
+### Encoding rules
+
+- Values must be valid UTF-8 strings.
+- Prefer ASCII-only identifiers for keys and reference IDs.
+- Do not embed binary data, null bytes, or control characters in values.
+- Do not use values as a side-channel for structured data (no JSON, no CSV).
+
+### Enforcement
+
+Size limits are enforced on-chain by `metadata.rs`:
+
+- `key.len() > MAX_METADATA_KEY_LENGTH (32)` → `Error::MetadataKeyTooLong (#1024)`
+- `value.len() > MAX_METADATA_VALUE_LENGTH (256)` → `Error::MetadataValueTooLong (#1025)`
+- More than `MAX_METADATA_KEYS (10)` distinct keys → `Error::MetadataKeyLimitReached (#1023)`
+
+Content-level privacy (e.g. detecting an email address in a value) cannot be
+enforced on-chain. Enforcement of the allowlist and prohibited-content rules is
+the responsibility of the **off-chain caller** and is verified during code review
+using the checklist below.
+
+---
+
+## Reviewer Checklist
+
+When reviewing any PR that touches metadata (reads, writes, or documentation):
+
+- [ ] No PII (names, emails, phone numbers, addresses) appears in metadata values in tests or examples.
+- [ ] No secrets (API keys, tokens, passwords) appear in metadata values in tests or examples.
+- [ ] All metadata keys used in tests and examples are from the approved allowlist above, or are clearly labelled as synthetic test data.
+- [ ] Value lengths in tests exercise the boundary (exactly 256 bytes) and over-boundary (257 bytes) cases.
+- [ ] Key lengths in tests exercise the boundary (exactly 32 bytes) and over-boundary (33 bytes) cases.
+- [ ] The 10-key limit is tested: filling to 10 keys, attempting an 11th, and verifying the error.
+- [ ] Empty-key rejection is tested (`Error::MetadataKeyTooLong`).
+- [ ] Unauthorized-caller rejection is tested (`Error::Forbidden`).
+- [ ] Setting metadata on a cancelled subscription is tested (`Error::NotActive`).
+- [ ] No metadata operation modifies financial state (balance, status, charge timestamps).
+- [ ] Documentation updated if new fields are added to the allowlist.

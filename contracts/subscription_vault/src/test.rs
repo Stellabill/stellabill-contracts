@@ -8105,3 +8105,189 @@ fn test_compaction_aggregation_accuracy() {
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
 }
 
+
+// =============================================================================
+// Metadata Privacy Validation Tests (issue #288)
+// =============================================================================
+
+/// Max-size key (32 bytes) and max-size value (256 bytes) must both be accepted.
+#[test]
+fn test_metadata_privacy_max_size_payload_accepted() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    let key = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // 32 bytes
+    let val_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 256]).unwrap();
+    let value = String::from_str(&test_env.env, &val_str);
+
+    assert_eq!(key.len(), 32);
+    assert_eq!(value.len(), 256);
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    assert_eq!(test_env.client.get_metadata(&id, &key), value);
+}
+
+/// Value one byte over the 256-byte limit must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #1025)")]
+fn test_metadata_privacy_over_max_value_rejected() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    let key = String::from_str(&test_env.env, "k");
+    let val_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 257]).unwrap();
+    let value = String::from_str(&test_env.env, &val_str);
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+/// Key one byte over the 32-byte limit must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #1024)")]
+fn test_metadata_privacy_over_max_key_rejected() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // 33 bytes
+    let key = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let value = String::from_str(&test_env.env, "v");
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+/// Empty key must be rejected (privacy: prevents ambiguous/unnamed storage slots).
+#[test]
+#[should_panic(expected = "Error(Contract, #1024)")]
+fn test_metadata_privacy_empty_key_rejected() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    let key = String::from_str(&test_env.env, "");
+    let value = String::from_str(&test_env.env, "v");
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+/// Empty value (zero bytes) must be accepted — callers may use it as a tag/flag.
+#[test]
+fn test_metadata_privacy_empty_value_accepted() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    let key = String::from_str(&test_env.env, "flag");
+    let value = String::from_str(&test_env.env, "");
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    assert_eq!(test_env.client.get_metadata(&id, &key), value);
+}
+
+/// Filling all 10 key slots then attempting an 11th must be rejected.
+/// Prevents metadata from being used as an unbounded on-chain data store.
+#[test]
+#[should_panic(expected = "Error(Contract, #1023)")]
+fn test_metadata_privacy_key_cap_prevents_unbounded_storage() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    for i in 0..10u32 {
+        let key = String::from_str(&test_env.env, &format!("slot_{i}"));
+        let value = String::from_str(&test_env.env, "v");
+        test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    }
+
+    // 11th distinct key must fail
+    let key = String::from_str(&test_env.env, "slot_overflow");
+    let value = String::from_str(&test_env.env, "v");
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+/// Worst-case payload: 10 keys each at max key length and max value length.
+/// Must be accepted and all values must be retrievable.
+#[test]
+fn test_metadata_privacy_worst_case_payload_accepted() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    for i in 0..10u32 {
+        // Key: 32 bytes, padded with index digit at position 0
+        let raw_key = format!("{:0<32}", i); // e.g. "0000000000000000000000000000000i"
+        let key = String::from_str(&test_env.env, &raw_key[..32]);
+        let val_str = alloc::string::String::from_utf8(alloc::vec![b'v'; 256]).unwrap();
+        let value = String::from_str(&test_env.env, &val_str);
+        test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    }
+
+    let keys = test_env.client.list_metadata_keys(&id);
+    assert_eq!(keys.len(), 10);
+}
+
+/// A value consisting entirely of repeated non-ASCII UTF-8 bytes (2-byte sequences)
+/// must be accepted as long as it is valid UTF-8 and within 256 bytes.
+#[test]
+fn test_metadata_privacy_non_ascii_utf8_value_accepted() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // U+00C9 (É) encodes to 2 bytes (0xC3 0x89); 128 repetitions = 256 bytes exactly
+    let raw: alloc::vec::Vec<u8> = alloc::vec![0xC3u8, 0x89u8].repeat(128);
+    assert_eq!(raw.len(), 256);
+    let val_str = alloc::string::String::from_utf8(raw).unwrap();
+
+    let key = String::from_str(&test_env.env, "label");
+    let value = String::from_str(&test_env.env, &val_str);
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    assert_eq!(test_env.client.get_metadata(&id, &key), value);
+}
+
+/// A value of 129 two-byte UTF-8 characters (258 bytes) must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #1025)")]
+fn test_metadata_privacy_non_ascii_utf8_over_limit_rejected() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // 129 × 2 bytes = 258 bytes — over the 256-byte limit
+    let raw: alloc::vec::Vec<u8> = alloc::vec![0xC3u8, 0x89u8].repeat(129);
+    assert_eq!(raw.len(), 258);
+    let val_str = alloc::string::String::from_utf8(raw).unwrap();
+
+    let key = String::from_str(&test_env.env, "label");
+    let value = String::from_str(&test_env.env, &val_str);
+
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+/// Metadata operations must not affect financial state even at worst-case payload.
+#[test]
+fn test_metadata_privacy_no_financial_side_effects() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    fixtures::seed_balance(&test_env.env, &test_env.client, id, PREPAID);
+
+    let sub_before = test_env.client.get_subscription(&id);
+
+    // Write max-size payload to all 10 slots
+    for i in 0..10u32 {
+        let key = String::from_str(&test_env.env, &format!("k{i:031}"));
+        let val_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 256]).unwrap();
+        let value = String::from_str(&test_env.env, &val_str);
+        test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    }
+
+    let sub_after = test_env.client.get_subscription(&id);
+    assert_eq!(sub_before.prepaid_balance, sub_after.prepaid_balance);
+    assert_eq!(sub_before.status, sub_after.status);
+    assert_eq!(sub_before.amount, sub_after.amount);
+    assert_eq!(sub_before.lifetime_charged, sub_after.lifetime_charged);
+}
