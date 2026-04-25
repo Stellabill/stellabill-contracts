@@ -2976,7 +2976,6 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
         &None::<u64>,
     );
 
@@ -3017,7 +3016,6 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
         &None::<u64>,
     );
 
@@ -4856,7 +4854,6 @@ fn test_create_subscription_lifetime_cap_less_than_amount_rejected() {
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4932,7 +4929,6 @@ fn test_create_subscription_with_token_lifetime_cap_less_than_amount_rejected() 
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4972,7 +4968,6 @@ fn test_create_subscription_max_amount_and_cap_succeeds() {
         &INTERVAL,
         &false,
         &Some(i128::MAX),
-    ,
         &None::<u64>,
     );
     let sub = test_env.client.get_subscription(&id);
@@ -4992,7 +4987,6 @@ fn test_create_subscription_max_amount_cap_smaller_rejected() {
         &INTERVAL,
         &false,
         &Some(i128::MAX - 1),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -7995,7 +7989,6 @@ fn test_oneoff_lifetime_cap_boundary() {
         &INTERVAL,
         &false,
         &Some(20_000_000i128),
-    ,
         &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
@@ -8105,7 +8098,6 @@ fn test_compaction_aggregation_accuracy() {
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
 }
 
-r
 // =============================================================================
 // Metadata Privacy Validation Tests (issue #288)
 // =============================================================================
