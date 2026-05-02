@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Read(//usr/local/bin/**)",
+      "Read(//c/Users/MIKE PC/.cargo/bin/**)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Rust\\\\bin\\\\cargo.exe\" --version 2>&1)",
+      "PowerShell(& \"C:\\\\Rust\\\\bin\\\\cargo.exe\" --version 2>&1)",
+      "Bash(where cargo *)",
+      "PowerShell(Get-Command cargo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-ChildItem \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\" -ErrorAction SilentlyContinue | Select-Object FullName)",
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\")"
+    ]
+  }
+}

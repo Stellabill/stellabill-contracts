@@ -3,22 +3,101 @@
 use crate::{
     queries::{MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE},
     subscription::MAX_WRITE_PATH_SCAN_DEPTH,
-    types::{DataKey, Subscription, SubscriptionStatus},
-    SubscriptionVault, SubscriptionVaultClient, Error,
+    types::{Subscription, SubscriptionStatus},
+    SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env, Symbol, Vec, String,
+    Address, Env, Symbol,
 };
 
 const T0: u64 = 1700000000;
+
+// ================================================================
+// Performance Budget Constants
+// ================================================================
+// Initial conservative limits. These MUST be tuned after running
+// the benchmark (see `benchmark_query_performance` below).
+// Set to measured baseline × 1.5–2.0.
+mod perf_budgets {
+    // get_subscription: single record read
+    pub const GET_SUBSCRIPTION_CPU: u64 = 25_000;
+    pub const GET_SUBSCRIPTION_LEDGER_READS: u64 = 3;
+
+    // list_subscriptions_by_subscriber: scans up to MAX_SCAN_DEPTH (1,000) IDs
+    pub const LIST_SUBSCRIBER_CPU: u64 = 200_000;
+    pub const LIST_SUBSCRIBER_LEDGER_READS: u64 = 1_500;
+
+    // get_subscriptions_by_merchant: index read + limit records (max 100)
+    pub const MERCHANT_QUERY_CPU: u64 = 500_000;
+    pub const MERCHANT_QUERY_LEDGER_READS: u64 = 200;
+
+    // get_subscriptions_by_token: similar to merchant
+    pub const TOKEN_QUERY_CPU: u64 = 500_000;
+    pub const TOKEN_QUERY_LEDGER_READS: u64 = 200;
+
+    // Warn if consumption exceeds this % of budget (early warning)
+    pub const WARNING_THRESHOLD: f64 = 0.80;
+}
+
+/// Execute `op` within hard CPU and ledger-read budgets.
+/// If the operation exceeds the budget, Soroban aborts → test fails.
+/// After execution, prints actual consumption and emits soft warnings
+/// if usage exceeds WARNING_THRESHOLD.
+fn with_perf_budget<F>(
+    env: &Env,
+    cpu_budget: u64,
+    read_budget: u64,
+    test_name: &str,
+    op: F,
+)
+where
+    F: FnOnce(),
+{
+    // Set hard budgets (enforced by runtime)
+    env.budget().set_cpu_budget(cpu_budget);
+    env.budget().set_ledger_read_budget(read_budget);
+    env.budget().set_ledger_write_budget(0); // read-only queries
+
+    // Run the operation under test
+    op();
+
+    // Capture metrics
+    let cpu = env.budget().cpu_instruction_count();
+    let reads = env.budget().ledger_read_count();
+    let writes = env.budget().ledger_write_count();
+
+    // CI-visible output
+    println!(
+        "[Perf] {}: cpu={}, reads={}, writes={} (limit: cpu≤{}, reads≤{})",
+        test_name, cpu, reads, writes, cpu_budget, read_budget
+    );
+
+    // Soft headroom warning
+    let cpu_ratio = cpu as f64 / cpu_budget as f64;
+    let read_ratio = reads as f64 / read_budget as f64;
+    if cpu_ratio > perf_budgets::WARNING_THRESHOLD {
+        eprintln!(
+            "WARNING: {} CPU usage {:.1}% of budget",
+            test_name,
+            cpu_ratio * 100.0
+        );
+    }
+    if read_ratio > perf_budgets::WARNING_THRESHOLD {
+        eprintln!(
+            "WARNING: {} ledger reads {:.1}% of budget",
+            test_name,
+            read_ratio * 100.0
+        );
+    }
+}
 
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(T0);
     // Needed to avoid gas limits when doing deep mock pagination in tests
-    env.budget().reset_unlimited();
+    env.cost_estimate().budget().reset_unlimited();
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
@@ -60,20 +139,23 @@ fn inject_subscriptions(
     token: &Address,
 ) {
     env.as_contract(contract_id, || {
-        let next_id_key = Symbol::new(env, "next_id");
-        let start_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+        let start_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
         for i in 0..count {
             let id = start_id + i;
             let sub = create_mock_sub(env, subscriber, token);
-            env.storage().instance().set(&id, &sub);
+            env.storage().instance().set(&DataKey::Sub(id), &sub);
         }
 
         env.storage()
             .instance()
-            .set(&next_id_key, &(start_id + count));
+            .set(&DataKey::NextId, &(start_id + count));
     });
 }
+
+// ================================================================
+// Original functional tests (unchanged)
+// ================================================================
 
 #[test]
 fn test_subscriber_list_basic() {
@@ -181,14 +263,14 @@ fn test_subscriber_list_empty() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_zero() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -231,14 +313,14 @@ fn test_merchant_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_zero() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -289,14 +371,14 @@ fn test_token_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_zero() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_overflow() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -318,14 +400,14 @@ fn test_merchant_count_and_token_count() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     let (env, client, token, _) = setup();
     
     // We simulate a contract that has exceeded the MAX_WRITE_PATH_SCAN_DEPTH
     // by injecting a fake next_id. 
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &(MAX_WRITE_PATH_SCAN_DEPTH + 1));
+        env.storage().instance().set(&DataKey::NextId, &(MAX_WRITE_PATH_SCAN_DEPTH + 1));
     });
 
     let subscriber = Address::generate(&env);
@@ -334,11 +416,531 @@ fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     // In order to trigger the O(n) scan, we need a credit limit > 0
     // so `compute_subscriber_exposure` gets called instead of fast-path exiting.
     env.as_contract(&client.address, || {
-        let credit_limit_key = (Symbol::new(&env, "credit_limit"), subscriber.clone(), token.clone());
+        let credit_limit_key = DataKey::CreditLimit(subscriber.clone(), token.clone());
         env.storage().instance().set(&credit_limit_key, &1000i128); // Non-zero sets up the scan
     });
 
     // This creation should fail with InvalidInput because we simulated an oversized contract
     // AND we forced the scan path by configuring a credit limit.
     client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>);
+}
+
+// ================================================================
+// Performance Budget Tests (New)
+// ================================================================
+
+/// Benchmark: measure baseline resource usage (ignored in CI)
+/// Run: cargo test -p subscription_vault benchmark_query_performance -- --ignored --nocapture
+#[cfg(test)]
+mod benchmark {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn benchmark_query_performance() {
+        measure_get_subscription();
+        measure_list_subscriber();
+        measure_merchant_query();
+        measure_token_query();
+    }
+
+    fn measure_get_subscription() {
+        let (env, client, _token, _) = setup();
+        let subscriber = Address::generate(&env);
+        let merchant = Address::generate(&env);
+        let sub_id = client.create_subscription(
+            &subscriber,
+            &merchant,
+            &10_000,
+            &(30 * 24 * 60 * 60),
+            &false,
+            &None,
+            &None::<u64>,
+        );
+
+        // High budgets so we never hit limit; just measure
+        env.budget().set_cpu_budget(10_000_000);
+        env.budget().set_ledger_read_budget(10_000);
+        env.budget().set_ledger_write_budget(0);
+
+        let _ = client.get_subscription(&sub_id);
+
+        let cpu = env.budget().cpu_instruction_count();
+        let reads = env.budget().ledger_read_count();
+        let writes = env.budget().ledger_write_count();
+        println!(
+            "[BENCH] get_subscription: cpu={}, reads={}, writes={}",
+            cpu, reads, writes
+        );
+    }
+
+    fn measure_list_subscriber() {
+        let (env, client, token, _) = setup();
+        let subscriber = Address::generate(&env);
+        // 1000 total IDs; subscriber has 10 subs spread every 100
+        for i in 0u32..1000 {
+            let sub = if i % 100 == 0 {
+                create_mock_sub(&env, &subscriber, &token)
+            } else {
+                create_mock_sub(&env, &Address::generate(&env), &token)
+            };
+            env.as_contract(&client.address, || {
+                env.storage().instance().set(&i, &sub);
+            });
+        }
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "next_id"), &1000);
+        });
+
+        env.budget().set_cpu_budget(2_000_000);
+        env.budget().set_ledger_read_budget(2_000);
+        env.budget().set_ledger_write_budget(0);
+
+        let _ = client.list_subscriptions_by_subscriber(&subscriber, &0, &10);
+
+        let cpu = env.budget().cpu_instruction_count();
+        let reads = env.budget().ledger_read_count();
+        println!(
+            "[BENCH] list_subscriptions_by_subscriber (scan 1000, find 10): cpu={}, reads={}",
+            cpu, reads
+        );
+    }
+
+    fn measure_merchant_query() {
+        let (env, client, token, _) = setup();
+        let merchant = Address::generate(&env);
+        let subscriber = Address::generate(&env);
+        for _ in 0..1000 {
+            create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+        }
+
+        env.budget().set_cpu_budget(2_000_000);
+        env.budget().set_ledger_read_budget(2_000);
+        env.budget().set_ledger_write_budget(0);
+
+        let _ = client.get_subscriptions_by_merchant(&merchant, &0, &100);
+
+        let cpu = env.budget().cpu_instruction_count();
+        let reads = env.budget().ledger_read_count();
+        println!(
+            "[BENCH] get_subscriptions_by_merchant (1000 total, page 100): cpu={}, reads={}",
+            cpu, reads
+        );
+    }
+
+    fn measure_token_query() {
+        let (env, client, token, _) = setup();
+        let merchant = Address::generate(&env);
+        let subscriber = Address::generate(&env);
+        for _ in 0..1000 {
+            create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+        }
+
+        env.budget().set_cpu_budget(2_000_000);
+        env.budget().set_ledger_read_budget(2_000);
+        env.budget().set_ledger_write_budget(0);
+
+        let _ = client.get_subscriptions_by_token(&token, &0, &100);
+
+        let cpu = env.budget().cpu_instruction_count();
+        let reads = env.budget().ledger_read_count();
+        println!(
+            "[BENCH] get_subscriptions_by_token (1000 total, page 100): cpu={}, reads={}",
+            cpu, reads
+        );
+    }
+}
+
+// ================================================================
+// Performance Budget Enforced Tests
+// ================================================================
+
+#[test]
+fn test_get_subscription_within_budget() {
+    let (env, client, _token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000,
+        &(30 * 24 * 60 * 60),
+        &false,
+        &None,
+        &None::<u64>,
+    );
+
+    with_perf_budget(
+        &env,
+        perf_budgets::GET_SUBSCRIPTION_CPU,
+        perf_budgets::GET_SUBSCRIPTION_LEDGER_READS,
+        "get_subscription",
+        || {
+            let _ = client.get_subscription(&sub_id);
+        },
+    );
+}
+
+#[test]
+#[should_panic] // Any panic due to budget exceed is acceptable
+fn test_get_subscription_budget_too_tight() {
+    let (env, client, _token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &10_000,
+        &(30 * 24 * 60 * 60),
+        &false,
+        &None,
+        &None::<u64>,
+    );
+
+    // Impossibly tight budgets — must exceed
+    env.budget().set_cpu_budget(5);
+    env.budget().set_ledger_read_budget(1);
+    env.budget().set_ledger_write_budget(0);
+
+    let _ = client.get_subscription(&sub_id);
+}
+
+#[test]
+fn test_list_subscriber_within_budget() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    inject_subscriptions(&env, &client.address, 10, &subscriber, &token);
+
+    with_perf_budget(
+        &env,
+        perf_budgets::LIST_SUBSCRIBER_CPU,
+        perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+        "list_subscriptions_by_subscriber (10 subs)",
+        || {
+            let _ = client.list_subscriptions_by_subscriber(&subscriber, &0, &100);
+        },
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_list_subscriber_budget_too_tight() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    inject_subscriptions(&env, &client.address, 5, &subscriber, &token);
+
+    env.budget().set_cpu_budget(10);
+    env.budget().set_ledger_read_budget(1);
+    env.budget().set_ledger_write_budget(0);
+
+    let _ = client.list_subscriptions_by_subscriber(&subscriber, &0, &10);
+}
+
+#[test]
+fn test_list_subscriber_sparse_ids_within_budget() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    // Create sparse pattern: subscriber subs at IDs 0,100,200,...,4900 (50 total)
+    // Between each, 99 filler subs → 5000 total IDs
+    for block in 0..50 {
+        let base = block * 100;
+        // subscriber sub at base
+        env.as_contract(&client.address, || {
+            let sub = create_mock_sub(&env, &subscriber, &token);
+            env.storage().instance().set(&base, &sub);
+        });
+        // 99 filler subs
+        for i in 1..100 {
+            let id = base + i;
+            env.as_contract(&client.address, || {
+                let sub = create_mock_sub(&env, &other, &token);
+                env.storage().instance().set(&id, &sub);
+            });
+        }
+    }
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+    });
+
+    with_perf_budget(
+        &env,
+        perf_budgets::LIST_SUBSCRIBER_CPU,
+        perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+        "list_subscriptions_by_subscriber (sparse 50 among 5000)",
+        || {
+            let page = client.list_subscriptions_by_subscriber(&subscriber, &0, &50);
+            // Due to scan cap, may not get all in one call, but should complete within budget
+            assert!(page.subscription_ids.len() <= 50);
+        },
+    );
+}
+
+#[test]
+fn test_merchant_query_within_budget() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    for _ in 0..100 {
+        create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+    }
+
+    with_perf_budget(
+        &env,
+        perf_budgets::MERCHANT_QUERY_CPU,
+        perf_budgets::MERCHANT_QUERY_LEDGER_READS,
+        "get_subscriptions_by_merchant (100 subs)",
+        || {
+            let _page = client.get_subscriptions_by_merchant(&merchant, &0, &100);
+        },
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_merchant_query_budget_too_tight() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+
+    env.budget().set_cpu_budget(5);
+    env.budget().set_ledger_read_budget(1);
+    env.budget().set_ledger_write_budget(0);
+
+    let _ = client.get_subscriptions_by_merchant(&merchant, &0, &1);
+}
+
+#[test]
+fn test_token_query_within_budget() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    for _ in 0..100 {
+        create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+    }
+
+    with_perf_budget(
+        &env,
+        perf_budgets::TOKEN_QUERY_CPU,
+        perf_budgets::TOKEN_QUERY_LEDGER_READS,
+        "get_subscriptions_by_token (100 subs)",
+        || {
+            let _page = client.get_subscriptions_by_token(&token, &0, &100);
+        },
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_token_query_budget_too_tight() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+
+    env.budget().set_cpu_budget(5);
+    env.budget().set_ledger_read_budget(1);
+    env.budget().set_ledger_write_budget(0);
+
+    let _ = client.get_subscriptions_by_token(&token, &0, &1);
+}
+
+#[test]
+fn test_merchant_index_bloat_within_budget() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    // 1000 subscriptions for one merchant (tests index deserialization cost)
+    for _ in 0..1000 {
+        create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+    }
+
+    with_perf_budget(
+        &env,
+        perf_budgets::MERCHANT_QUERY_CPU,
+        perf_budgets::MERCHANT_QUERY_LEDGER_READS,
+        "merchant_index_count_1000",
+        || {
+            let count = client.get_merchant_subscription_count(&merchant);
+            assert_eq!(count, 1000);
+        },
+    );
+
+    with_perf_budget(
+        &env,
+        perf_budgets::MERCHANT_QUERY_CPU,
+        perf_budgets::MERCHANT_QUERY_LEDGER_READS,
+        "merchant_query_page_of_100",
+        || {
+            let page = client.get_subscriptions_by_merchant(&merchant, &0, &100);
+            assert_eq!(page.len(), 100);
+        },
+    );
+}
+
+#[test]
+fn test_token_index_bloat_within_budget() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+
+    for _ in 0..1000 {
+        create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
+    }
+
+    with_perf_budget(
+        &env,
+        perf_budgets::TOKEN_QUERY_CPU,
+        perf_budgets::TOKEN_QUERY_LEDGER_READS,
+        "token_index_count_1000",
+        || {
+            let count = client.get_token_subscription_count(&token);
+            assert_eq!(count, 1000);
+        },
+    );
+
+    with_perf_budget(
+        &env,
+        perf_budgets::TOKEN_QUERY_CPU,
+        perf_budgets::TOKEN_QUERY_LEDGER_READS,
+        "token_query_page_of_100",
+        || {
+            let page = client.get_subscriptions_by_token(&token, &0, &100);
+            assert_eq!(page.len(), 100);
+        },
+    );
+}
+
+#[test]
+fn test_subscriber_list_1000_items_multi_page_within_budget() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Create 1000 subscriber subscriptions interleaved with 4000 filler (5000 total IDs)
+    for block in 0..50 {
+        let base = block * 100;
+        // 20 subscriber subs
+        for i in 0..20 {
+            let id = base + i;
+            env.as_contract(&client.address, || {
+                let sub = create_mock_sub(&env, &subscriber, &token);
+                env.storage().instance().set(&id, &sub);
+            });
+        }
+        // 80 filler subs
+        for i in 20..100 {
+            let id = base + i;
+            env.as_contract(&client.address, || {
+                let sub = create_mock_sub(&env, &merchant, &token);
+                env.storage().instance().set(&id, &sub);
+            });
+        }
+    }
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+    });
+
+    let page_size = 25u32;
+    let mut start = 0u32;
+    let mut pages = 0u32;
+    let mut total_found = 0u32;
+
+    loop {
+        with_perf_budget(
+            &env,
+            perf_budgets::LIST_SUBSCRIBER_CPU,
+            perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+            "multi_page_traversal",
+            || {
+                let page = client.list_subscriptions_by_subscriber(&subscriber, &start, &page_size);
+                let count = page.subscription_ids.len() as u32;
+                total_found += count;
+                start = match page.next_start_id {
+                    Some(id) => id,
+                    None => start + page_size,
+                };
+            },
+        );
+
+        pages += 1;
+        if total_found >= 1000 || start >= 5000 || pages > 200 {
+            break;
+        }
+    }
+
+    assert_eq!(total_found, 1000);
+    assert!(pages >= 40 && pages <= 60,
+        "Expected ~40-60 pages for 1000 subs with gaps, got {}", pages);
+    println!("[Perf] Multi-page traversal: {} pages, {} found", pages, total_found);
+}
+
+#[test]
+fn test_dos_unbounded_scan_capped_by_max_scan_depth_and_budget() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    // 10,000 filler entries
+    for id in 0..10_000u32 {
+        env.as_contract(&client.address, || {
+            let sub = create_mock_sub(&env, &other, &token);
+            env.storage().instance().set(&id, &sub);
+        });
+    }
+    // 10 real subscriber entries at the end
+    for i in 0..10 {
+        let id = 10_000 + i;
+        env.as_contract(&client.address, || {
+            let sub = create_mock_sub(&env, &subscriber, &token);
+            env.storage().instance().set(&id, &sub);
+        });
+    }
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&Symbol::new(&env, "next_id"), &10_010);
+    });
+
+    // Page 1: scans first MAX_SCAN_DEPTH IDs (1000), finds none, returns empty + cursor
+    with_perf_budget(
+        &env,
+        perf_budgets::LIST_SUBSCRIBER_CPU,
+        perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+        "dos_scan_page1",
+        || {
+            let page = client.list_subscriptions_by_subscriber(&subscriber, &0, &5);
+            assert_eq!(page.subscription_ids.len(), 0);
+            assert_eq!(page.next_start_id, Some(MAX_SCAN_DEPTH));
+        },
+    );
+
+    // Subsequent paging eventually reaches the real IDs
+    let mut start = MAX_SCAN_DEPTH;
+    let mut total_found = 0u32;
+    for call in 0..10 {
+        with_perf_budget(
+            &env,
+            perf_budgets::LIST_SUBSCRIBER_CPU,
+            perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+            &format!("dos_scan_page{}", call + 2),
+            || {
+                let page = client.list_subscriptions_by_subscriber(&subscriber, &start, &5);
+                total_found += page.subscription_ids.len();
+                start = match page.next_start_id {
+                    Some(id) => id,
+                    None => start + 5,
+                };
+            },
+        );
+        if start >= 10_010 || total_found >= 10 {
+            break;
+        }
+    }
+    assert_eq!(total_found, 10, "All 10 subscriber subs should eventually be found");
 }

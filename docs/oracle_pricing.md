@@ -49,3 +49,10 @@ This preserves deterministic charging while allowing quote-currency plan pricing
 - `OraclePriceInvalid`
 
 These errors cause the charge to fail without mutating balances.
+
+## Events
+
+For off-chain verification and indexability, the following events are emitted:
+
+- `oracle_config_updated`: Emitted when the admin updates oracle configuration. Includes enabled status, oracle address, max acceptable age, and timestamp.
+- `oracle_charge_resolved`: Emitted when a charge resolves its token target via the oracle. Includes `quote_amount`, `token_amount`, `price`, `price_timestamp` from the oracle, and resolution `timestamp`.

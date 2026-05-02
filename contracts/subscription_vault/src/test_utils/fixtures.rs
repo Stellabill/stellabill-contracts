@@ -1,4 +1,4 @@
-use crate::{SubscriptionStatus, SubscriptionVaultClient};
+use crate::{SubscriptionStatus, SubscriptionVaultClient, types::DataKey};
 use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
@@ -32,7 +32,9 @@ pub fn create_subscription_detailed(
         &amount,
         &interval,
         &false,
-        &None::<i128>, &None::<u64>);
+        &None::<i128>,
+        &None::<u64>,
+    );
 
     if status != SubscriptionStatus::Active {
         patch_status(env, client, id, status);
@@ -55,7 +57,9 @@ pub fn create_subscription_with_merchant(
         &DEFAULT_AMOUNT,
         &DEFAULT_INTERVAL,
         &false,
-        &None::<i128>, &None::<u64>);
+        &None::<i128>,
+        &None::<u64>,
+    );
 
     if status != SubscriptionStatus::Active {
         patch_status(env, client, id, status);
@@ -93,7 +97,7 @@ pub fn patch_status(
     let mut sub = client.get_subscription(&id);
     sub.status = status;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&id, &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -102,7 +106,7 @@ pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balanc
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&id, &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -111,6 +115,6 @@ pub fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
     env.as_contract(contract_id, || {
         env.storage()
             .instance()
-            .set(&Symbol::new(env, "next_id"), &value);
+            .set(&DataKey::NextId, &value);
     });
 }

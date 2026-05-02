@@ -37,7 +37,15 @@ fn setup_multi_actor_env() -> MultiActorSetup {
     let topology = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)];
 
     for (i, (s_idx, m_idx)) in topology.iter().enumerate() {
-        let sub_id = test_env.client.create_subscription(&subscribers[*s_idx], &merchants[*m_idx], &BATCH_AMOUNT, &BATCH_INTERVAL, &false, &None, &None::<u64>);
+        let sub_id = test_env.client.create_subscription(
+            &subscribers[*s_idx],
+            &merchants[*m_idx],
+            &BATCH_AMOUNT,
+            &BATCH_INTERVAL,
+            &false,
+            &None,
+            &None::<u64>,
+        );
         test_env
             .client
             .deposit_funds(&sub_id, &subscribers[*s_idx], &DEPOSIT_AMOUNT);
@@ -79,7 +87,7 @@ fn test_multi_actor_batch_charge() {
         setup.subscriptions[3],
         setup.subscriptions[4],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 5);
 
@@ -132,7 +140,7 @@ fn test_multi_actor_mixed_charges() {
         setup.subscriptions[3],
         setup.subscriptions[4],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 5);
 
@@ -171,7 +179,7 @@ fn test_multi_actor_pause_and_resume_subset() {
         setup.subscriptions[1],
         setup.subscriptions[2],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.get(0).unwrap().success, false);
     assert_eq!(results.get(0).unwrap().error_code, Error::NotActive as u32);
@@ -226,4 +234,114 @@ fn test_multi_actor_view_helpers() {
         let topup_2 = setup.env.client.estimate_topup_for_intervals(sub_id, &2);
         assert_eq!(topup_2, expected_shortfall);
     }
+}
+
+#[test]
+fn test_adversarial_merchant_pause_during_deposit() {
+    let setup = setup_multi_actor_env();
+
+    let sub_idx = 0;
+    let sub_id = setup.subscriptions[sub_idx];
+    let sub_addr = setup.subscribers[sub_idx].clone();
+    let mer_addr = setup.merchants[0].clone();
+
+    setup.env.client.pause_merchant(&mer_addr);
+
+    let result = setup.env.client.try_deposit_funds(&sub_id, &sub_addr, &DEPOSIT_AMOUNT);
+    assert!(result.is_err());
+
+    setup.env.client.unpause_merchant(&mer_addr);
+
+    setup.env.client.deposit_funds(&sub_id, &sub_addr, &DEPOSIT_AMOUNT);
+
+    let sub = setup.env.client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_adversarial_cancel_right_before_charge() {
+    let setup = setup_multi_actor_env();
+
+    let sub_idx = 0;
+    let sub_id = setup.subscriptions[sub_idx];
+    let sub_addr = setup.subscribers[sub_idx].clone();
+
+    setup.env.client.cancel_subscription(&sub_id, &sub_addr);
+
+    setup.env.jump(BATCH_INTERVAL + 1);
+
+    let ids = vec![&setup.env.env, sub_id];
+    let results = setup.env.client.batch_charge(&ids, &0u64);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results.get(0).unwrap().success, false);
+    assert_eq!(results.get(0).unwrap().error_code, Error::NotActive as u32);
+}
+
+#[test]
+fn test_adversarial_cancel_right_after_charge() {
+    let setup = setup_multi_actor_env();
+
+    let sub_idx = 0;
+    let sub_id = setup.subscriptions[sub_idx];
+    let sub_addr = setup.subscribers[sub_idx].clone();
+
+    setup.env.jump(BATCH_INTERVAL + 1);
+
+    let ids = vec![&setup.env.env, sub_id];
+    let results = setup.env.client.batch_charge(&ids, &0u64);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results.get(0).unwrap().success, true);
+
+    let sub_before = setup.env.client.get_subscription(&sub_id);
+    let balance_before = sub_before.prepaid_balance;
+
+    setup.env.client.cancel_subscription(&sub_id, &sub_addr);
+
+    let sub = setup.env.client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+    assert_eq!(sub.prepaid_balance, balance_before);
+}
+
+#[test]
+fn test_adversarial_cancel_by_merchant_vs_subscriber() {
+    let setup = setup_multi_actor_env();
+
+    let sub_idx = 0;
+    let sub_id = setup.subscriptions[sub_idx];
+    let _sub_addr = setup.subscribers[sub_idx].clone();
+    let mer_addr = setup.merchants[0].clone();
+
+    setup.env.client.cancel_subscription(&sub_id, &mer_addr);
+
+    let sub = setup.env.client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_adversarial_subscriber_cannot_cancel_others() {
+    let setup = setup_multi_actor_env();
+
+    let sub_id = setup.subscriptions[0];
+    let wrong_subscriber = setup.subscribers[1].clone();
+
+    let result = setup.env.client.try_cancel_subscription(&sub_id, &wrong_subscriber);
+    assert!(result.is_err());
+
+    let sub = setup.env.client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_adversarial_merchant_cannot_cancel_others() {
+    let setup = setup_multi_actor_env();
+
+    let sub_id = setup.subscriptions[0];
+    let wrong_merchant = setup.merchants[1].clone();
+
+    let result = setup.env.client.try_cancel_subscription(&sub_id, &wrong_merchant);
+    assert!(result.is_err());
+
+    let sub = setup.env.client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Active);
 }

@@ -21,8 +21,9 @@ Merchant-wide emergency pause provides merchants with a scoped circuit breaker t
 
 **Blocked Operations:**
 - `charge_subscription` - Returns `Error::MerchantPaused`
-- `charge_usage` - Returns `Error::MerchantPaused`
-- `batch_charge` - Individual charges for paused merchants fail with `Error::MerchantPaused`
+- `charge_usage` / `charge_usage_with_reference` - Returns `Error::MerchantPaused`
+- `charge_one_off` - Returns `Error::MerchantPaused`
+- `batch_charge` - Individual entries for paused merchants produce `success: false` with `error_code = MerchantPaused.to_code()`; other merchants in the same batch are unaffected
 
 **Allowed Operations:**
 - `withdraw_merchant_funds` - Merchants can still withdraw accumulated balances
@@ -78,7 +79,7 @@ pub struct MerchantPausedEvent {
     pub timestamp: u64,
 }
 ```
-Emitted when a merchant enables their pause.
+Emitted when a merchant enables their pause. **Not re-emitted** if the merchant is already paused (idempotent calls produce no event).
 
 ### MerchantUnpausedEvent
 ```rust
@@ -87,7 +88,7 @@ pub struct MerchantUnpausedEvent {
     pub timestamp: u64,
 }
 ```
-Emitted when a merchant disables their pause.
+Emitted when a merchant disables their pause. **Not re-emitted** if the merchant was not paused (idempotent calls produce no event).
 
 ## API
 
@@ -177,11 +178,13 @@ client.unpause_merchant(&merchant);
 
 ## Testing
 
-See `contracts/subscription_vault/src/test.rs` for comprehensive test coverage:
-- Toggle pause on/off
-- Block charges when paused
-- Allow withdrawals when paused
-- Interaction with subscription-level pause
-- Interaction with emergency stop
-- Isolation between merchants
-- Idempotency of pause/unpause
+See `contracts/subscription_vault/src/test_merchant_pause.rs` for comprehensive test coverage:
+- Toggle pause on/off, idempotency of pause/unpause
+- Interval, usage, usage-with-reference, and one-off charges blocked when paused
+- Balance not mutated on a blocked charge
+- Charges succeed after unpause
+- Batch charge reports per-entry error code; mixed paused/active batch
+- Withdrawal, deposit, and cancellation allowed when paused
+- Subscription status preserved when merchant pauses; subscriber pause not cleared on merchant unpause
+- Emergency stop takes precedence over merchant pause
+- Pause flag is isolated per merchant — pausing one merchant does not affect another

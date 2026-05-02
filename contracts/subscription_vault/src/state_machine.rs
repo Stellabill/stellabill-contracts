@@ -4,8 +4,51 @@
 //!
 //! Kept in a separate module so PRs touching state transitions do not conflict
 //! with PRs touching billing, batch charge, or top-up estimation.
+//!
+//! # Design Principles
+//!
+//! All state transitions are:
+//! - **Explicit**: No hidden implicit transitions; every transition goes through `transition_to`
+//! - **Total**: Exhaustive match over all states (compiler-enforced)
+//! - **Atomic**: Validation happens before any state mutation
+//! - **Safe**: Invalid transitions fail without partial accounting changes
 
 use crate::types::{Error, SubscriptionStatus};
+
+/// Executes a validated state transition on a mutable subscription status.
+///
+/// This is the **single authoritative function** for all status changes in the contract.
+/// Every entrypoint that modifies subscription status MUST call this function.
+///
+/// # Arguments
+/// * `current` - Mutable reference to the subscription's current status
+/// * `target` - The desired target status
+///
+/// # Returns
+/// * `Ok(())` if transition is valid and applied
+/// * `Err(Error::InvalidStatusTransition)` if transition is invalid (no mutation occurs)
+///
+/// # Security
+///
+/// Validation happens before mutation, ensuring atomic transitions.
+/// If validation fails, the `current` status remains unchanged.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // In an entrypoint:
+/// let mut sub = get_subscription(env, id)?;
+/// transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
+/// env.storage().instance().set(&DataKey::Sub(id), &sub);
+/// ```
+pub fn transition_to(
+    current: &mut SubscriptionStatus,
+    target: SubscriptionStatus,
+) -> Result<(), Error> {
+    validate_status_transition(current, &target)?;
+    *current = target;
+    Ok(())
+}
 
 /// Validates if a status transition is allowed by the state machine.
 ///
@@ -50,14 +93,18 @@ pub fn validate_status_transition(
         SubscriptionStatus::Paused => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
+                SubscriptionStatus::Active
+                    | SubscriptionStatus::Cancelled
+                    | SubscriptionStatus::Expired
             )
         }
         SubscriptionStatus::Cancelled => matches!(to, SubscriptionStatus::Archived),
         SubscriptionStatus::InsufficientBalance => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
+                SubscriptionStatus::Active
+                    | SubscriptionStatus::Cancelled
+                    | SubscriptionStatus::Expired
             )
         }
         SubscriptionStatus::GracePeriod => {

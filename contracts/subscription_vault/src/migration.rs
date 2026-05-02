@@ -110,7 +110,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #1014)")] // 1014 is InvalidExportLimit
+    #[should_panic(expected = "Error(Contract, #6004)")]
     fn test_export_limit_zero_fails() {
         let env = Env::default();
         let contract_id = env.register(MigrationContract, ());
@@ -126,7 +126,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #1014)")]
+    #[should_panic(expected = "Error(Contract, #6004)")]
     fn test_export_limit_exceeds_max_fails() {
         let env = Env::default();
         let contract_id = env.register(MigrationContract, ());

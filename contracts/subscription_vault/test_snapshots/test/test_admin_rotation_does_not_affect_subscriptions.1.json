@@ -182,7 +182,112 @@
                     "storage": [
                       {
                         "key": {
-                          "u32": 0
+                          "vec": [
+                            {
+                              "symbol": "AcceptedTokens"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Admin"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "GracePeriod"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 604800
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "MerchantSubs"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "u32": 0
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "MinTopup"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000000
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "NextId"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 2
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Sub"
+                            },
+                            {
+                              "u32": 0
+                            }
+                          ]
                         },
                         "val": {
                           "map": [
@@ -306,54 +411,11 @@
                       },
                       {
                         "key": {
-                          "symbol": "accepted_tokens"
-                        },
-                        "val": {
                           "vec": [
                             {
-                              "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                              "symbol": "Token"
                             }
                           ]
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "admin"
-                        },
-                        "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "grace_period"
-                        },
-                        "val": {
-                          "u64": 604800
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "min_topup"
-                        },
-                        "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 1000000
-                          }
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "next_id"
-                        },
-                        "val": {
-                          "u32": 1
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "token"
                         },
                         "val": {
                           "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
@@ -363,38 +425,7 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "MerchantSubs"
-                            },
-                            {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "vec": [
-                            {
-                              "u32": 0
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "SchemaVersion"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "u32": 1
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "token_decimals"
+                              "symbol": "TokenDecimals"
                             },
                             {
                               "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
@@ -409,7 +440,7 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "token_subs"
+                              "symbol": "TokenSubs"
                             },
                             {
                               "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"

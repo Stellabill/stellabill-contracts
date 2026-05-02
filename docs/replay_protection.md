@@ -53,3 +53,89 @@ Storage usage is kept bounded: one period index and optionally one idempotency k
 - **Clock skew / timestamp manipulation:** Period is derived from ledger timestamp. Validators set ledger time; contract does not rely on caller-provided time. Mitigation: trust the network’s ledger timestamp.
 - **Unbounded growth:** Only one period index and one idempotency key per subscription are stored. No unbounded growth from replay protection.
 - **Key collision:** If an integrator reuses the same 32-byte key for two different billing periods, the second period’s charge would be treated as idempotent (return Ok without charging). Mitigation: derive keys from period (e.g. include period start or index in the key).
+---
+
+## Admin-operation nonce scheme
+
+Privileged admin operations (`batch_charge` and `rotate_admin`) carry an additional layer of replay protection through an explicit, domain-separated, monotonic nonce scheme.
+
+### Design
+
+| Property | Value |
+|---|---|
+| Nonce type | `u64` (unsigned, monotonic) |
+| Per-signer | One counter per `(signer: Address, domain: u32)` pair |
+| Storage | Persistent storage, key `DataKey::AdminNonce(Address, u32)` |
+| Initial value | `0` (absent key treated as `0`) |
+| Enforcement | Caller provides the *current* stored value; contract checks equality, then atomically increments |
+| Error on mismatch | `Error::NonceAlreadyUsed` (code `1038`) |
+
+### Domain constants
+
+```rust
+pub const DOMAIN_BATCH_CHARGE: u32 = 0;   // label: "batch"
+pub const DOMAIN_ADMIN_ROTATION: u32 = 1;  // label: "adm_rot"
+```
+
+Domain separation ensures that a nonce consumed in one operation cannot interfere with another. The labels appear in the emitted event topic so indexers can filter by domain.
+
+### Nonce consumption flow
+
+```
+caller → batch_charge(ids, nonce)
+  1. require_stored_admin_auth()   // auth check first – fails fast on wrong signer
+  2. check_and_advance(admin, DOMAIN_BATCH_CHARGE, nonce)
+       a. read stored nonce (default 0)
+       b. assert provided == stored  → Error::NonceAlreadyUsed if not
+       c. write stored + 1
+       d. emit NonceConsumedEvent
+  3. … rest of charge logic
+```
+
+### Emitted event
+
+Every successful nonce consumption emits a `NonceConsumedEvent`:
+
+```rust
+pub struct NonceConsumedEvent {
+    pub signer:    Address,  // the admin address that consumed the nonce
+    pub domain:    u32,      // DOMAIN_BATCH_CHARGE or DOMAIN_ADMIN_ROTATION
+    pub nonce:     u64,      // the consumed (previous) nonce value
+    pub timestamp: u64,      // ledger timestamp at consumption
+}
+```
+
+Event topic: `("nonce_consumed", signer, domain_label)` where `domain_label` is the human-readable symbol (`"batch"` or `"adm_rot"`).
+
+### Off-chain integration
+
+Use `get_admin_nonce(signer, domain) -> u64` to read the expected nonce before submitting a transaction:
+
+```rust
+// Pseudocode
+let next_nonce = client.get_admin_nonce(&admin, DOMAIN_BATCH_CHARGE);
+client.batch_charge(&subscription_ids, &next_nonce);
+```
+
+To prevent races, integrate this with a serialised job queue or use optimistic concurrency: if `NonceAlreadyUsed` is returned, re-read the nonce and retry.
+
+### Security properties
+
+| Threat | Mitigation |
+|---|---|
+| Cross-ledger replay | Nonce is monotonic; replaying any past transaction fails with `NonceAlreadyUsed` |
+| Out-of-order submission | Only the exact stored value is accepted; skipping nonce values is rejected |
+| Cross-domain replay | Domain tag is part of storage key; batch_charge nonce and rotate_admin nonce are fully independent |
+| Cross-signer replay | Signer address is part of storage key; each admin has its own counter |
+| Nonce overflow | `checked_add(1)` panics (transaction aborted) rather than wrapping to 0 |
+| Auth bypass via nonce manipulation | Auth check (`require_admin_auth`) runs *before* nonce check; invalid signers are rejected without advancing any counter |
+
+### Storage layout
+
+```
+Persistent storage:
+  DataKey::AdminNonce(Address, 0) → u64   (batch_charge nonce for address)
+  DataKey::AdminNonce(Address, 1) → u64   (rotate_admin nonce for address)
+```
+
+Nonce entries are stored in **persistent** storage so they survive ledger TTL extension and contract upgrades. Growth is bounded: one `u64` entry per `(signer, domain)` pair. In practice this means at most two entries per admin address (one per domain).

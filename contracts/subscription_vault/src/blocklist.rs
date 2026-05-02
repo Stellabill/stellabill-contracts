@@ -5,17 +5,16 @@
 //!
 //! **PRs that only change blocklist behavior should edit this file only.**
 
-use crate::types::Error;
+use crate::types::{DataKey, Error};
 use soroban_sdk::{Address, Env, Symbol};
 
-/// Storage key for blocklist entries: (Symbol("blocklist"), subscriber_address)
-fn blocklist_key(env: &Env, subscriber: &Address) -> (Symbol, Address) {
-    (Symbol::new(env, "blocklist"), subscriber.clone())
+fn blocklist_key(subscriber: &Address) -> DataKey {
+    DataKey::Blocklist(subscriber.clone())
 }
 
 /// Check if a subscriber is blocklisted.
 pub fn is_blocklisted(env: &Env, subscriber: &Address) -> bool {
-    let key = blocklist_key(env, subscriber);
+    let key = blocklist_key(subscriber);
     env.storage().instance().has(&key)
 }
 
@@ -62,7 +61,7 @@ pub fn do_add_to_blocklist(
         }
     }
 
-    let key = blocklist_key(env, &subscriber);
+    let key = blocklist_key(&subscriber);
     if env.storage().instance().has(&key) {
         return Err(Error::InvalidInput);
     }
@@ -97,7 +96,7 @@ pub fn do_remove_from_blocklist(
 ) -> Result<(), Error> {
     crate::admin::require_admin_auth(env, &admin)?;
 
-    let key = blocklist_key(env, &subscriber);
+    let key = blocklist_key(&subscriber);
     if !env.storage().instance().has(&key) {
         return Err(Error::NotFound);
     }
@@ -118,7 +117,7 @@ pub fn do_remove_from_blocklist(
 
 /// Get blocklist entry details for a subscriber.
 pub fn get_blocklist_entry(env: &Env, subscriber: Address) -> Result<BlocklistEntry, Error> {
-    let key = blocklist_key(env, &subscriber);
+    let key = blocklist_key(&subscriber);
     env.storage().instance().get(&key).ok_or(Error::NotFound)
 }
 

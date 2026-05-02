@@ -13,8 +13,7 @@
 //! - Cross-function reentrancy simulation (not possible in Soroban test env).
 //! - Live token callback injection (Soroban mock auths prevent this).
 
-use crate::{
-    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -67,7 +66,7 @@ fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balance: i
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&id, &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -81,7 +80,7 @@ fn seed_merchant_balance(
     use soroban_sdk::Symbol;
     env.as_contract(&client.address, || {
         env.storage().instance().set(
-            &(Symbol::new(env, "merchant_balance"), merchant.clone(), token.clone()),
+            &DataKey::MerchantBalance(merchant.clone(), token.clone()),
             &balance,
         );
     });
@@ -421,6 +420,27 @@ fn test_withdraw_merchant_sequential_correct_accounting() {
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
 
+/// Invariant: merchant A cannot withdraw from merchant B's balance.
+#[test]
+fn test_merchant_cannot_withdraw_other_merchant() {
+    let (env, client, token, _) = setup();
+    let merchant_a = Address::generate(&env);
+    let merchant_b = Address::generate(&env);
+
+    seed_merchant_balance(&env, &client, &merchant_a, &token, 10_000_000i128);
+    seed_merchant_balance(&env, &client, &merchant_b, &token, 5_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token)
+        .mint(&client.address, &15_000_000i128);
+
+    // Merchant A attempts to withdraw more than their balance
+    let result = client.try_withdraw_merchant_funds(&merchant_a, &12_000_000i128);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+
+    // Merchant A's balance remains untouched
+    assert_eq!(client.get_merchant_balance(&merchant_a), 10_000_000i128);
+    assert_eq!(client.get_merchant_balance(&merchant_b), 5_000_000i128);
+}
+
 // =============================================================================
 // 5. REFUND — CEI invariants
 // =============================================================================
@@ -591,6 +611,39 @@ fn test_deposit_blocked_by_emergency_stop_no_mutation() {
     let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
     assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
     assert_eq!(client.get_subscription(&id).prepaid_balance, 0);
+}
+
+/// Invariant: merchant withdrawal blocked by emergency stop; no state mutations.
+#[test]
+fn test_withdraw_merchant_blocked_by_emergency_stop_no_mutation() {
+    let (env, client, token, admin) = setup();
+    let merchant = Address::generate(&env);
+
+    seed_merchant_balance(&env, &client, &merchant, &token, 3_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token)
+        .mint(&client.address, &3_000_000i128);
+
+    client.enable_emergency_stop(&admin);
+
+    let result = client.try_withdraw_merchant_funds(&merchant, &1_000_000i128);
+    assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.get_merchant_balance(&merchant), 3_000_000i128);
+}
+
+/// Invariant: subscriber withdrawal blocked by emergency stop; no state mutations.
+#[test]
+fn test_withdraw_subscriber_blocked_by_emergency_stop_no_mutation() {
+    let (env, client, token, admin) = setup();
+    let (id, subscriber, _) = create_sub(&env, &client, &token);
+
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.cancel_subscription(&id, &subscriber);
+
+    client.enable_emergency_stop(&admin);
+
+    let result = client.try_withdraw_subscriber_funds(&id, &subscriber);
+    assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
 }
 
 // =============================================================================

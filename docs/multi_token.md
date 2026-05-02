@@ -41,3 +41,11 @@ Legacy `get_merchant_balance` and `withdraw_merchant_funds` continue to target t
 
 - Existing single-token deployments continue to work unchanged.
 - New multi-token flows are additive and opt-in.
+
+## Security notes
+
+- **Token confusion prevention**: each subscription stores its `token` address at creation time. All deposits, charges, and withdrawals use that stored token — it is never inferred from caller input after creation.
+- **Allowlist enforced on every entrypoint**: `create_subscription_with_token`, `create_subscription_from_plan` (via plan template token), and `create_plan_template_with_token` all call `is_token_accepted` before proceeding. Unaccepted tokens return `Error::InvalidInput`.
+- **Default token cannot be removed**: `remove_accepted_token` rejects the primary token with `Error::InvalidInput`, preventing accidental lockout of existing subscriptions.
+- **Active subscriptions survive token removal**: removing a token from the allowlist does not affect existing subscriptions using that token. They remain readable and chargeable. Only *new* subscriptions with the removed token are blocked.
+- **Per-token merchant buckets**: earnings are tracked by `(merchant, token)` key. `withdraw_merchant_token_funds` validates the correct bucket balance before transferring, preventing cross-token fund confusion.

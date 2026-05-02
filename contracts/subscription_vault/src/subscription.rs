@@ -39,20 +39,63 @@
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negative};
-use crate::state_machine::validate_status_transition;
+use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent, PartialRefundEvent,
-    LifetimeCapReachedEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
-    SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
-    UsageLimits, UsageState,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent,
+    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
+/// Hard upper bound on billing interval: 365 days (31 536 000 s).
+///
+/// Prevents absurdly large intervals from making `last_payment_timestamp +
+/// interval_seconds` overflow `u64` in practice, and keeps subscriptions
+/// semantically reasonable.
+pub const MAX_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 31_536_000;
+
+/// Validates that `interval_seconds` is within the allowed `[MIN, MAX]` range.
+///
+/// Returns `Err(Error::InvalidInput)` when the value is below the minimum (60 s)
+/// or above the maximum (365 days).  Zero is implicitly rejected because
+/// `MIN_SUBSCRIPTION_INTERVAL_SECONDS` is non-zero.
+///
+/// This is the single authoritative validation gate: every code path that
+/// persists an interval (subscription creation, plan-template creation) must
+/// call this function rather than performing ad-hoc comparisons.
+pub fn validate_interval(interval_seconds: u64) -> Result<(), Error> {
+    if interval_seconds < MIN_SUBSCRIPTION_INTERVAL_SECONDS
+        || interval_seconds > MAX_SUBSCRIPTION_INTERVAL_SECONDS
+    {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+
+/// Returns the earliest timestamp at which the *next* charge is allowed.
+///
+/// `next_charge_time(last, interval) == last + interval`
+///
+/// This is the canonical time-math helper.  Both the charge path
+/// (`charge_core.rs`) and the query path (`queries.rs`) must use this
+/// function instead of computing `last + interval` inline, so that the
+/// semantics are identical across all call sites.
+///
+/// Returns `Err(Error::Overflow)` if the addition would wrap past `u64::MAX`.
+/// In practice this cannot happen for validated intervals (≤ 365 days) and
+/// real ledger timestamps, but the checked arithmetic is retained as a
+/// belt-and-suspenders guard.
+pub fn next_charge_time(last_payment: u64, interval: u64) -> Result<u64, Error> {
+    last_payment.checked_add(interval).ok_or(Error::Overflow)
+}
 
 /// Hard upper bound on the number of subscription IDs that may be scanned in a
 /// single write-path helper invocation.
@@ -77,39 +120,36 @@ pub(crate) const MAX_WRITE_PATH_SCAN_DEPTH: u32 = 5_000;
 
 #[allow(dead_code)]
 pub fn next_id(env: &Env) -> u32 {
-    let key = Symbol::new(env, "next_id");
     let storage = env.storage().instance();
-    let id: u32 = storage.get(&key).unwrap_or(0);
-    storage.set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let id: u32 = storage.get(&DataKey::NextId).unwrap_or(0);
+    let next = id.checked_add(1).unwrap_or(id);
+    storage.set(&DataKey::NextId, &next);
     id
 }
 
 pub fn next_plan_id(env: &Env) -> u32 {
-    let key = Symbol::new(env, "next_plan_id");
-    let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let id: u32 = env.storage().instance().get(&DataKey::NextPlanId).unwrap_or(0);
+    let next = id.checked_add(1).unwrap_or(id);
+    env.storage().instance().set(&DataKey::NextPlanId, &next);
     id
 }
 
 pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
-    let key = (Symbol::new(env, "plan"), plan_template_id);
-    env.storage().instance().get(&key).ok_or(Error::NotFound)
+    env.storage().instance().get(&DataKey::Plan(plan_template_id)).ok_or(Error::NotFound)
 }
 
-fn sub_plan_key(env: &Env, subscription_id: u32) -> (Symbol, u32) {
-    (Symbol::new(env, "sub_plan"), subscription_id)
+fn sub_plan_key(subscription_id: u32) -> DataKey {
+    DataKey::SubPlan(subscription_id)
 }
 
-fn plan_max_active_key(env: &Env, plan_template_id: u32) -> (Symbol, u32) {
-    (Symbol::new(env, "plan_max_active"), plan_template_id)
+fn plan_max_active_key(plan_template_id: u32) -> DataKey {
+    DataKey::PlanMaxActive(plan_template_id)
 }
 
 fn get_plan_max_active(env: &Env, plan_template_id: u32) -> u32 {
     env.storage()
         .instance()
-        .get(&plan_max_active_key(env, plan_template_id))
+        .get(&plan_max_active_key(plan_template_id))
         .unwrap_or(0)
 }
 
@@ -132,8 +172,7 @@ fn count_active_subscriptions_for_plan(
     subscriber: &Address,
     plan_template_id: u32,
 ) -> Result<u32, Error> {
-    let next_id_key = Symbol::new(env, "next_id");
-    let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs to prevent
     // excessive storage reads in high-volume contracts.
@@ -145,13 +184,13 @@ fn count_active_subscriptions_for_plan(
     let storage = env.storage().instance();
 
     for id in 0..next_id {
-        let key = sub_plan_key(env, id);
+        let key = sub_plan_key(id);
         let maybe_plan_id: Option<u32> = storage.get(&key);
         if maybe_plan_id != Some(plan_template_id) {
             continue;
         }
 
-        if let Some(sub) = storage.get::<u32, Subscription>(&id) {
+        if let Some(sub) = storage.get::<_, Subscription>(&DataKey::Sub(id)) {
             if &sub.subscriber == subscriber && sub.status == SubscriptionStatus::Active {
                 count = count.saturating_add(1);
             }
@@ -181,21 +220,16 @@ fn enforce_plan_concurrency_limit(
 }
 
 fn credit_limit_key(
-    env: &Env,
     subscriber: &Address,
     token: &Address,
-) -> (Symbol, Address, Address) {
-    (
-        Symbol::new(env, "credit_limit"),
-        subscriber.clone(),
-        token.clone(),
-    )
+) -> DataKey {
+    DataKey::CreditLimit(subscriber.clone(), token.clone())
 }
 
 fn get_subscriber_credit_limit_internal(env: &Env, subscriber: &Address, token: &Address) -> i128 {
     env.storage()
         .instance()
-        .get(&credit_limit_key(env, subscriber, token))
+        .get(&credit_limit_key(subscriber, token))
         .unwrap_or(0)
 }
 
@@ -220,8 +254,7 @@ fn compute_subscriber_exposure(
     subscriber: &Address,
     token: &Address,
 ) -> Result<i128, Error> {
-    let next_id_key = Symbol::new(env, "next_id");
-    let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs.
     if next_id > MAX_WRITE_PATH_SCAN_DEPTH {
@@ -232,7 +265,7 @@ fn compute_subscriber_exposure(
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
-        if let Some(sub) = storage.get::<u32, Subscription>(&id) {
+        if let Some(sub) = storage.get::<_, Subscription>(&DataKey::Sub(id)) {
             if &sub.subscriber != subscriber || &sub.token != token {
                 continue;
             }
@@ -327,15 +360,16 @@ pub fn do_create_subscription_with_token(
         return Err(Error::InvalidAmount);
     }
 
-    if interval_seconds < MIN_SUBSCRIPTION_INTERVAL_SECONDS {
-        return Err(Error::InvalidInput);
-    }
+    validate_interval(interval_seconds)?;
 
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
     }
 
-    if let Some(cap) = lifetime_cap {
+    // Resolve effective cap: explicit > merchant default > global default.
+    let resolved_cap = resolve_cap(env, &merchant, lifetime_cap);
+
+    if let Some(cap) = resolved_cap {
         if cap <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -357,7 +391,7 @@ pub fn do_create_subscription_with_token(
         status: SubscriptionStatus::Active,
         prepaid_balance: 0i128,
         usage_enabled,
-        lifetime_cap,
+        lifetime_cap: resolved_cap,
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
         expires_at,
@@ -365,19 +399,17 @@ pub fn do_create_subscription_with_token(
     };
 
     // Allocate ID with overflow / limit guard.
-    let key = Symbol::new(env, "next_id");
-    let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
+    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
 
-    env.storage().instance().set(&id, &sub);
+    env.storage().instance().set(&DataKey::NextId, &next_id);
+    env.storage().instance().set(&DataKey::Sub(id), &sub);
 
     // Maintain merchant -> subscription-ID index
-    let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
+    let merchant_key = DataKey::MerchantSubs(merchant.clone());
     let mut ids: Vec<u32> = env
         .storage()
         .instance()
@@ -387,7 +419,7 @@ pub fn do_create_subscription_with_token(
     env.storage().instance().set(&merchant_key, &ids);
 
     // Maintain token -> subscription-ID index
-    let token_key = (Symbol::new(env, "token_subs"), token);
+    let token_key = DataKey::TokenSubs(token.clone());
     let mut token_ids: Vec<u32> = env
         .storage()
         .instance()
@@ -397,15 +429,18 @@ pub fn do_create_subscription_with_token(
     env.storage().instance().set(&token_key, &token_ids);
 
     env.events().publish(
-        (symbol_short!("created"), id),
-        (
-            subscriber.clone(),
-            merchant.clone(),
+        (Symbol::new(env, "subscription_created"), id),
+        crate::types::SubscriptionCreatedEvent {
+            subscription_id: id,
+            subscriber,
+            merchant,
+            token,
             amount,
             interval_seconds,
             lifetime_cap,
             expires_at,
-        ),
+            timestamp: env.ledger().timestamp(),
+        },
     );
 
     Ok(id)
@@ -428,14 +463,22 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
-    
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
+
+    // Block deposits to subscriptions whose merchant is paused — paused
+    // merchants must not accumulate new subscriber funds.
+    if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
+        return Err(Error::MerchantPaused);
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
-            env.storage().instance().set(&subscription_id, &sub);
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
+            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
                 crate::types::SubscriptionExpiredEvent {
@@ -447,14 +490,18 @@ pub fn do_deposit_funds(
         return Err(Error::SubscriptionExpired);
     }
 
+
     let token_addr = sub.token.clone();
 
     // Enforce credit limit for additional prepaid balance being loaded.
     enforce_credit_limit_for_delta(env, &subscriber, &token_addr, amount)?;
 
+    // Enforce lifetime cap: deposit cannot exceed remaining chargeable capacity.
+    enforce_deposit_cap(&sub, amount)?;
+
     // EFFECTS
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
@@ -466,9 +513,11 @@ pub fn do_deposit_funds(
         (Symbol::new(env, "deposited"), subscription_id),
         FundsDepositedEvent {
             subscription_id,
-            subscriber,
+            subscriber: subscriber.clone(),
+            token: token_addr.clone(),
             amount,
-            prepaid_balance: sub.prepaid_balance,
+            new_balance: sub.prepaid_balance,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -477,7 +526,7 @@ pub fn do_deposit_funds(
         && sub.prepaid_balance >= sub.amount
     {
         sub.status = SubscriptionStatus::Active;
-        env.storage().instance().set(&subscription_id, &sub);
+        env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
         env.events().publish(
             (Symbol::new(env, "recovery_ready"), subscription_id),
@@ -494,7 +543,11 @@ pub fn do_deposit_funds(
             (Symbol::new(env, "sub_resumed"), subscription_id),
             crate::types::SubscriptionResumedEvent {
                 subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
                 authorizer: sub.subscriber.clone(),
+                previous_status: SubscriptionStatus::Paused,
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -519,18 +572,21 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+    transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
-    sub.status = SubscriptionStatus::Cancelled;
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     env.events().publish(
         (Symbol::new(env, "subscription_cancelled"), subscription_id),
         SubscriptionCancelledEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
             authorizer,
             refund_amount,
+            timestamp: env.ledger().timestamp(),
         },
     );
     Ok(())
@@ -566,21 +622,23 @@ pub fn do_pause_subscription(
         return Err(Error::Forbidden);
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
-
     // Idempotent: already paused — nothing to do, no event.
     if sub.status == SubscriptionStatus::Paused {
         return Ok(());
     }
 
-    sub.status = SubscriptionStatus::Paused;
-    env.storage().instance().set(&subscription_id, &sub);
+    transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
+
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     env.events().publish(
         (Symbol::new(env, "sub_paused"), subscription_id),
         crate::types::SubscriptionPausedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
             authorizer,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -618,13 +676,10 @@ pub fn do_resume_subscription(
         crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-
     // Idempotent: already active — nothing to do, no event.
     if sub.status == SubscriptionStatus::Active {
         return Ok(());
     }
-
     if (sub.status == SubscriptionStatus::InsufficientBalance
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance < sub.amount
@@ -632,14 +687,21 @@ pub fn do_resume_subscription(
         return Err(Error::InsufficientBalance);
     }
 
-    sub.status = SubscriptionStatus::Active;
-    env.storage().instance().set(&subscription_id, &sub);
+    transition_to(&mut sub.status, SubscriptionStatus::Active)?;
 
-    env.events().publish(
+    let previous_status = sub.status;
+    sub.status = SubscriptionStatus::Active;
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+
+     env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
         crate::types::SubscriptionResumedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
             authorizer,
+            previous_status,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -658,14 +720,13 @@ pub fn do_charge_one_off(
     merchant.require_auth();
 
     let mut sub = get_subscription(env, subscription_id)?;
-    
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
-            env.storage().instance().set(&subscription_id, &sub);
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
+            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
                 crate::types::SubscriptionExpiredEvent {
@@ -679,6 +740,24 @@ pub fn do_charge_one_off(
 
     if sub.merchant != merchant {
         return Err(Error::Unauthorized);
+    }
+    if let Some(cap) = sub.lifetime_cap {
+        if sub.lifetime_charged >= cap {
+            if sub.status != SubscriptionStatus::Cancelled {
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+                env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: cap,
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
+            }
+            return Err(Error::LifetimeCapReached);
+        }
     }
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
         return Err(Error::NotActive);
@@ -694,6 +773,17 @@ pub fn do_charge_one_off(
     let new_charged = safe_add(sub.lifetime_charged, amount)?;
     if let Some(cap) = sub.lifetime_cap {
         if new_charged > cap {
+            transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+            env.events().publish(
+                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                LifetimeCapReachedEvent {
+                    subscription_id,
+                    lifetime_cap: cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    timestamp: now,
+                },
+            );
             return Err(Error::LifetimeCapReached);
         }
     }
@@ -714,11 +804,22 @@ pub fn do_charge_one_off(
     )?;
 
     if cap_reached {
-        validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-        sub.status = SubscriptionStatus::Cancelled;
+        transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+        
+        if let Some(cap) = sub.lifetime_cap {
+            env.events().publish(
+                (symbol_short!("cap_reach"), subscription_id),
+                LifetimeCapReachedEvent {
+                    subscription_id,
+                    lifetime_cap: cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
     }
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     append_statement(
         env,
         subscription_id,
@@ -730,27 +831,17 @@ pub fn do_charge_one_off(
     )?;
 
     env.events().publish(
-        (Symbol::new(env, "oneoff_ch"), subscription_id),
+        (symbol_short!("oneoff_ch"), subscription_id),
         crate::types::OneOffChargedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
             amount,
+            remaining_balance: sub.prepaid_balance,
+            timestamp: now,
         },
     );
-
-    if cap_reached {
-        if let Some(cap) = sub.lifetime_cap {
-            env.events().publish(
-                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
-                LifetimeCapReachedEvent {
-                    subscription_id,
-                    lifetime_cap: cap,
-                    lifetime_charged: sub.lifetime_charged,
-                    timestamp: now,
-                },
-            );
-        }
-    }
 
     Ok(())
 }
@@ -767,21 +858,22 @@ pub fn do_cleanup_subscription(
     // Can only cleanup if it's already expired or cancelled
     let now = env.ledger().timestamp();
     let is_terminal = sub.status == SubscriptionStatus::Cancelled || sub.is_expired(now);
-    
+
     if !is_terminal {
-        return Err(Error::NotActive); // Or some other error, meaning it's not terminal
+        return Err(Error::InvalidStatusTransition);
     }
 
     if sub.status != SubscriptionStatus::Archived {
         // If it's expired but not yet marked as Expired or Cancelled, transition it to Expired first
-        if sub.status != SubscriptionStatus::Cancelled && sub.status != SubscriptionStatus::Expired && sub.is_expired(now) {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+        if sub.status != SubscriptionStatus::Cancelled
+            && sub.status != SubscriptionStatus::Expired
+            && sub.is_expired(now)
+        {
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
         }
 
-        validate_status_transition(&sub.status, &SubscriptionStatus::Archived)?;
-        sub.status = SubscriptionStatus::Archived;
-        env.storage().instance().set(&subscription_id, &sub);
+        transition_to(&mut sub.status, SubscriptionStatus::Archived)?;
+        env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
         
         env.events().publish(
             (Symbol::new(env, "subscription_archived"), subscription_id),
@@ -823,15 +915,13 @@ pub fn do_withdraw_subscriber_funds(
 
     let amount_to_refund = sub.prepaid_balance;
     if amount_to_refund <= 0 {
-        return Err(Error::InvalidAmount);
+        return Err(Error::InsufficientBalance);
     }
-
-    let token_addr = sub.token.clone();
 
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
     let token_addr = sub.token.clone();
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     // INTERACTIONS: transfer refund from vault to subscriber.
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
@@ -847,7 +937,9 @@ pub fn do_withdraw_subscriber_funds(
         SubscriberWithdrawalEvent {
             subscription_id,
             subscriber,
+            token: token_addr,
             amount: amount_to_refund,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -894,7 +986,7 @@ pub fn do_partial_refund(
 
     // Effects: debit balance before external call.
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     // Interactions: transfer refund from vault to subscriber.
     let token_addr = sub.token.clone();
@@ -907,12 +999,158 @@ pub fn do_partial_refund(
         PartialRefundEvent {
             subscription_id,
             subscriber,
+            token: sub.token.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
         },
     );
 
     Ok(())
+}
+
+// ── Lifetime cap helpers ──────────────────────────────────────────────────────
+
+pub fn get_global_cap_default(env: &Env) -> Option<i128> {
+    env.storage()
+        .instance()
+        .get::<_, i128>(&Symbol::new(env, "cap_default"))
+}
+
+pub fn get_merchant_cap_default_internal(env: &Env, merchant: &Address) -> Option<i128> {
+    env.storage()
+        .instance()
+        .get::<_, i128>(&(Symbol::new(env, "merch_cap"), merchant.clone()))
+}
+
+/// Resolve effective cap: explicit > merchant default > global default.
+fn resolve_cap(env: &Env, merchant: &Address, explicit_cap: Option<i128>) -> Option<i128> {
+    if explicit_cap.is_some() {
+        return explicit_cap;
+    }
+    let merchant_default = get_merchant_cap_default_internal(env, merchant);
+    if merchant_default.is_some() {
+        return merchant_default;
+    }
+    get_global_cap_default(env)
+}
+
+/// Reject a deposit that would lock funds beyond the remaining chargeable cap.
+fn enforce_deposit_cap(sub: &Subscription, deposit: i128) -> Result<(), Error> {
+    if let Some(cap) = sub.lifetime_cap {
+        let chargeable_remaining = cap.saturating_sub(sub.lifetime_charged);
+        let depositable_remaining = chargeable_remaining.saturating_sub(sub.prepaid_balance);
+        if deposit > depositable_remaining {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+    Ok(())
+}
+
+pub fn do_set_global_cap_default(
+    env: &Env,
+    admin: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    if let Some(c) = cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let old_default = get_global_cap_default(env);
+    let key = Symbol::new(env, "cap_default");
+    match cap {
+        Some(c) => env.storage().instance().set(&key, &c),
+        None => env.storage().instance().remove(&key),
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "global_cap_set"),),
+        GlobalCapDefaultUpdatedEvent {
+            admin,
+            cap: cap.unwrap_or(0),
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn do_set_merchant_cap_default(
+    env: &Env,
+    merchant: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    if let Some(c) = cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let old_default = get_merchant_cap_default_internal(env, &merchant);
+    let key = (Symbol::new(env, "merch_cap"), merchant.clone());
+    match cap {
+        Some(c) => env.storage().instance().set(&key, &c),
+        None => env.storage().instance().remove(&key),
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_cap_set"), merchant.clone()),
+        MerchantCapDefaultUpdatedEvent {
+            admin: merchant,
+            cap: cap.unwrap_or(0),
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn do_update_subscription_cap(
+    env: &Env,
+    admin: Address,
+    subscription_id: u32,
+    new_cap: Option<i128>,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    if let Some(c) = new_cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+    let old_cap = sub.lifetime_cap;
+
+    // Cannot set cap below what has already been charged.
+    if let Some(new_c) = new_cap {
+        if new_c < sub.lifetime_charged {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+
+    sub.lifetime_cap = new_cap;
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+
+    // Get admin address for event, fallback to a zero-address if not set
+    let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
+    
+    env.events().publish(
+        (Symbol::new(env, "cap_updated"), subscription_id),
+        LifetimeCapUpdatedEvent {
+            admin: admin_addr,
+            cap: new_cap.unwrap_or(0),
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn get_merchant_cap_default(env: &Env, merchant: Address) -> Option<i128> {
+    get_merchant_cap_default_internal(env, &merchant)
 }
 
 pub fn do_create_plan_template(
@@ -925,6 +1163,8 @@ pub fn do_create_plan_template(
 ) -> Result<u32, Error> {
     merchant.require_auth();
 
+    validate_interval(interval_seconds)?;
+
     // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
         if cap <= 0 {
@@ -935,18 +1175,31 @@ pub fn do_create_plan_template(
     let token = crate::admin::get_token(env)?;
     let plan_id = next_plan_id(env);
     let plan = PlanTemplate {
-        merchant,
-        token,
+        merchant: merchant.clone(),
+        token: token.clone(),
         amount,
         interval_seconds,
         usage_enabled,
         lifetime_cap,
         template_key: plan_id,
         version: 1,
+        is_disabled: false,
     };
 
-    let key = (Symbol::new(env, "plan"), plan_id);
+    let key = DataKey::Plan(plan_id);
     env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_created"), plan_id),
+        crate::types::PlanTemplateCreatedEvent {
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
+            amount,
+            usage_enabled,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(plan_id)
 }
@@ -961,6 +1214,7 @@ pub fn do_create_plan_template_with_token(
     lifetime_cap: Option<i128>,
 ) -> Result<u32, Error> {
     merchant.require_auth();
+    validate_interval(interval_seconds)?;
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
     }
@@ -972,18 +1226,32 @@ pub fn do_create_plan_template_with_token(
 
     let plan_id = next_plan_id(env);
     let plan = PlanTemplate {
-        merchant,
-        token,
+        merchant: merchant.clone(),
+        token: token.clone(),
         amount,
         interval_seconds,
         usage_enabled,
         lifetime_cap,
         template_key: plan_id,
         version: 1,
+        is_disabled: false,
     };
 
-    let key = (Symbol::new(env, "plan"), plan_id);
+    let key = DataKey::Plan(plan_id);
     env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_created"), plan_id),
+        crate::types::PlanTemplateCreatedEvent {
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
+            amount,
+            usage_enabled,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
     Ok(plan_id)
 }
 
@@ -997,18 +1265,21 @@ pub fn do_create_subscription_from_plan(
 
     let plan = get_plan_template(env, plan_template_id)?;
 
+    if plan.is_disabled {
+        return Err(Error::InvalidInput);
+    }
+
     // Enforce subscriber-level credit limit for the plan's token.
     enforce_credit_limit_for_delta(env, &subscriber, &plan.token, plan.amount)?;
 
     // Enforce per-plan concurrency limit for this subscriber/plan pair.
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
-    let key = Symbol::new(env, "next_id");
-    let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage().instance().set(&DataKey::NextId, &next_id);
 
+    let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
     let sub = Subscription {
         subscriber: subscriber.clone(),
         merchant: plan.merchant.clone(),
@@ -1019,17 +1290,17 @@ pub fn do_create_subscription_from_plan(
         status: SubscriptionStatus::Active,
         prepaid_balance: 0i128,
         usage_enabled: plan.usage_enabled,
-        lifetime_cap: plan.lifetime_cap,
+        lifetime_cap: resolved_cap,
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
     };
 
-    env.storage().instance().set(&id, &sub);
+    env.storage().instance().set(&DataKey::Sub(id), &sub);
 
     // Persist linkage between subscription and the plan template
-    let sub_plan_storage_key = sub_plan_key(env, id);
+    let sub_plan_storage_key = sub_plan_key(id);
     env.storage()
         .instance()
         .set(&sub_plan_storage_key, &plan_template_id);
@@ -1045,7 +1316,7 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&merchant_key, &ids);
 
     // Maintain token -> subscription-ID index
-    let token_key = (Symbol::new(env, "token_subs"), plan.token);
+    let token_key = DataKey::TokenSubs(plan.token.clone());
     let mut token_ids: Vec<u32> = env
         .storage()
         .instance()
@@ -1053,6 +1324,21 @@ pub fn do_create_subscription_from_plan(
         .unwrap_or(Vec::new(env));
     token_ids.push_back(id);
     env.storage().instance().set(&token_key, &token_ids);
+
+    env.events().publish(
+        (symbol_short!("created"), id),
+        SubscriptionCreatedEvent {
+            subscription_id: id,
+            subscriber: subscriber.clone(),
+            merchant: plan.merchant.clone(),
+            token: plan.token.clone(),
+            amount: plan.amount,
+            interval_seconds: plan.interval_seconds,
+            lifetime_cap: plan.lifetime_cap,
+            expires_at: None,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(id)
 }
@@ -1067,6 +1353,8 @@ pub fn do_update_plan_template(
     lifetime_cap: Option<i128>,
 ) -> Result<u32, Error> {
     merchant.require_auth();
+
+    validate_interval(interval_seconds)?;
 
     // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
@@ -1086,11 +1374,11 @@ pub fn do_update_plan_template(
     // Enforce usage flag consistency: usage_enabled cannot be changed through versioning
     // to prevent accidental billing model shifts for downstream subscribers.
     if usage_enabled != existing.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     let new_plan_id = next_plan_id(env);
-    let new_version = safe_add(existing.version as i128, 1).unwrap_or(0) as u32;
+    let new_version = existing.version.checked_add(1).ok_or(Error::Overflow)?;
     let updated = PlanTemplate {
         merchant: merchant.clone(),
         token,
@@ -1100,9 +1388,10 @@ pub fn do_update_plan_template(
         lifetime_cap,
         template_key: existing.template_key,
         version: new_version,
+        is_disabled: false,
     };
 
-    let key = (Symbol::new(env, "plan"), new_plan_id);
+    let key = DataKey::Plan(new_plan_id);
     env.storage().instance().set(&key, &updated);
 
     env.events().publish(
@@ -1123,6 +1412,38 @@ pub fn do_update_plan_template(
     Ok(new_plan_id)
 }
 
+pub fn do_disable_plan_template(
+    env: &Env,
+    merchant: Address,
+    plan_template_id: u32,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    let mut plan = get_plan_template(env, plan_template_id)?;
+    if plan.merchant != merchant {
+        return Err(Error::Forbidden);
+    }
+
+    if plan.is_disabled {
+        return Ok(());
+    }
+
+    plan.is_disabled = true;
+    let key = (Symbol::new(env, "plan"), plan_template_id);
+    env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_disabled"), plan_template_id),
+        crate::types::PlanTemplateDisabledEvent {
+            plan_template_id,
+            merchant,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    Ok(())
+}
+
 pub fn do_migrate_subscription_to_plan(
     env: &Env,
     subscriber: Address,
@@ -1138,11 +1459,12 @@ pub fn do_migrate_subscription_to_plan(
     }
 
     // Resolve the current plan the subscription is pinned to (if any).
-    let sub_plan_storage_key = sub_plan_key(env, subscription_id);
+    let sub_plan_storage_key = sub_plan_key(subscription_id);
     let current_plan_id: u32 = match env.storage().instance().get(&sub_plan_storage_key) {
         Some(id) => id,
         None => {
             // Subscription was not created from a plan template – explicit migration required.
+
             return Err(Error::InvalidInput);
         }
     };
@@ -1167,7 +1489,7 @@ pub fn do_migrate_subscription_to_plan(
 
     // For safety, do not allow billing model switches via migration.
     if new_plan.usage_enabled != sub.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     // Enforce compatibility of lifetime caps: cannot migrate into a cap that is already exceeded.
@@ -1186,7 +1508,7 @@ pub fn do_migrate_subscription_to_plan(
     sub.interval_seconds = new_plan.interval_seconds;
     sub.usage_enabled = new_plan.usage_enabled;
 
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
     env.storage()
         .instance()
         .set(&sub_plan_storage_key, &new_plan_template_id);
@@ -1222,7 +1544,7 @@ pub fn do_set_plan_max_active_subs(
 
     env.storage()
         .instance()
-        .set(&plan_max_active_key(env, plan_template_id), &max_active);
+        .set(&plan_max_active_key(plan_template_id), &max_active);
 
     env.events().publish(
         (Symbol::new(env, "plan_max_active_set"), plan_template_id),
@@ -1259,7 +1581,7 @@ pub fn do_set_subscriber_credit_limit(
 
     env.storage()
         .instance()
-        .set(&credit_limit_key(env, &subscriber, &token), &limit);
+        .set(&credit_limit_key(&subscriber, &token), &limit);
 
     Ok(())
 }
@@ -1278,6 +1600,7 @@ pub fn get_subscriber_exposure(
 
 pub fn do_configure_usage_limits(
     env: &Env,
+
     merchant: Address,
     subscription_id: u32,
     rate_limit_max_calls: Option<u32>,
@@ -1312,5 +1635,19 @@ pub fn do_configure_usage_limits(
         .instance()
         .set(&DataKey::UsageLimits(subscription_id), &limits);
 
+    env.events().publish(
+        (Symbol::new(env, "usage_limits_configured"), subscription_id),
+        UsageLimitsConfiguredEvent {
+            subscription_id,
+            merchant,
+            rate_limit_max_calls,
+            rate_window_secs,
+            burst_min_interval_secs,
+            usage_cap_units,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
     Ok(())
 }
+
