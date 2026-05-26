@@ -1,36 +1,143 @@
 #![no_std]
 
-//! Subscription Vault stub.
-//!
-//! The previous implementation was left in an unbuildable state (hundreds of
-//! duplicate definitions and a corrupted `types.rs`). This file replaces it
-//! with a minimal, compiling placeholder so the CI pipeline can move past the
-//! `cargo test --all` step while the contract is rewritten on a future
-//! branch.
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
-use soroban_sdk::{contract, contractimpl, Env};
+pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    NotFound = 404,
+    InvalidArgument = 3,
+    AlreadyInitialized = 4008,
+    SubscriptionLimitReached = 429,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active = 0,
+    Paused = 1,
+    Cancelled = 2,
+    InsufficientBalance = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub subscriber: Address,
+    pub token: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub last_payment_timestamp: u64,
+    pub status: SubscriptionStatus,
+    pub prepaid_balance: i128,
+    pub usage_enabled: bool,
+    pub expires_at: Option<u64>,
+}
 
 #[contract]
 pub struct SubscriptionVault;
 
 #[contractimpl]
 impl SubscriptionVault {
-    /// Returns the schema version of this contract.
+    pub fn init(env: Env, admin: Address, token: Address, min_topup: i128) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .has(&Symbol::new(&env, "admin"))
+        {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&Symbol::new(&env, "admin"), &admin);
+        env.storage().instance().set(&Symbol::new(&env, "token"), &token);
+        env.storage().instance().set(&Symbol::new(&env, "min_topup"), &min_topup);
+        Ok(())
+    }
+
+    pub fn create_subscription(
+        env: Env,
+        subscriber: Address,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        expires_at: Option<u64>,
+    ) -> Result<u32, Error> {
+        subscriber.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if interval_seconds == 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if let Some(ts) = expires_at {
+            if ts <= env.ledger().timestamp() {
+                return Err(Error::InvalidArgument);
+            }
+        }
+
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "token"))
+            .ok_or(Error::NotFound)?;
+
+        let id = Self::_next_id(&env)?;
+        let sub = Subscription {
+            subscriber,
+            token,
+            merchant,
+            amount,
+            interval_seconds,
+            last_payment_timestamp: env.ledger().timestamp(),
+            status: SubscriptionStatus::Active,
+            prepaid_balance: 0,
+            usage_enabled,
+            expires_at,
+        };
+        env.storage().instance().set(&id, &sub);
+        Ok(id)
+    }
+
+    pub fn get_subscription(env: Env, id: u32) -> Result<Subscription, Error> {
+        env.storage()
+            .instance()
+            .get(&id)
+            .ok_or(Error::NotFound)
+    }
+
+    pub fn get_min_topup(env: Env) -> Result<i128, Error> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "min_topup"))
+            .ok_or(Error::NotFound)
+    }
+
+    pub fn get_subscription_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0)
+    }
+
     pub fn version(_env: Env) -> u32 {
         0
+    }
+
+    fn _next_id(env: &Env) -> Result<u32, Error> {
+        let key = Symbol::new(env, "next_id");
+        let current: u32 = env.storage().instance().get(&key).unwrap_or(0);
+        if current == MAX_SUBSCRIPTION_ID {
+            return Err(Error::SubscriptionLimitReached);
+        }
+        env.storage().instance().set(&key, &(current + 1));
+        Ok(current)
     }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::Env;
-
-    #[test]
-    fn version_is_zero() {
-        let env = Env::default();
-        let contract_id = env.register(SubscriptionVault, ());
-        let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 0);
-    }
-}
+mod test;
