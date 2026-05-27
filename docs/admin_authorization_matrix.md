@@ -43,6 +43,7 @@ the host layer when no signature is present.
 | `set_oracle_config` | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | Config validation happens after auth |
 | `remove_from_blocklist` | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | Uses the same centralized guard |
 | `set_protocol_fee` | Explicit `admin` arg must equal stored admin | `Forbidden` | `Forbidden` | Uses direct admin check, returns `Forbidden` not `Unauthorized` |
+| `charge_subscription` | Stored admin is loaded from state and must sign | Host auth failure if unsigned | New admin signature required after rotation | Admin loaded from `DataKey::Admin` (instance storage); no caller-supplied admin parameter; returns `Unauthorized` if admin unset |
 | `batch_charge` | Stored admin is loaded from state and must sign | Host auth failure if unsigned | New admin signature required after rotation | No caller-supplied admin parameter; nonce domain 0 |
 | **`set_operator`** | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | Admin manages operator lifecycle |
 | **`remove_operator`** | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | No-op when no operator is set |
