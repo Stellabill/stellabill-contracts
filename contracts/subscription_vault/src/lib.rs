@@ -6,7 +6,7 @@
 //! monotonic increment. The ID allocation is protected against overflow
 //! by checking the limit before incrementing.
 
-use soroban_sdk::{contract, contracterror, contractimpl, symbol_short, Env, Symbol, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, Env, Symbol, Vec};
 
 /// Maximum subscription ID that can be allocated.
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
@@ -37,7 +37,7 @@ impl SubscriptionVault {
     /// This equals the total number of subscriptions ever created,
     /// including cancelled and expired ones.
     pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, symbol_short!("next_id"));
+        let key = Symbol::new(&env, "next_id");
         env.storage()
             .instance()
             .get(&key)
@@ -58,7 +58,7 @@ impl SubscriptionVault {
     /// This function implements overflow-safe ID allocation by checking
     /// the limit before incrementing the counter.
     fn _next_id(env: &Env) -> Result<u32, Error> {
-        let key = Symbol::new(env, symbol_short!("next_id"));
+        let key = Symbol::new(env, "next_id");
         let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
 
         if current == MAX_SUBSCRIPTION_ID {
@@ -73,7 +73,7 @@ impl SubscriptionVault {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::SubscriptionVaultClient;
+    use crate::SubscriptionVaultClient;
 
     #[test]
     fn version_is_one() {
