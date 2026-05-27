@@ -343,7 +343,7 @@ fn test_update_deactivate_merchant() {
 mod admin_rotation_invariants {
     use crate::test_utils::{fixtures, setup::TestEnv};
     use crate::{AdminRotatedEvent, Error, SubscriptionStatus};
-    use soroban_sdk::{testutils::Ledger as _, Address, IntoVal, Vec};
+    use soroban_sdk::{testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, IntoVal, Vec};
 
     const T0: u64 = 1_000;
     const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days

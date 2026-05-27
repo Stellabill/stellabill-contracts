@@ -26,9 +26,6 @@ use crate::types::{
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
     TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
     OP_CHARGE,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
-    MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
-    is_valid_allowed_operations, MAX_FEE_BIPS, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -179,23 +176,7 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-/// Updates merchant configuration. Returns the updated config.
-///
-/// Note: This is a stub implementation. Full implementation pending.
-pub fn update_merchant_config(
-    _env: &Env,
-    _merchant: Address,
-    _new_payout_address: Option<Address>,
-    _new_fee_bips: Option<i32>,
-    _new_allowed_operations: Option<i32>,
-    _new_is_active: Option<bool>,
-    _new_fee_address: Option<Option<Address>>,
-    _new_redirect_url: Option<soroban_sdk::String>,
-    _new_is_paused: Option<bool>,
-) -> Result<MerchantConfig, crate::types::Error> {
-    // TODO: Implement full merchant config update logic
-    Err(crate::types::Error::NotInitialized)
-}
+
 
 fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
     DataKey::MerchantBalance(merchant.clone(), token.clone())
@@ -474,6 +455,7 @@ pub fn merchant_refund(
             subscriber: subscriber.clone(),
             token: token_addr.clone(),
             amount,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -545,7 +527,6 @@ pub fn update_merchant_config(
             payout_address: config.payout_address.clone(),
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
-            is_active: config.is_active,
             timestamp: config.last_updated,
         },
     );

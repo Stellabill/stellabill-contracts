@@ -73,7 +73,7 @@ pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     env.storage()
-        .instance()
+        .persistent()
         .get(&DataKey::Sub(subscription_id))
         .ok_or(Error::NotFound)
 }
@@ -130,7 +130,7 @@ pub fn get_subscriptions_by_merchant(
     let mut i = start;
     while i < end {
         let sub_id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(sub_id)) {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(sub_id)) {
             result.push_back(sub);
         }
         i += 1;
@@ -179,7 +179,7 @@ pub fn get_subscriptions_by_token(
     let mut i = start;
     while i < end {
         let id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
             out.push_back(sub);
         }
         i += 1;
@@ -242,7 +242,7 @@ pub fn get_cap_info(env: &Env, subscription_id: u32) -> Result<CapInfo, Error> {
 
     let (remaining_cap, cap_reached) = match sub.lifetime_cap {
         Some(cap) => {
-            let remaining = cap.saturating_sub(sub.lifetime_charged).max(0);
+            let remaining = cap.saturating_sub(sub.lifetime_charged).max(0i128);
             (Some(remaining), sub.lifetime_charged >= cap)
         }
         None => (None, false),
@@ -317,7 +317,7 @@ pub fn list_subscriptions_by_subscriber(
 
     let mut id = start_from_id;
     while id < scan_end {
-        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
             if sub.subscriber == subscriber {
                 if subscription_ids.len() < limit {
                     subscription_ids.push_back(id);
@@ -394,7 +394,7 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     let accounted = total_prepaid
         .checked_add(total_merchant_liabilities)
         .unwrap_or(0i128);
-    let recoverable_amount = contract_balance.saturating_sub(accounted).max(0);
+    let recoverable_amount = contract_balance.saturating_sub(accounted).max(0i128);
 
     let computed_total = total_prepaid
         .checked_add(total_merchant_liabilities)
@@ -504,7 +504,7 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
     let accounted = total_prepaid
         .checked_add(total_merchant_liabilities)
         .unwrap_or(0i128);
-    let computed_recoverable = contract_balance.saturating_sub(accounted).max(0);
+    let computed_recoverable = contract_balance.saturating_sub(accounted).max(0i128);
 
     // Validate accounting equation
     let computed_total = accounted.checked_add(computed_recoverable).unwrap_or(0i128);
@@ -571,7 +571,7 @@ pub fn query_prepaid_balances_paginated(
     for id in request.start_subscription_id..scan_end {
         if let Some(sub) = env
             .storage()
-            .instance()
+            .persistent()
             .get::<_, Subscription>(&DataKey::Sub(id))
         {
             if sub.token == request.token && sub.prepaid_balance > 0 {
@@ -606,7 +606,7 @@ fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
     for id in 0..next_id {
         if let Some(sub) = env
             .storage()
-            .instance()
+            .persistent()
             .get::<_, Subscription>(&DataKey::Sub(id))
         {
             if sub.token == *token {
@@ -629,7 +629,7 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
     for id in 0..next_id {
         if let Some(sub) = env
             .storage()
-            .instance()
+            .persistent()
             .get::<_, Subscription>(&DataKey::Sub(id))
         {
             if sub.token == *token && sub.prepaid_balance > 0 {
@@ -642,28 +642,19 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
 }
 
 fn compute_total_merchant_liabilities(env: &Env, token: &Address) -> i128 {
-    // Get all merchants by iterating through MerchantTokens index
-    // This is a simplified approach - for a complete solution, we'd need
-    // a global merchant index. For now, we use the TotalAccounted value
-    // as a proxy for total merchant liabilities.
-    crate::accounting::get_total_accounted(env, token)
+    let total_accounted = crate::accounting::get_total_accounted(env, token);
+    let total_prepaid = compute_total_prepaid(env, token);
+    total_accounted.saturating_sub(total_prepaid).max(0i128)
 }
 
 fn compute_total_merchant_liabilities_with_count(env: &Env, token: &Address) -> (i128, u32) {
-    // Since we don't have a global merchant index, we count merchants
-    // that have earnings records for this token
-    let total = crate::accounting::get_total_accounted(env, token);
+    let total_accounted = crate::accounting::get_total_accounted(env, token);
+    let total_prepaid = compute_total_prepaid(env, token);
+    let total = total_accounted.saturating_sub(total_prepaid).max(0i128);
 
-    // Count merchants with earnings for this token by checking MerchantTokens
-    // This is an approximation - counting all merchants with token earnings
     let mut merchant_count: u32 = 0;
-
-    // We need to scan for merchants with earnings for this token
-    // Since there's no global merchant index, we use the fact that
-    // TotalAccounted > 0 implies at least one merchant has earnings
     if total > 0 {
-        // At minimum, there's activity for this token
-        merchant_count = 1; // Conservative estimate
+        merchant_count = 1;
     }
 
     (total, merchant_count)

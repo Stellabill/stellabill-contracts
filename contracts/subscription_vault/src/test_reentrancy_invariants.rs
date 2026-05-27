@@ -66,7 +66,7 @@ fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balance: i
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::Sub(id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 }
 

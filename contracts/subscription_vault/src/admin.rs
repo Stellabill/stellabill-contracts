@@ -200,7 +200,7 @@ pub(crate) fn execute_batch_charge(env: &Env, subscription_ids: &Vec<u32>) -> Ve
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
         let r = charge_one(env, id, now, None);
-        let res = match &r {
+        let res = match r {
             Ok(ChargeExecutionResult::Charged) => BatchChargeResult {
                 success: true,
                 error_code: 0,
@@ -257,7 +257,6 @@ pub fn do_charge_usage(
 ) -> Result<(), Error> {
     let _admin = require_stored_admin_auth(env)?;
 
-    charge_usage_one(env, subscription_id, usage_amount, reference).map(|_| ())
     charge_usage_one(env, subscription_id, usage_amount, reference)?;
     Ok(())
 }
@@ -386,8 +385,6 @@ pub fn set_protocol_fee(
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
-            admin: admin.clone(),
-            treasury: treasury.clone(),
             admin,
             treasury,
             fee_bps,

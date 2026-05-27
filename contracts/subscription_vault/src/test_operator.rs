@@ -680,7 +680,7 @@ fn operator_charge_usage_with_reference_succeeds() {
     let ref_str = soroban_sdk::String::from_str(&te.env, "invoice-001");
     let usage = 500_000i128;
     te.client
-        .operator_charge_usage_with_reference(&operator, &sub_id, &usage, &ref_str);
+        .operator_charge_usage_with_ref(&operator, &sub_id, &usage, &ref_str);
 
     let sub = te.client.get_subscription(&sub_id);
     assert_eq!(sub.prepaid_balance, DEPOSIT - usage);

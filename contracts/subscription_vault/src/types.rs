@@ -58,23 +58,7 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
-    /// USDC token contract address.
-    Token,
-    /// Authorized admin address.
-    Admin,
-    /// Minimum deposit threshold.
-    MinTopup,
-    /// Auto-incrementing subscription ID counter.
-    NextId,
-    /// On-chain storage schema version.
-    SchemaVersion,
-    /// Subscription record keyed by its ID.
-    Sub(u32),
-    /// Last charged billing-period index for replay protection.
-    ChargedPeriod(u32),
-    /// Idempotency key stored per subscription.
-    IdemKey(u32),
-    /// Emergency stop flag - when true, critical operations are blocked.
+
     /// USDC token contract address. Discriminant 1.
     Token,
     /// Authorized admin address. Discriminant 2.
@@ -147,52 +131,13 @@ pub enum DataKey {
     BillingPeriodSnapshot(u32, u64),
     /// Index for billing period snapshots.
     BillingPeriodSnapshotIndex(u32),
-    /// Period-end billing snapshot keyed by (subscription_id, period_index).
-    BillingPeriodSnapshot(u32, u64),
-    /// Secondary index of period snapshot refs for a subscription.
-    BillingPeriodSnapshotIndex(u32),
     /// Admin nonce for replay protection keyed by (admin_address, domain).
     AdminNonce(Address, u32),
+    /// Operator key.
+    Operator,
 }
 
-/// Accrued totals by charge kind.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
-}
 
-/// Merchant token-scoped earnings.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Snapshot for merchant earnings reporting.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReconciliationSnapshot {
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-}
-
-/// A snapshot tied to a specific token.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-}
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -383,10 +328,7 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
-    /// Cannot change usage mode after subscription creation.
-    CannotChangeUsageMode = 3008,
-    /// Invalid token decimals provided.
-    InvalidTokenDecimals = 3009,
+
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -456,14 +398,6 @@ pub enum Error {
     /// Invalid allowed operations bitmask.
     InvalidOperations = 7002,
     /// Charge operation must be allowed for merchant.
-    MustAllowChargeOperation = 7003,
-    /// Invalid or unsupported token address.
-    InvalidToken = 7004,
-    /// Fee basis points exceed the maximum allowed (10,000).
-    InvalidFeeBips = 7001,
-    /// Invalid allowed operations bitmap for merchant config.
-    InvalidOperations = 7002,
-    /// Merchant config must allow the charge operation.
     MustAllowChargeOperation = 7003,
 
     // --- Token (8000-8099) ---
@@ -1182,19 +1116,7 @@ pub struct MetadataDeletedEvent {
     pub authorizer: Address,
 }
 
-/// Event emitted when a plan template is updated to a new version.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct PlanTemplateCreatedEvent {
-    pub plan_template_id: u32,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub interval_seconds: u64,
-    pub usage_enabled: bool,
-    pub lifetime_cap: Option<i128>,
-    pub timestamp: u64,
-}
+
 
 /// Event emitted when a plan template is updated.
 #[contracttype]
@@ -1490,67 +1412,6 @@ pub struct LifetimeCapUpdatedEvent {
 pub struct MerchantCapDefaultUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
-/// Event emitted when a protocol fee is charged during a subscription billing.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProtocolFeeChargedEvent {
-    pub subscription_id: u32,
-    pub treasury: Address,
-    pub fee_amount: i128,
-    pub merchant_amount: i128,
-    pub timestamp: u64,
-}
-
-/// Event emitted when a merchant's config is first initialized.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantConfigInitializedEvent {
-    pub merchant: Address,
-    pub payout_address: Address,
-    pub fee_bips: i32,
-    pub allowed_operations: i32,
-    pub timestamp: u64,
-}
-
-/// Event emitted when a merchant's config is updated.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantConfigUpdatedEvent {
-    pub merchant: Address,
-    pub payout_address: Address,
-    pub fee_bips: i32,
-    pub allowed_operations: i32,
-    pub is_active: bool,
-    pub timestamp: u64,
-}
-
-/// Event emitted when the global lifetime cap default is updated.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct GlobalCapDefaultUpdatedEvent {
-    pub admin: Address,
-    pub old_default: Option<i128>,
-    pub new_default: Option<i128>,
-    pub timestamp: u64,
-}
-
-/// Event emitted when a merchant's cap default is updated.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantCapDefaultUpdatedEvent {
-    pub merchant: Address,
-    pub old_default: Option<i128>,
-    pub new_default: Option<i128>,
-    pub timestamp: u64,
-}
-
-/// Event emitted when a subscription's lifetime cap is updated.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct LifetimeCapUpdatedEvent {
-    pub subscription_id: u32,
-    pub old_cap: Option<i128>,
-    pub new_cap: Option<i128>,
     pub timestamp: u64,
 }
 

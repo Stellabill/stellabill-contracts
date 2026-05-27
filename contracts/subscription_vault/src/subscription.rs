@@ -48,8 +48,6 @@ use crate::types::{
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
-    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent,
     SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
@@ -190,7 +188,7 @@ fn count_active_subscriptions_for_plan(
             continue;
         }
 
-        if let Some(sub) = storage.get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
             if &sub.subscriber == subscriber && sub.status == SubscriptionStatus::Active {
                 count = count.saturating_add(1);
             }
@@ -265,7 +263,7 @@ fn compute_subscriber_exposure(
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
-        if let Some(sub) = storage.get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
             if &sub.subscriber != subscriber || &sub.token != token {
                 continue;
             }
@@ -406,7 +404,7 @@ pub fn do_create_subscription_with_token(
     let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
 
     env.storage().instance().set(&DataKey::NextId, &next_id);
-    env.storage().instance().set(&DataKey::Sub(id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(id), &sub);
 
     // Maintain merchant -> subscription-ID index
     let merchant_key = DataKey::MerchantSubs(merchant.clone());
@@ -478,7 +476,7 @@ pub fn do_deposit_funds(
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
-            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+            env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
                 crate::types::SubscriptionExpiredEvent {
@@ -501,7 +499,7 @@ pub fn do_deposit_funds(
 
     // EFFECTS
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
@@ -526,7 +524,7 @@ pub fn do_deposit_funds(
         && sub.prepaid_balance >= sub.amount
     {
         sub.status = SubscriptionStatus::Active;
-        env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
         env.events().publish(
             (Symbol::new(env, "recovery_ready"), subscription_id),
@@ -575,7 +573,7 @@ pub fn do_cancel_subscription(
     transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
 
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     env.events().publish(
         (Symbol::new(env, "subscription_cancelled"), subscription_id),
@@ -629,7 +627,7 @@ pub fn do_pause_subscription(
 
     transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
 
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     env.events().publish(
         (Symbol::new(env, "sub_paused"), subscription_id),
@@ -691,7 +689,7 @@ pub fn do_resume_subscription(
 
     let previous_status = sub.status;
     sub.status = SubscriptionStatus::Active;
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
      env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
@@ -726,7 +724,7 @@ pub fn do_charge_one_off(
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
-            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+            env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
                 crate::types::SubscriptionExpiredEvent {
@@ -745,7 +743,7 @@ pub fn do_charge_one_off(
         if sub.lifetime_charged >= cap {
             if sub.status != SubscriptionStatus::Cancelled {
                 transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
-                env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+                env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
                 env.events().publish(
                     (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
                     LifetimeCapReachedEvent {
@@ -774,7 +772,7 @@ pub fn do_charge_one_off(
     if let Some(cap) = sub.lifetime_cap {
         if new_charged > cap {
             transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
-            env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+            env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
                 LifetimeCapReachedEvent {
@@ -819,7 +817,7 @@ pub fn do_charge_one_off(
         }
     }
 
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
     append_statement(
         env,
         subscription_id,
@@ -873,7 +871,7 @@ pub fn do_cleanup_subscription(
         }
 
         transition_to(&mut sub.status, SubscriptionStatus::Archived)?;
-        env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
         
         env.events().publish(
             (Symbol::new(env, "subscription_archived"), subscription_id),
@@ -915,13 +913,13 @@ pub fn do_withdraw_subscriber_funds(
 
     let amount_to_refund = sub.prepaid_balance;
     if amount_to_refund <= 0 {
-        return Err(Error::InsufficientBalance);
+        return Err(Error::InvalidAmount);
     }
 
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
     let token_addr = sub.token.clone();
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     // INTERACTIONS: transfer refund from vault to subscriber.
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
@@ -986,7 +984,7 @@ pub fn do_partial_refund(
 
     // Effects: debit balance before external call.
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     // Interactions: transfer refund from vault to subscriber.
     let token_addr = sub.token.clone();
@@ -1133,7 +1131,7 @@ pub fn do_update_subscription_cap(
     }
 
     sub.lifetime_cap = new_cap;
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
     // Get admin address for event, fallback to a zero-address if not set
     let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
@@ -1297,7 +1295,7 @@ pub fn do_create_subscription_from_plan(
         grace_start_timestamp: None,
     };
 
-    env.storage().instance().set(&DataKey::Sub(id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(id), &sub);
 
     // Persist linkage between subscription and the plan template
     let sub_plan_storage_key = sub_plan_key(id);
@@ -1508,7 +1506,7 @@ pub fn do_migrate_subscription_to_plan(
     sub.interval_seconds = new_plan.interval_seconds;
     sub.usage_enabled = new_plan.usage_enabled;
 
-    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
+    env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
     env.storage()
         .instance()
         .set(&sub_plan_storage_key, &new_plan_template_id);

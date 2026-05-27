@@ -1,5 +1,5 @@
 use crate::{
-    can_transition, compute_next_charge_info, get_allowed_transitions, transition_to,
+    can_transition, compute_next_charge_info, get_allowed_transitions,
     validate_status_transition,
     ChargeExecutionResult, DataKey, Error, MerchantWithdrawalEvent, OraclePrice,
     RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
@@ -12,6 +12,7 @@ use soroban_sdk::{
 
 extern crate alloc;
 use crate::test_utils::{assertions, fixtures, setup::TestEnv};
+use crate::state_machine::transition_to;
 use alloc::format;
 
 // -- constants ----------------------------------------------------------------
@@ -101,7 +102,7 @@ fn create_test_subscription(
         let mut sub = client.get_subscription(&id);
         sub.status = status;
         env.as_contract(&client.address, || {
-            env.storage().instance().set(&DataKey::Sub(id), &sub);
+            env.storage().persistent().set(&DataKey::Sub(id), &sub);
         });
     }
     (id, subscriber, merchant)
@@ -112,7 +113,7 @@ fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balance: i
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::Sub(id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -1569,11 +1570,11 @@ fn test_batch_charge() {
     env.as_contract(&client.address, || {
         let mut sub4 = env
             .storage()
-            .instance()
+            .persistent()
             .get::<DataKey, Subscription>(&DataKey::Sub(id4))
             .unwrap();
         sub4.last_payment_timestamp = T0 + INTERVAL + 100; // Will be in the future
-        env.storage().instance().set(&DataKey::Sub(id4), &sub4);
+        env.storage().persistent().set(&DataKey::Sub(id4), &sub4);
     });
 
     let ids = Vec::from_array(&env, [id1, 999u32, id2, id3, id4]);
@@ -2379,7 +2380,7 @@ fn test_estimate_topup_overflow_protection() {
     let mut sub = client.get_subscription(&id);
     sub.amount = i128::MAX;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::Sub(id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 
     assert_eq!(
@@ -5735,7 +5736,7 @@ fn set_status(env: &Env, client: &SubscriptionVaultClient, id: u32, status: Subs
     let mut sub = test_env.client.get_subscription(&id);
     sub.status = status;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::Sub(id), &sub);
+        env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -6878,7 +6879,7 @@ fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
     let mut sub = test_env.client.get_subscription(&id);
     sub.last_payment_timestamp = charge_ts - INTERVAL; // positive, interval elapsed
     test_env.env.as_contract(&test_env.client.address, || {
-        test_env.env.storage().instance().set(&DataKey::Sub(id), &sub);
+        test_env.env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 
     test_env.env.ledger().set_timestamp(charge_ts);
@@ -6927,7 +6928,7 @@ fn test_oracle_price_one_second_past_max_age_rejected() {
     let mut sub = test_env.client.get_subscription(&id);
     sub.last_payment_timestamp = charge_ts.saturating_sub(INTERVAL);
     test_env.env.as_contract(&test_env.client.address, || {
-        test_env.env.storage().instance().set(&DataKey::Sub(id), &sub);
+        test_env.env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
 
     test_env.env.ledger().set_timestamp(charge_ts);
@@ -7157,10 +7158,10 @@ mod storage_layout {
         };
 
         env.as_contract(&contract_id, || {
-            env.storage().instance().set(&DataKey::Sub(42), &original);
+            env.storage().persistent().set(&DataKey::Sub(42), &original);
             let loaded: Subscription = env
                 .storage()
-                .instance()
+                .persistent()
                 .get(&DataKey::Sub(42))
                 .expect("subscription must be present");
 
@@ -7262,13 +7263,13 @@ mod storage_layout {
         };
 
         env.as_contract(&client.address, || {
-            env.storage().instance().set(&DataKey::Sub(999), &legacy);
+            env.storage().persistent().set(&DataKey::Sub(999), &legacy);
         });
 
         // Current code must read it back without panicking.
         let loaded: Subscription = env.as_contract(&client.address, || {
             env.storage()
-                .instance()
+                .persistent()
                 .get(&DataKey::Sub(999))
                 .expect("legacy record must be readable")
         });
@@ -7291,15 +7292,13 @@ mod storage_layout {
         let contract_id = env.register(SubscriptionVault, ());
 
         env.as_contract(&contract_id, || {
-            let storage = env.storage().instance();
-
             // Write a config value and a subscription under different keys.
-            storage.set(&DataKey::NextId, &1u32);
-            storage.set(&DataKey::Sub(1), &999u32);
+            env.storage().instance().set(&DataKey::NextId, &1u32);
+            env.storage().persistent().set(&DataKey::Sub(1), &999u32);
 
             // Both must be independently readable.
-            assert_eq!(storage.get::<DataKey, u32>(&DataKey::NextId), Some(1u32));
-            assert_eq!(storage.get::<DataKey, u32>(&DataKey::Sub(1)), Some(999u32));
+            assert_eq!(env.storage().instance().get::<DataKey, u32>(&DataKey::NextId), Some(1u32));
+            assert_eq!(env.storage().persistent().get::<DataKey, u32>(&DataKey::Sub(1)), Some(999u32));
         });
     }
 
@@ -7325,10 +7324,10 @@ mod storage_layout {
         env.as_contract(&contract_id, || {
             for (i, status) in statuses.iter().enumerate() {
                 let key = DataKey::Sub(i as u32);
-                env.storage().instance().set(&key, status);
+                env.storage().persistent().set(&key, status);
                 let loaded: SubscriptionStatus = env
                     .storage()
-                    .instance()
+                    .persistent()
                     .get(&key)
                     .expect("status must be present");
                 assert_eq!(&loaded, status);

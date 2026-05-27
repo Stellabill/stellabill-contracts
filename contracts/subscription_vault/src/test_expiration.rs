@@ -53,16 +53,12 @@ fn test_expiration_timing_and_charging() {
     let min_topup = 1_000_000i128;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
-    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token_client.address, &amount, &interval, &false, &None::<i128>, &Some(expires_at));
-
-    token_admin.mint(&subscriber, &(amount * 5));
-
     let sub_id = client.create_subscription_with_token(
         &subscriber,
         &merchant,
-        &token.address,
+        &token_client.address,
         &amount,
-        &INTERVAL,
+        &interval,
         &false,
         &None::<i128>,
         &Some(expires_at),
@@ -185,17 +181,6 @@ fn test_expiration_vs_cancellation() {
     assert_eq!(client.get_subscription(&sub_id1).status, SubscriptionStatus::Archived);
 
     // Flow 1: expire without cancel -> cancel rejected -> cleanup -> Archived
-    let sub_id2 = client.create_subscription_with_token(
-        &subscriber,
-        &merchant,
-        &token.address,
-        &1_000_000i128,
-        &INTERVAL,
-        &false,
-        &None::<i128>,
-        &Some(T0 + 2 * INTERVAL),
-    );
-
     // Scenario 2: Expire without cancel
     let sub_id2 = client.create_subscription_with_token(
         &subscriber,

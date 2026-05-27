@@ -14,6 +14,10 @@ const INTERVAL: u64 = 30 * 24 * 60 * 60;
 
 fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000;
+        l.sequence_number = 1;
+    });
     env.mock_all_auths();
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
@@ -233,7 +237,7 @@ fn test_get_token_reconciliation_empty_contract() {
     // Empty contract - no subscriptions, no funds
     let reconciliation = client.get_token_reconciliation(&token_addr);
 
-    assert_eq!(reconciliation.token, token);
+    assert_eq!(reconciliation.token, token_addr);
     assert_eq!(reconciliation.total_prepaid, 0);
     assert_eq!(reconciliation.total_merchant_liabilities, 0);
     assert_eq!(reconciliation.recoverable_amount, 0);
@@ -258,7 +262,7 @@ fn test_get_token_reconciliation_with_prepaid() {
     // Get reconciliation
     let reconciliation = client.get_token_reconciliation(&token_addr);
 
-    assert_eq!(reconciliation.token, token);
+    assert_eq!(reconciliation.token, token_addr);
     assert_eq!(reconciliation.total_prepaid, 50_000_000);
     assert_eq!(reconciliation.contract_balance, 50_000_000);
     // No charges yet, so merchant liabilities should be 0
@@ -282,7 +286,7 @@ fn test_get_token_reconciliation_after_charge() {
     client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
 
     // Charge the subscription
-    env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1);
+    env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1001);
     client.charge_subscription(&sub_id);
 
     // Get reconciliation
@@ -334,7 +338,7 @@ fn test_get_contract_reconciliation_summary() {
     assert!(summary.next_token_index.is_none());
 
     let token_summary = summary.token_summaries.get(0).unwrap();
-    assert_eq!(token_summary.token, token);
+    assert_eq!(token_summary.token, token_addr);
 }
 
 #[test]
@@ -345,7 +349,7 @@ fn test_get_contract_reconciliation_summary_pagination() {
     let token2 = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
-    client.add_accepted_token(&admin, &token_addr2, &6);
+    client.add_accepted_token(&admin, &token2, &6);
 
     // Get first page with limit 1
     let summary_page1 = client.get_recon_summary(&0, &1);
@@ -378,7 +382,7 @@ fn test_generate_reconciliation_proof() {
     // Generate proof
     let proof = client.generate_reconciliation_proof(&token_addr);
 
-    assert_eq!(proof.token, token);
+    assert_eq!(proof.token, token_addr);
     assert_eq!(proof.contract_balance, 60_000_000);
     assert_eq!(proof.total_prepaid, 50_000_000);
     assert_eq!(proof.total_merchant_liabilities, 0);
@@ -395,7 +399,7 @@ fn test_generate_reconciliation_proof_empty() {
 
     let proof = client.generate_reconciliation_proof(&token_addr);
 
-    assert_eq!(proof.token, token);
+    assert_eq!(proof.token, token_addr);
     assert_eq!(proof.contract_balance, 0);
     assert_eq!(proof.total_prepaid, 0);
     assert_eq!(proof.total_merchant_liabilities, 0);
@@ -432,7 +436,7 @@ fn test_query_prepaid_balances_paginated() {
     };
 
     let result1 = client.query_prepaid_balances_paginated(&request);
-    assert_eq!(result1.token, token);
+    assert_eq!(result1.token, token_addr);
     assert_eq!(result1.partial_total, 30_000_000); // First subscription
     assert_eq!(result1.subscriptions_count, 1);
     assert!(result1.has_more);
@@ -488,7 +492,7 @@ fn test_query_prepaid_balances_paginated_wrong_token() {
     let token2 = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
-    client.add_accepted_token(&admin, &token_addr2, &6);
+    client.add_accepted_token(&admin, &token2, &6);
 
     let request = PrepaidQueryRequest {
         token: token2.clone(),
@@ -498,7 +502,7 @@ fn test_query_prepaid_balances_paginated_wrong_token() {
 
     let result = client.query_prepaid_balances_paginated(&request);
 
-    assert_eq!(result.token, token_addr2);
+    assert_eq!(result.token, token2);
     assert_eq!(result.partial_total, 0); // No subscriptions with token2
     assert_eq!(result.subscriptions_count, 0);
 }
@@ -547,7 +551,7 @@ fn test_full_reconciliation_workflow() {
     token_client.mint(&client.address, &25_000_000);
 
     // 3. Charge one subscription
-    env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1);
+    env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1001);
     client.charge_subscription(&sub1);
 
     // 4. Verify reconciliation
@@ -565,7 +569,7 @@ fn test_full_reconciliation_workflow() {
     // 6. Verify updated reconciliation
     let reconciliation_after = client.get_token_reconciliation(&token_addr);
 
-    assert_eq!(reconciliation_after.total_merchant_liabilities, 10_000_000); // Still 10M accounted
+    assert_eq!(reconciliation_after.total_merchant_liabilities, 0); // 0 remaining after withdrawal
     assert_eq!(reconciliation_after.contract_balance, 165_000_000); // 10M withdrawn
     assert!(reconciliation_after.is_balanced);
 

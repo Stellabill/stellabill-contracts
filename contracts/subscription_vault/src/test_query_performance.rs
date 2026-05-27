@@ -144,7 +144,7 @@ fn inject_subscriptions(
         for i in 0..count {
             let id = start_id + i;
             let sub = create_mock_sub(env, subscriber, token);
-            env.storage().instance().set(&DataKey::Sub(id), &sub);
+            env.storage().persistent().set(&DataKey::Sub(id), &sub);
         }
 
         env.storage()
@@ -485,7 +485,7 @@ mod benchmark {
                 create_mock_sub(&env, &Address::generate(&env), &token)
             };
             env.as_contract(&client.address, || {
-                env.storage().instance().set(&i, &sub);
+                env.storage().persistent().set(&crate::types::DataKey::Sub(i), &sub);
             });
         }
         env.as_contract(&client.address, || {
@@ -651,14 +651,14 @@ fn test_list_subscriber_sparse_ids_within_budget() {
         // subscriber sub at base
         env.as_contract(&client.address, || {
             let sub = create_mock_sub(&env, &subscriber, &token);
-            env.storage().instance().set(&base, &sub);
+            env.storage().persistent().set(&crate::types::DataKey::Sub(base), &sub);
         });
         // 99 filler subs
         for i in 1..100 {
             let id = base + i;
             env.as_contract(&client.address, || {
                 let sub = create_mock_sub(&env, &other, &token);
-                env.storage().instance().set(&id, &sub);
+                env.storage().persistent().set(&crate::types::DataKey::Sub(id), &sub);
             });
         }
     }
