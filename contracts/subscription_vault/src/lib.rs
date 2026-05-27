@@ -38,6 +38,126 @@ pub struct Subscription {
     pub expiration: Option<u64>,
 }
 
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    AlreadyInitialized = 1,
+}
+
+/// Storage keys for instance data.
+#[derive(Clone)]
+pub enum DataKey {
+    Admin = 0,
+    Token = 1,
+    MinTopup = 2,
+}
+
+impl DataKey {
+    pub fn to_symbol(&self) -> Symbol {
+        match self {
+            DataKey::Admin => symbol_short!("admin"),
+            DataKey::Token => symbol_short!("token"),
+            DataKey::MinTopup => symbol_short!("min_topup"),
+        }
+    }
+}
+
+<<<<<<< HEAD
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+
+// ── Re-exports ────────────────────────────────────────────────────────────────
+pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
+pub use queries::{
+    compute_next_charge_info, generate_reconciliation_proof, get_contract_reconciliation_summary,
+    get_token_reconciliation, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH, MAX_SCAN_DEPTH,
+    MAX_SUBSCRIPTION_LIST_PAGE, MAX_TOKEN_SUMMARIES_PER_PAGE,
+};
+pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
+pub use types::{
+    AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
+    MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
+    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
+    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    SubscriptionArchivedEvent, SubscriptionExpiredEvent,
+    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
+    MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
+    OP_CHARGE, OP_WITHDRAW, OP_REFUND, OP_BILLING_PAUSE, OP_AUTO_RENEWAL,
+    DEFAULT_ALLOWED_OPS,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    OperatorRemovedEvent, OperatorSetEvent,
+    PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
+    TokenLiabilities,
+};
+
+/// Maximum subscription ID this contract will ever allocate.
+///
+/// When the counter reaches this value [`SubscriptionVault::create_subscription`]
+/// returns [`Error::SubscriptionLimitReached`] instead of wrapping or panicking.
+/// This sentinel prevents u32 overflow across contract upgrades.
+pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
+
+/// On-chain storage schema version.
+///
+/// Bump this constant (and add a migration path in [`migration`]) whenever
+/// storage key shapes or type layouts change in an incompatible way.
+const STORAGE_VERSION: u32 = 2;
+
+/// Hard upper bound on the number of subscriptions that may be exported in a
+/// single [`SubscriptionVault::export_subscription_summaries`] call.
+const MAX_EXPORT_LIMIT: u32 = 100;
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Ensures the given `admin` is the authorized account.
+///
+/// This checks that the caller has signed the transaction and matches
+/// the admin stored in contract storage. If the address doesn’t match,
+/// it returns `Error::Unauthorized`.
+fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
+    admin::require_admin_auth(env, admin)
+}
+
+/// Read the emergency-stop flag from instance storage.
+///
+/// Returns `false` when the key has never been written (safe default: not stopped).
+fn get_emergency_stop(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::EmergencyStop)
+        .unwrap_or(false)
+}
+
+/// Guard all mutating entry-points against an active emergency stop.
+///
+/// Returns [`Error::EmergencyStopActive`] immediately so the transaction aborts
+/// before any state is modified.
+fn require_not_emergency_stop(env: &Env) -> Result<(), Error> {
+    if get_emergency_stop(env) {
+        return Err(Error::EmergencyStopActive);
+    }
+    Ok(())
+}
+
+// ── Contract ──────────────────────────────────────────────────────────────────
+
+/// Main contract for handling prepaid subscription billing on Stellar.
+///
+/// See the crate-level docs for a full overview of how the system works.
+=======
+>>>>>>> origin/main
 #[contract]
 pub struct SubscriptionVault;
 
@@ -297,6 +417,62 @@ impl SubscriptionVault {
         let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
         env.storage().instance().set(&key, &(id + 1));
         id
+    }
+
+    /// Initialize the contract with admin, token, and minimum topup amount.
+    ///
+    /// # Security
+    /// This function can only be called once. The admin key serves as a sentinel
+    /// to detect whether initialization has already occurred. Any attempt to
+    /// re-initialize will return `Error::AlreadyInitialized` and leave the existing
+    /// configuration unchanged.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address that will control the contract
+    /// * `token` - The token address used for payments
+    /// * `min_topup` - The minimum topup amount in token units
+    ///
+    /// # Errors
+    /// * `Error::AlreadyInitialized` - If the contract has already been initialized
+    pub fn init(env: Env, admin: Address, token: Address, min_topup: i128) -> Result<(), Error> {
+        // Check if already initialized by verifying the admin key exists
+        if env.storage().instance().has(&DataKey::Admin.to_symbol()) {
+            return Err(Error::AlreadyInitialized);
+        }
+
+        // Store initial configuration
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin.to_symbol(), &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::Token.to_symbol(), &token);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinTopup.to_symbol(), &min_topup);
+
+        Ok(())
+    }
+
+    /// Get the current admin address.
+    pub fn get_admin(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin.to_symbol())
+    }
+
+    /// Get the token address.
+    pub fn get_token(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token.to_symbol())
+    }
+
+    /// Get the minimum topup amount.
+    pub fn get_min_topup(env: Env) -> Option<i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MinTopup.to_symbol())
     }
 }
 
