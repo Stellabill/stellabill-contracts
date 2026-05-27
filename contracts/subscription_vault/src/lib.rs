@@ -12,6 +12,8 @@ use soroban_sdk::{contract, contractimpl, Env};
 
 <<<<<<< HEAD
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+mod safe_math;
+pub use safe_math::*;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
