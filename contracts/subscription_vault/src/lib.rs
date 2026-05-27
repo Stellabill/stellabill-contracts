@@ -1,14 +1,27 @@
-#![no_std]
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
-//! Subscription Vault stub.
-//!
-//! The previous implementation was left in an unbuildable state (hundreds of
-//! duplicate definitions and a corrupted `types.rs`). This file replaces it
-//! with a minimal, compiling placeholder so the CI pipeline can move past the
-//! `cargo test --all` step while the contract is rewritten on a future
-//! branch.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    InvalidInput = 400,
+    Unauthorized = 401,
+    BelowMinimumTopup = 402,
+    NotFound = 404,
+    SubscriptionExpired = 410,
+    NotActive = 411,
+    InsufficientBalance = 412,
+    IntervalNotElapsed = 413,
+}
 
-use soroban_sdk::{contract, contractimpl, Env};
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active = 0,
+    Paused = 1,
+    Cancelled = 2,
+    InsufficientBalance = 3,
+}
 
 <<<<<<< HEAD
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
@@ -2492,10 +2505,24 @@ impl SubscriptionVault {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, Address, Vec};
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup_test_env(env: &Env) -> (SubscriptionVaultClient<'static>, Address, Address, Address) {
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(env, &contract_id);
+        
+        let admin = Address::generate(env);
+        let token = Address::generate(env);
+        let subscriber = Address::generate(env);
+        let merchant = Address::generate(env);
+        
+        client.init(&token, &admin, &100_i128);
+        (client, admin, subscriber, merchant)
+    }
 
     #[test]
-    fn version_is_zero() {
+    fn test_empty_batch() {
         let env = Env::default();
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
