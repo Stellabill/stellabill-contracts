@@ -39,7 +39,87 @@ pub struct SubscriptionVault;
 
 #[contractimpl]
 impl SubscriptionVault {
-    /// Returns the schema version of this contract.
+    pub fn init(env: Env, admin: Address, token: Address, min_topup: i128) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .has(&Symbol::new(&env, "admin"))
+        {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&Symbol::new(&env, "admin"), &admin);
+        env.storage().instance().set(&Symbol::new(&env, "token"), &token);
+        env.storage().instance().set(&Symbol::new(&env, "min_topup"), &min_topup);
+        Ok(())
+    }
+
+    pub fn create_subscription(
+        env: Env,
+        subscriber: Address,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        expires_at: Option<u64>,
+    ) -> Result<u32, Error> {
+        subscriber.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if interval_seconds == 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if let Some(ts) = expires_at {
+            if ts <= env.ledger().timestamp() {
+                return Err(Error::InvalidArgument);
+            }
+        }
+
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "token"))
+            .ok_or(Error::NotFound)?;
+
+        let id = Self::_next_id(&env)?;
+        let sub = Subscription {
+            subscriber,
+            token,
+            merchant,
+            amount,
+            interval_seconds,
+            last_payment_timestamp: env.ledger().timestamp(),
+            status: SubscriptionStatus::Active,
+            prepaid_balance: 0,
+            usage_enabled,
+            expires_at,
+        };
+        env.storage().instance().set(&id, &sub);
+        Ok(id)
+    }
+
+    pub fn get_subscription(env: Env, id: u32) -> Result<Subscription, Error> {
+        env.storage()
+            .instance()
+            .get(&id)
+            .ok_or(Error::NotFound)
+    }
+
+    pub fn get_min_topup(env: Env) -> Result<i128, Error> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "min_topup"))
+            .ok_or(Error::NotFound)
+    }
+
+    pub fn get_subscription_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "next_id"))
+            .unwrap_or(0)
+    }
+
     pub fn version(_env: Env) -> u32 {
         0
     }
