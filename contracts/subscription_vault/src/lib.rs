@@ -73,6 +73,7 @@ impl SubscriptionVault {
 #[cfg(test)]
 mod test {
     use super::*;
+    use soroban_sdk::SubscriptionVaultClient;
 
     #[test]
     fn version_is_one() {
