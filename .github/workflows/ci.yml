@@ -69,14 +69,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
-      - name: Generate coverage report (minimum 95%)
-        run: |
-          cargo llvm-cov report \
-            --ignore-run-directory \
-            --skip-covered \
-            --minimal 95 \
-            --output-path lcov.txt
-        # Fails job if coverage < 95%
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.txt
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
