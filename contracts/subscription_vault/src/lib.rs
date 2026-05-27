@@ -1,4 +1,4 @@
-﻿use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -315,5 +315,52 @@ mod test {
         assert_eq!(res.get(1).unwrap(), BatchChargeResult { success: false, error_code: 412 });
         assert_eq!(res.get(2).unwrap(), BatchChargeResult { success: false, error_code: 410 });
         assert_eq!(res.get(3).unwrap(), BatchChargeResult { success: false, error_code: 412 });
+    }
+
+    #[test]
+    fn test_get_min_topup_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, _, _) = setup_test_env(&env);
+
+        // Assert get_min_topup returns the value set in init (100_i128)
+        assert_eq!(client.get_min_topup(), 100_i128);
+    }
+
+    #[test]
+    fn test_deposit_funds_min_topup_boundaries() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _, subscriber, merchant) = setup_test_env(&env);
+
+        let id = client.create_subscription(&subscriber, &merchant, &100_i128, &0_u64, &true, &None);
+
+        // Edge case: amount = min_topup - 1 (99) -> Should fail
+        let res_below = client.try_deposit_funds(&id, &subscriber, &99_i128);
+        assert!(res_below.is_err());
+
+        // Edge case: amount = min_topup (100) -> Should succeed
+        let res_at = client.deposit_funds(&id, &subscriber, &100_i128);
+        assert_eq!(res_at, ());
+
+        // Verify round-trip state change
+        let sub = client.get_subscription(&id);
+        assert_eq!(sub.prepaid_balance, 200_i128);
+    }
+
+    #[test]
+    fn test_set_min_topup_authorization() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, subscriber, _) = setup_test_env(&env);
+
+        // Edge case: non-admin set -> Should return Unauthorized
+        let res_non_admin = client.try_set_min_topup(&subscriber, &150_i128);
+        assert!(res_non_admin.is_err());
+
+        // Edge case: admin set -> Should successfully update get_min_topup
+        let res_admin = client.set_min_topup(&admin, &150_i128);
+        assert_eq!(res_admin, ());
+        assert_eq!(client.get_min_topup(), 150_i128);
     }
 }
