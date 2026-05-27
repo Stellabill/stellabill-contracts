@@ -575,6 +575,32 @@ pub fn do_cancel_subscription(
 
     env.storage().persistent().set(&DataKey::Sub(subscription_id), &sub);
 
+    // Remove from index
+    let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
+    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&merchant_key) {
+        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
+            ids.remove(idx);
+            env.storage().instance().set(&merchant_key, &ids);
+        }
+    }
+
+    let token_key = DataKey::TokenSubs(sub.token.clone());
+    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&token_key) {
+        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
+            ids.remove(idx);
+            env.storage().instance().set(&token_key, &ids);
+        }
+    }
+
+    // Remove from subscriber -\u003e subscription-ID index
+    let subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
+    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&subscriber_key) {
+        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
+            ids.remove(idx);
+            env.storage().instance().set(&subscriber_key, &ids);
+        }
+    }
+
     env.events().publish(
         (Symbol::new(env, "subscription_cancelled"), subscription_id),
         SubscriptionCancelledEvent {

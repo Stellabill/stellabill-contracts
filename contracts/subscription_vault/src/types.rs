@@ -121,6 +121,8 @@ pub enum DataKey {
     CreditLimit(Address, Address),
     /// Maps a token address to its list of subscription IDs.
     TokenSubs(Address),
+    /// Maps a subscriber address to its list of subscription IDs.
+    SubscriberSubs(Address),
     /// Maps (merchant, token) to their accumulated balance.
     MerchantBalance(Address, Address),
     /// Maps a subscriber address to their blocklist status.

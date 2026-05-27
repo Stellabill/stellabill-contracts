@@ -2455,7 +2455,34 @@ impl SubscriptionVault {
         merchant: Address,
     ) -> Option<crate::types::MerchantConfig> {
         merchant::get_merchant_config(&env, merchant)
-=======
+    }
+
+    // View functions
+    /// Returns a paginated list of subscriptions for a merchant.
+    pub fn get_subscriptions_by_merchant(
+        env: Env,
+        merchant: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<crate::types::Subscription>, Error> {
+        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
+    }
+
+    /// Returns the total number of subscriptions for a merchant.
+    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
+        queries::get_merchant_subscription_count(&env, merchant)
+    }
+
+    /// Lists subscription IDs for a subscriber with pagination.
+    pub fn list_subscriptions_by_subscriber(
+        env: Env,
+        subscriber: Address,
+        start_from_id: u32,
+        limit: u32,
+    ) -> Result<crate::queries::SubscriptionsPage, Error> {
+        queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
+    }
+
     /// Returns the schema version of this contract.
     pub fn version(_env: Env) -> u32 {
         0
