@@ -1,14 +1,12 @@
-#![no_std]
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
-//! Subscription Vault stub.
+//! Subscription Vault contract with overflow-safe ID allocation.
 //!
-//! The previous implementation was left in an unbuildable state (hundreds of
-//! duplicate definitions and a corrupted `types.rs`). This file replaces it
-//! with a minimal, compiling placeholder so the CI pipeline can move past the
-//! `cargo test --all` step while the contract is rewritten on a future
-//! branch.
+//! This contract manages subscription IDs with guaranteed uniqueness and
+//! monotonic increment. The ID allocation is protected against overflow
+//! by checking the limit before incrementing.
 
-use soroban_sdk::{contract, contractimpl, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, Env, Symbol, Vec};
 
 <<<<<<< HEAD
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
@@ -2487,17 +2485,54 @@ impl SubscriptionVault {
 
     /// Returns the schema version of this contract.
     pub fn version(_env: Env) -> u32 {
-        0
+        1
+    }
+
+    /// Returns the current subscription count.
+    ///
+    /// This equals the total number of subscriptions ever created,
+    /// including cancelled and expired ones.
+    pub fn get_subscription_count(env: Env) -> u32 {
+        let key = Symbol::new(&env, "next_id");
+        env.storage()
+            .instance()
+            .get(&key)
+            .unwrap_or(0u32)
+    }
+
+    /// Creates a new subscription and returns its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SubscriptionLimitReached` if the ID space is exhausted.
+    pub fn create_subscription(env: Env) -> Result<u32, Error> {
+        Self::_next_id(&env)
+    }
+
+    /// Internal helper to allocate the next subscription ID.
+    ///
+    /// This function implements overflow-safe ID allocation by checking
+    /// the limit before incrementing the counter.
+    fn _next_id(env: &Env) -> Result<u32, Error> {
+        let key = Symbol::new(env, "next_id");
+        let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
+
+        if current == MAX_SUBSCRIPTION_ID {
+            return Err(Error::SubscriptionLimitReached);
+        }
+
+        env.storage().instance().set(&key, &(current + 1));
+        Ok(current)
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::Env;
+    use crate::SubscriptionVaultClient;
 
     #[test]
-    fn version_is_zero() {
+    fn version_is_one() {
         let env = Env::default();
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
