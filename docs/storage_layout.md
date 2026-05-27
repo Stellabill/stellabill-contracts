@@ -6,13 +6,14 @@ This document describes the subscription vault contract's storage layout, keys, 
 
 ## Storage Overview
 
-The contract uses Soroban's **instance storage** for all persistent data. Instance storage is tied to the contract instance and persists across invocations.
+The contract uses Soroban's **instance storage** for global configurations and **persistent storage** for individual, unbounded subscription records. This hybrid strategy prevents instance footprint bloat and eliminates potential key collisions.
 
-### Storage Type
+### Storage Types
 
-- **Instance Storage**: All contract data uses `env.storage().instance()`
-- **Persistence**: Data survives contract upgrades when keys remain compatible
-- **Access Pattern**: Key-value store with typed keys and values
+- **Instance Storage**: Global configuration data (Admin, Token, MinTopup, NextId, etc.) uses `env.storage().instance()`.
+- **Persistent Storage**: All individual subscription records use `env.storage().persistent()`, keyed under the typed `DataKey::Sub(u32)` enum.
+- **Persistence**: Data survives contract upgrades and has appropriate TTL settings for on-chain storage.
+- **Access Pattern**: Key-value store with typed keys and values.
 
 ---
 
@@ -37,7 +38,9 @@ The contract uses Soroban's **instance storage** for all persistent data. Instan
 
 | Key | Type | Value Type | Description |
 |-----|------|------------|-------------|
-| `{subscription_id}` | `u32` | `Subscription` | Individual subscription data keyed by ID |
+| `DataKey::Sub(id)` | `DataKey` | `Subscription` | Individual subscription data keyed by ID |
+
+**Storage Location**: Persistent keyed storage (`env.storage().persistent()`)
 
 **Subscription Structure** (`contracts/subscription_vault/src/types.rs`):
 
@@ -67,10 +70,10 @@ pub enum SubscriptionStatus {
 **Key Generation**: Sequential u32 IDs from `next_id` counter
 
 **Storage Operations**:
-- Create: `do_create_subscription()` → sets `{id}` key
-- Read: `get_subscription()` → reads `{id}` key
-- Update: All lifecycle functions modify and re-set `{id}` key
-- Delete: Not implemented (cancelled subscriptions remain in storage)
+- Create: `do_create_subscription()` → sets `DataKey::Sub(id)` key in persistent storage
+- Read: `get_subscription()` → reads `DataKey::Sub(id)` key from persistent storage
+- Update: All lifecycle functions modify and re-set `DataKey::Sub(id)` key in persistent storage
+- Delete: Not implemented (cancelled subscriptions remain in persistent storage)
 
 ---
 
@@ -259,13 +262,18 @@ pub enum SubscriptionStatus {
 ```
 
 ### 2. Key Collision
-**Problem**: New keys conflict with subscription IDs
-```rust
-// BAD: Using u32 for config could collide with subscription IDs
-env.storage().instance().set(&0u32, &config);  // ❌ Collides with subscription ID 0
+**Problem**: New keys conflict with subscription IDs.
+With our storage architecture:
+- Subscription records live in persistent storage (`env.storage().persistent()`) keyed under `DataKey::Sub(u32)`.
+- Global configurations live in instance storage (`env.storage().instance()`) keyed under `Symbol`s or other typed keys.
+Because persistent and instance storages occupy completely disjoint namespaces in Soroban, key collision between configurations and subscriptions is physically impossible. However, when adding new config keys in instance storage, always use unique `DataKey` variants or `Symbol`s to prevent internal collisions.
 
-// GOOD: Use Symbol keys for config
-env.storage().instance().set(&Symbol::new(env, "config"), &config);  // ✅
+```rust
+// Subscription (Persistent Storage)
+env.storage().persistent().set(&DataKey::Sub(0), &sub);
+
+// Config (Instance Storage)
+env.storage().instance().set(&DataKey::NextId, &1u32);
 ```
 
 ### 3. Missing Default Values
