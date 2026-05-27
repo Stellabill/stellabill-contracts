@@ -30,24 +30,58 @@ A single Soroban contract that implements a **prepaid subscription vault** for r
 
 **Main capabilities (current / planned):**
 
-- **`init`** — Set the USDC token address and admin (e.g. billing backend).
-- **`create_subscription`** — Subscriber creates a subscription (subscriber, merchant, amount, interval, usage flag). Auth: subscriber.
-- **`deposit_funds`** — Subscriber tops up prepaid balance for a subscription. Auth: subscriber.
-- **`charge_subscription`** — Billing engine charges one interval: deduct from vault, pay merchant, update last payment time. (Intended to be restricted to admin/authorized caller.)
-- **`cancel_subscription`** — Subscriber or merchant cancels; remaining balance can be withdrawn by subscriber. Auth: subscriber or merchant.
-- **`pause_subscription`** — Pause so no charges occur until resumed. Auth: subscriber or merchant.
-- **`withdraw_merchant_funds`** — Merchant withdraws accumulated USDC. Auth: merchant.
-- **`get_subscription`** — Read subscription by id (for indexers and UIs).
+| Method | Signature | Auth | Docs |
+|--------|-----------|------|------|
+| `version` | `version(env: Env) -> u32` | — | — |
+| `init` | `init(env: Env, token: Address, admin: Address, min_topup: i128)` | — | [lifecycle](docs/subscription_lifecycle.md) |
+| `create_subscription` | `create_subscription(env: Env, subscriber: Address, merchant: Address, amount: i128, interval_seconds: u64, expiration: Option<u64>, usage_enabled: bool) -> u32` | subscriber | [lifecycle](docs/subscription_lifecycle.md) |
+| `deposit_funds` | `deposit_funds(env: Env, subscription_id: u32, subscriber: Address, amount: i128)` | subscriber | [lifecycle](docs/subscription_lifecycle.md) |
+| `charge_subscription` | `charge_subscription(env: Env, subscription_id: u32)` | admin | [lifecycle](docs/subscription_lifecycle.md) |
+| `batch_charge` | `batch_charge(env: Env, subscription_ids: Vec<u32>) -> BatchChargeResult` | admin | [lifecycle](docs/subscription_lifecycle.md) |
+| `cancel_subscription` | `cancel_subscription(env: Env, subscription_id: u32, authorizer: Address)` | subscriber or merchant | [lifecycle](docs/subscription_lifecycle.md) |
+| `pause_subscription` | `pause_subscription(env: Env, subscription_id: u32, authorizer: Address)` | subscriber or merchant | [lifecycle](docs/subscription_lifecycle.md) |
+| `resume_subscription` | `resume_subscription(env: Env, subscription_id: u32, authorizer: Address)` | subscriber or merchant | [lifecycle](docs/subscription_lifecycle.md) |
+| `withdraw_merchant_funds` | `withdraw_merchant_funds(env: Env, merchant: Address, amount: i128)` | merchant | [lifecycle](docs/subscription_lifecycle.md) |
+| `get_subscription` | `get_subscription(env: Env, subscription_id: u32) -> Subscription` | — | — |
 
 **Types:**
 
-- **`Subscription`** — `subscriber`, `merchant`, `amount`, `interval_seconds`, `last_payment_timestamp`, `status`, `prepaid_balance`, `usage_enabled`.
-- **`SubscriptionStatus`** — `Active`, `Paused`, `Cancelled`, `InsufficientBalance`.
-- **`Error`** — `NotFound`, `Unauthorized`.
+**`Subscription`**
 
-**Documentation:** [Subscription lifecycle and state machine](docs/subscription_lifecycle.md) — states, transitions, on-chain representation, and invariants.
+| Field | Type | Description |
+|-------|------|-------------|
+| `subscriber` | `Address` | Owner of the subscription; must auth create and deposit. |
+| `merchant` | `Address` | Recipient of charges. |
+| `amount` | `i128` | Charge per interval (in token base units). |
+| `interval_seconds` | `u64` | Minimum time between charges. |
+| `last_payment_timestamp` | `u64` | Ledger timestamp of last successful charge. |
+| `status` | `SubscriptionStatus` | Lifecycle state; see state machine below. |
+| `prepaid_balance` | `i128` | Current balance; increased by deposit, decreased by charge. |
+| `expiration` | `Option<u64>` | Optional ledger timestamp after which the subscription is treated as expired. `None` means no expiry. |
+| `usage_enabled` | `bool` | Usage-billing flag; reserved for future use. |
 
-The contract is in early development; several functions still have `TODO` placeholders (e.g. token transfers, admin checks, full charge/withdraw logic). See the source in `contracts/subscription_vault/src/lib.rs` for details.
+**`SubscriptionStatus`** — `Active`, `Paused`, `Cancelled`, `InsufficientBalance`, `GracePeriod`.
+
+See [subscription_lifecycle.md](docs/subscription_lifecycle.md) for the full state machine and transition rules.
+
+**`Error`** (selected variants — see [docs/errors.md](docs/errors.md) for the canonical table with numeric codes):
+
+| Variant | Category | When |
+|---------|----------|------|
+| `Unauthorized` | Auth | Required signer or admin mismatch. |
+| `NotFound` | Not found | Subscription id or resource is missing. |
+| `NotInitialized` | Not found | Contract has not been initialized. |
+| `InvalidAmount` | Invalid args | Amount is zero or negative. |
+| `InvalidStatusTransition` | State | Lifecycle transition not permitted from current status. |
+| `NotActive` | State | Operation requires Active subscription. |
+| `SubscriptionExpired` | State | Subscription has passed its `expiration` timestamp. |
+| `IntervalNotElapsed` | State | Charge attempted before interval has elapsed. |
+| `InsufficientBalance` | Accounting | Vault balance is insufficient. |
+| `BelowMinimumTopup` | Accounting | Deposit is below the configured `min_topup` threshold. |
+
+**Documentation:** [Subscription lifecycle and state machine](docs/subscription_lifecycle.md) — states, transitions, on-chain representation, and invariants. [Error codes](docs/errors.md) — canonical error taxonomy with numeric codes and retry guidance.
+
+> **Implementation status:** `contracts/subscription_vault/src/lib.rs` currently exposes only the `version()` stub while the full implementation is rewritten on a future branch. The method table and type definitions above reflect the intended API as methods land. See the inline doc-comment in `lib.rs` for context.
 
 ---
 
