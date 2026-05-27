@@ -22,6 +22,9 @@ impl SubscriptionVault {
 }
 
 #[cfg(test)]
+mod test_charge_invariants;
+
+#[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::Env;
