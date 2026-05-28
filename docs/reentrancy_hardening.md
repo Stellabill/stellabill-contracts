@@ -1,4 +1,4 @@
-# Reentrancy Hardening: Charge Flow Audit
+git status# Reentrancy Hardening: Charge Flow Audit
 
 **Date**: April 23, 2026  
 **Scope**: Subscription vault charge path, state mutations, and token interactions
