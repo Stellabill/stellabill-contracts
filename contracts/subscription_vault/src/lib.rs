@@ -1,4 +1,7 @@
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+mod admin;
+mod queries;
+mod subscription;
 mod safe_math;
 pub use safe_math::*;
 
