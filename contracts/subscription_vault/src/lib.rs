@@ -1,7 +1,10 @@
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+﻿use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 mod admin;
 mod queries;
 mod subscription;
+mod merchant;
+mod charge_core;
+mod types;
 mod safe_math;
 pub use safe_math::*;
 
@@ -2477,87 +2480,6 @@ impl SubscriptionVault {
         1
     }
 
-    /// Returns the current subscription count.
-    ///
-    /// This equals the total number of subscriptions ever created,
-    /// including cancelled and expired ones.
-    pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or(0u32)
-    }
-
-    /// Creates a new subscription and returns its ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::SubscriptionLimitReached` if the ID space is exhausted.
-    pub fn create_subscription(env: Env) -> Result<u32, Error> {
-        Self::_next_id(&env)
-    }
-
-    /// Internal helper to allocate the next subscription ID.
-    ///
-    /// This function implements overflow-safe ID allocation by checking
-    /// the limit before incrementing the counter.
-    fn _next_id(env: &Env) -> Result<u32, Error> {
-        let key = Symbol::new(env, "next_id");
-        let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
-
-        if current == MAX_SUBSCRIPTION_ID {
-            return Err(Error::SubscriptionLimitReached);
-        }
-
-        env.storage().instance().set(&key, &(current + 1));
-        Ok(current)
-    }
-
-    /// Initialise the contract, storing the admin address and USDC token.
-    pub fn init(env: Env, admin: Address, _usdc_token: Address) {
-        env.storage().instance().set(&DataKey::Admin, &admin);
-    }
-
-    /// Charge a subscriber's vault for the current billing period.
-    ///
-    /// # Authorization
-    /// Caller must be the admin address stored during [`init`].
-    /// Any other caller, including the subscriber themselves, is rejected with
-    /// [`Error::Unauthorized`]. This prevents unauthorized or self-initiated charges.
-    ///
-    /// # Errors
-    /// - [`Error::Unauthorized`] — caller is not the stored admin, or `init` was
-    ///   never called.
-    /// - [`Error::NotFound`] — no subscription exists for `subscription_id`.
-    pub fn charge_subscription(env: Env, subscription_id: u64) -> Result<(), Error> {
-        // ── Admin authorization ───────────────────────────────────────────────
-        // Load the admin address stored during init and require its signature.
-        // Any caller that is not the stored admin is rejected with Error::Unauthorized.
-        // This matches the stored-admin pattern used by batch_charge (auth matrix).
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?; // admin not set == treat as unauthorized
-        admin.require_auth();
-        // ─────────────────────────────────────────────────────────────────────
-
-        // Verify the subscription exists.
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Subscription(subscription_id))
-        {
-            return Err(Error::NotFound);
-        }
-
-        // TODO: deduct prepaid balance, transfer to merchant, update last_payment_timestamp.
-
-        Ok(())
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2651,3 +2573,4 @@ mod test {
         assert!(!subscription_exists(&env, &contract_id, 0));
     }
 }
+
