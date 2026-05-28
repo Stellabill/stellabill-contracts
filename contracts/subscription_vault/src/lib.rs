@@ -2583,5 +2583,4 @@ mod test {
         assert!(!subscription_exists(&env, &contract_id, 0));
     }
 }
-}
 
