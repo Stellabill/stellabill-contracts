@@ -1,19 +1,14 @@
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
-
 //! Subscription Vault — prepaid USDC subscription billing on Stellar.
 //!
-//! # Findings (issue #374 investigation)
-//! - `lib.rs` was a minimal stub with no types, no `init`, no `charge_subscription`.
-//! - `docs/admin_authorization_matrix.md` confirms `charge_subscription` must be
-//!   admin-only; the stored-admin pattern (load from state, `require_auth()`) is
-//!   used by `batch_charge` and is the correct model here — no explicit admin param.
-//! - Admin is stored under `DataKey::Admin` (not a raw `Symbol`).
-//! - `Error::Unauthorized` (discriminant 1001 per the matrix) is the correct error.
-//! - No `set_min_topup` reference pattern existed in the stub; the matrix's
-//!   `batch_charge` pattern is the authoritative reference for stored-admin auth.
-//! - `docs/admin_authorization_matrix.md` does not list `charge_subscription` by
-//!   name; it is the legacy single-charge entrypoint that maps to the admin-only
-//!   stored-admin model.
+//! # Architecture
+//! The implementation is split across several modules:
+//! - `admin` — initialisation and governance
+//! - `subscription` — creation, deposit, cancel, migrate
+//! - `charge_core` — interval and usage billing
+//! - `merchant` — merchant config and withdrawals
+//! - `queries` — read-only queries and reconciliation
+//! - `types` — shared types and error codes
+//! - `safe_math` — overflow-safe arithmetic helpers
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
 
@@ -1729,8 +1724,8 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
-    // View functions
-    /// Returns a paginated list of subscriptions for a merchant.
+// Duplicate stub block removed – implementation retained elsewhere.
+
     pub fn get_subscriptions_by_merchant(
         env: Env,
         merchant: Address,
@@ -1796,65 +1791,12 @@ impl SubscriptionVault {
         env.storage().instance().set(&key, &(current + 1));
         Ok(current)
     }
-
-    /// Initialise the contract, storing the admin address and USDC token.
-    pub fn init(env: Env, admin: Address, _usdc_token: Address) {
-        env.storage().instance().set(&DataKey::Admin, &admin);
-    }
-
-    /// Charge a subscriber's vault for the current billing period.
-    ///
-    /// # Authorization
-    /// Caller must be the admin address stored during [`init`].
-    /// Any other caller, including the subscriber themselves, is rejected with
-    /// [`Error::Unauthorized`]. This prevents unauthorized or self-initiated charges.
-    ///
-    /// # Errors
-    /// - [`Error::Unauthorized`] — caller is not the stored admin, or `init` was
-    ///   never called.
-    /// - [`Error::NotFound`] — no subscription exists for `subscription_id`.
-    pub fn charge_subscription(env: Env, subscription_id: u64) -> Result<(), Error> {
-        // ── Admin authorization ───────────────────────────────────────────────
-        // Load the admin address stored during init and require its signature.
-        // Any caller that is not the stored admin is rejected with Error::Unauthorized.
-        // This matches the stored-admin pattern used by batch_charge (auth matrix).
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?; // admin not set == treat as unauthorized
-        admin.require_auth();
-        // ─────────────────────────────────────────────────────────────────────
-
-        // Verify the subscription exists.
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Subscription(subscription_id))
-        {
-            return Err(Error::NotFound);
-        }
-
-        // TODO: deduct prepaid balance, transfer to merchant, update last_payment_timestamp.
-
-        Ok(())
-    }
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
-
-    /// Returns true if DataKey::Subscription(id) exists in persistent storage.
-    /// Runs inside the contract context so it can access env.storage() directly.
-    fn subscription_exists(env: &Env, contract_id: &soroban_sdk::Address, id: u64) -> bool {
-        env.as_contract(contract_id, || {
-            env.storage().persistent().has(&DataKey::Subscription(id))
-        })
-    }
+    use crate::SubscriptionVaultClient;
 
     #[test]
     fn version_is_one() {
