@@ -27,9 +27,10 @@ Defined in `contracts/subscription_vault/src/types.rs`:
 | `last_payment_timestamp` | `u64` | Ledger timestamp of last successful charge. |
 | **`status`** | **`SubscriptionStatus`** | Lifecycle state; only changed via state machine transitions. |
 | `prepaid_balance` | `i128` | Current balance; increased by deposit, decreased by successful charge. |
+| `expiration` | `Option<u64>` | Optional ledger timestamp after which the subscription is expired. `None` means no expiry. Charging returns `Error::SubscriptionExpired` (4003) once `now >= expiration`. |
 | `usage_enabled` | `bool` | Usage flag (reserved for future use). |
 
-The **status** field is the only one modified by the state machine. Other fields change only through specific operations: `prepaid_balance` and `last_payment_timestamp` change on deposit and charge; the rest are set at creation (or not changed).
+The **status** field is the only one modified by the state machine. Other fields change only through specific operations: `prepaid_balance` and `last_payment_timestamp` change on deposit and charge; the rest are set at creation (or not changed). The `expiration` field is checked on every charge attempt; it does not trigger an automatic status change but blocks charging via `Error::SubscriptionExpired`.
 
 ### Storage
 
@@ -134,7 +135,7 @@ flowchart LR
 
 ### Creation
 
-- **Entrypoint:** `create_subscription(env, subscriber, merchant, amount, interval_seconds, usage_enabled)`  
+- **Entrypoint:** `create_subscription(env, subscriber, merchant, amount, interval_seconds, expiration: Option<u64>, usage_enabled)`  
   Auth: subscriber.  
   Implemented in `contracts/subscription_vault/src/subscription.rs`.
 - **Validation:** Creation rejects `amount <= 0`, rejects intervals shorter than 60 seconds, and rejects blocklisted subscribers.
@@ -145,7 +146,7 @@ flowchart LR
 - **Entrypoint:** `deposit_funds(env, subscription_id, subscriber, amount)`  
   Auth: subscriber.  
   Implemented in `subscription.rs`.
-- **Effect:** Increases `prepaid_balance` by `amount` (subject to min_topup and non-negative checks). **Status is not changed.** If the new balance is sufficient, the contract emits a recovery-ready event to signal off-chain systems that resume can now succeed.
+- **Effect:** Increases `prepaid_balance` by `amount`. Rejects deposits below the contract's `min_topup` threshold with `Error::BelowMinimumTopup` (5003). **Status is not changed.** If the new balance is sufficient, the contract emits a recovery-ready event to signal off-chain systems that resume can now succeed.
 
 ### Charging
 
@@ -184,17 +185,18 @@ All three use `validate_status_transition` before updating status.
 
 ## Error Codes (Lifecycle-Relevant)
 
-From `contracts/subscription_vault/src/types.rs`:
+From `contracts/subscription_vault/src/types.rs`. For the full canonical table with numeric codes and retry guidance, see [docs/errors.md](errors.md).
 
 | Code | Variant | When |
 |------|---------|------|
-| 400 | `InvalidStatusTransition` | Invalid status transition (e.g. Cancelled → Active). |
-| 401 | `Unauthorized` | Caller not authorized (e.g. not admin for charge, not subscriber/merchant for cancel/pause/resume). |
-| 402 | `BelowMinimumTopup` | Deposit below configured min_topup. |
-| 404 | `NotFound` | Subscription id not found. |
-| 1001 | `IntervalNotElapsed` | Charge attempted before interval elapsed. |
-| 1002 | `NotActive` | Charge attempted on non-Active subscription. |
-| 1003 | `InsufficientBalance` | Charge failed due to insufficient prepaid balance. |
+| 1001 | `Unauthorized` | Caller not authorized (e.g. not admin for charge, not subscriber/merchant for cancel/pause/resume). |
+| 2001 | `NotFound` | Subscription id not found. |
+| 4001 | `InvalidStatusTransition` | Invalid status transition (e.g. Cancelled → Active). |
+| 4002 | `NotActive` | Charge attempted on non-Active/non-GracePeriod subscription. |
+| 4003 | `SubscriptionExpired` | Charge attempted after the subscription's `expiration` timestamp. |
+| 4004 | `IntervalNotElapsed` | Charge attempted before interval elapsed. |
+| 5001 | `InsufficientBalance` | Charge failed due to insufficient prepaid balance. |
+| 5003 | `BelowMinimumTopup` | Deposit is below the configured `min_topup` threshold. |
 
 ---
 
