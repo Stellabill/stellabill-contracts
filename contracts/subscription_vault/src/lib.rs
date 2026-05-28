@@ -2473,8 +2473,8 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
-    // View functions
-    /// Returns a paginated list of subscriptions for a merchant.
+// Duplicate stub block removed – implementation retained elsewhere.
+
     pub fn get_subscriptions_by_merchant(
         env: Env,
         merchant: Address,
@@ -2589,15 +2589,7 @@ impl SubscriptionVault {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
-
-    /// Returns true if DataKey::Subscription(id) exists in persistent storage.
-    /// Runs inside the contract context so it can access env.storage() directly.
-    fn subscription_exists(env: &Env, contract_id: &soroban_sdk::Address, id: u64) -> bool {
-        env.as_contract(contract_id, || {
-            env.storage().persistent().has(&DataKey::Subscription(id))
-        })
-    }
+    use crate::SubscriptionVaultClient;
 
     #[test]
     fn version_is_one() {
@@ -2675,6 +2667,7 @@ mod test {
         assert!(result.is_err());
         // No DataKey::Subscription entry was written.
         assert!(!subscription_exists(&env, &contract_id, 0));
+>>>>> main
     }
 
 
