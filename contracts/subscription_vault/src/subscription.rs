@@ -38,7 +38,7 @@
 //! concurrency or subscriber credit limits.
 
 use crate::queries::get_subscription;
-use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negative};
+use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
@@ -353,7 +353,9 @@ pub fn do_create_subscription_with_token(
         return Err(Error::SubscriberBlocklisted);
     }
 
-    validate_non_negative(amount)?;
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
     if amount == 0 {
         return Err(Error::InvalidAmount);
     }
@@ -455,10 +457,12 @@ pub fn do_deposit_funds(
 
     // CHECKS: Validate all preconditions before any state mutations
     let min_topup: i128 = crate::admin::get_min_topup(env)?;
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
     if amount < min_topup {
         return Err(Error::BelowMinimumTopup);
     }
-    validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
     if subscriber != sub.subscriber {
@@ -577,26 +581,26 @@ pub fn do_cancel_subscription(
 
     // Remove from index
     let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
-    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&merchant_key) {
-        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
-            ids.remove(idx);
+    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&merchant_key) {
+        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+            ids.remove(idx.try_into().unwrap());
             env.storage().instance().set(&merchant_key, &ids);
         }
     }
 
     let token_key = DataKey::TokenSubs(sub.token.clone());
-    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&token_key) {
-        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
-            ids.remove(idx);
+    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&token_key) {
+        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+            ids.remove(idx.try_into().unwrap());
             env.storage().instance().set(&token_key, &ids);
         }
     }
 
-    // Remove from subscriber -\u003e subscription-ID index
+    // Remove from subscriber -> subscription-ID index
     let subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
-    if let Ok(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&subscriber_key) {
-        if let Some(idx) = ids.iter().position(|&x| x == subscription_id) {
-            ids.remove(idx);
+    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&subscriber_key) {
+        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+            ids.remove(idx.try_into().unwrap());
             env.storage().instance().set(&subscriber_key, &ids);
         }
     }

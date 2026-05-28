@@ -3406,6 +3406,48 @@ fn test_withdraw_merchant_funds_rejects_overdraw() {
 }
 
 #[test]
+fn test_withdraw_merchant_funds_rejects_wrong_merchant() {
+    let (env, client, token, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let wrong_merchant = Address::generate(&env);
+    let contract_id = client.address.clone();
+
+    seed_merchant_balance(&env, &contract_id, &merchant, &token, 5_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&contract_id, &5_000_000i128);
+
+    env.set_auths(&[wrong_merchant.clone()]);
+
+    let result = client.try_withdraw_merchant_funds(&merchant, &1_000_000i128);
+    assert!(result.is_err());
+    assert_eq!(client.get_merchant_balance(&merchant), 5_000_000i128);
+}
+
+#[test]
+fn test_withdraw_merchant_funds_partial_then_full_succeeds() {
+    let (env, client, token, _) = setup_test_env();
+    let merchant = Address::generate(&env);
+    let contract_id = client.address.clone();
+
+    seed_merchant_balance(&env, &contract_id, &merchant, &token, 7_000_000i128);
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&contract_id, &7_000_000i128);
+
+    env.as_contract(&contract_id, || {
+        crate::merchant::withdraw_merchant_funds(&env, merchant.clone(), 3_000_000i128)
+    })
+    .unwrap();
+    assert_eq!(client.get_merchant_balance(&merchant), 4_000_000i128);
+
+    env.as_contract(&contract_id, || {
+        crate::merchant::withdraw_merchant_funds(&env, merchant.clone(), 4_000_000i128)
+    })
+    .unwrap();
+
+    assert_eq!(client.get_merchant_balance(&merchant), 0);
+    assert_eq!(token_client.balance(&merchant), 7_000_000i128);
+}
+
+#[test]
 fn test_withdraw_merchant_token_funds_only_debits_requested_bucket_and_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
