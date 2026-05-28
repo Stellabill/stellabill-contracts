@@ -11,6 +11,11 @@ pub fn safe_sub(a: i128, b: i128) -> Result<i128, Error> {
     a.checked_sub(b).ok_or(Error::Underflow)
 }
 
+/// Checked multiplication. Returns `Error::Overflow` if the operation would overflow.
+pub fn safe_mul(a: i128, b: i128) -> Result<i128, Error> {
+    a.checked_mul(b).ok_or(Error::Overflow)
+}
+
 /// Checked addition for balances. Guarantees that `amount` is non‑negative and that the
 /// resulting balance does not overflow.
 pub fn safe_add_balance(balance: i128, amount: i128) -> Result<i128, Error> {

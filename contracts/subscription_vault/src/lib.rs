@@ -6,6 +6,15 @@ mod merchant;
 mod charge_core;
 mod types;
 mod safe_math;
+mod accounting;
+mod blocklist;
+mod nonce;
+mod operator;
+mod oracle;
+mod period_snapshots;
+mod state_machine;
+mod statements;
+mod metadata;
 pub use safe_math::*;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
@@ -2479,6 +2488,7 @@ impl SubscriptionVault {
     pub fn version(_env: Env) -> u32 {
         1
     }
+}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

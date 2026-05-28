@@ -20,7 +20,7 @@
 //! See `docs/reentrancy.md` and `docs/reentrancy_hardening.md` for full details on
 //! the reentrancy threat model and mitigation strategy.
 
-use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
+use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
@@ -302,7 +302,9 @@ pub fn credit_merchant_balance_for_token(
     amount: i128,
     kind: BillingChargeKind,
 ) -> Result<(), Error> {
-    validate_non_negative(amount)?;
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
 
     // Update simple balance
     let current = get_merchant_balance_by_token(env, merchant, token_addr);
