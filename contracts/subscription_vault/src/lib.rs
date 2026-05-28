@@ -1,45 +1,3 @@
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
-
-//! Subscription Vault — prepaid USDC subscription billing on Stellar.
-//!
-//! # Findings (issue #374 investigation)
-//! - `lib.rs` was a minimal stub with no types, no `init`, no `charge_subscription`.
-//! - `docs/admin_authorization_matrix.md` confirms `charge_subscription` must be
-//!   admin-only; the stored-admin pattern (load from state, `require_auth()`) is
-//!   used by `batch_charge` and is the correct model here — no explicit admin param.
-//! - Admin is stored under `DataKey::Admin` (not a raw `Symbol`).
-//! - `Error::Unauthorized` (discriminant 1001 per the matrix) is the correct error.
-//! - No `set_min_topup` reference pattern existed in the stub; the matrix's
-//!   `batch_charge` pattern is the authoritative reference for stored-admin auth.
-//! - `docs/admin_authorization_matrix.md` does not list `charge_subscription` by
-//!   name; it is the legacy single-charge entrypoint that maps to the admin-only
-//!   stored-admin model.
-
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
-
-// ── Error types ──────────────────────────────────────────────────────────────
-
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    /// Subscription not found.
-    NotFound = 1000,
-    /// Caller is not the stored admin address.
-    Unauthorized = 1001,
-}
-
-// ── Storage keys ─────────────────────────────────────────────────────────────
-
-#[contracttype]
-pub enum DataKey {
-    Admin,
-    Subscription(u64),
-}
-
-// ── Contract ─────────────────────────────────────────────────────────────────
-
-<<<<<<< HEAD
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 mod safe_math;
 pub use safe_math::*;
@@ -134,14 +92,11 @@ fn require_not_emergency_stop(env: &Env) -> Result<(), Error> {
 /// Main contract for handling prepaid subscription billing on Stellar.
 ///
 /// See the crate-level docs for a full overview of how the system works.
-=======
->>>>>>> origin/main
 #[contract]
 pub struct SubscriptionVault;
 
 #[contractimpl]
 impl SubscriptionVault {
-<<<<<<< HEAD
     // ── Admin / Config ────────────────────────────────────────────────────────
 
     /// Initializes the contract.
@@ -2621,7 +2576,6 @@ mod test {
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
         assert_eq!(client.version(), 0);
->>>>>>> origin/main
     }
 
     // ── charge_subscription authorization tests ───────────────────────────────

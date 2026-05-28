@@ -13,6 +13,8 @@ atomically so the ledger can be reconciled deterministically by off-chain indexe
   a subscription has been debited but the merchant has not been credited.
 - Merchant balances are tracked per `(merchant, token)` bucket so multi-token vaults stay
   cleanly separated.
+- The contract stores a persistent merchant earnings balance map keyed by
+  `DataKey::MerchantBalance(merchant, token)` with spendable `i128` earnings.
 - A `TokenEarnings` struct records the full accrual / withdrawal / refund history for each
   bucket, enabling deterministic reconciliation without re-reading event logs.
 
