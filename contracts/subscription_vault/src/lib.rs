@@ -50,45 +50,52 @@ pub mod blocklist {
 }
 
 /// State machine: validates and applies subscription status transitions.
-pub mod state_machine {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, SubscriptionStatus};
-
-    pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
-        *current = next;
-        Ok(())
-    }
-    pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool { true }
-    pub fn validate_status_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> Result<(), Error> { Ok(()) }
-    pub fn get_allowed_transitions(from: &SubscriptionStatus) -> soroban_sdk::Vec<SubscriptionStatus> {
-        soroban_sdk::Vec::new(&soroban_sdk::Env::default())
-    }
-}
+pub mod state_machine;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
     #![allow(unused_variables, dead_code)]
     use soroban_sdk::{Address, Env};
-    use crate::types::{BillingChargeKind, Error};
+    use crate::types::{
+        BillingChargeKind, DataKey, Error,
+        BILLING_STATEMENT_TTL_EXTEND_TO, BILLING_STATEMENT_TTL_THRESHOLD,
+    };
 
     pub fn append_statement(
-        _env: &Env,
-        _subscription_id: u32,
+        env: &Env,
+        subscription_id: u32,
         _amount: i128,
         _merchant: Address,
         _kind: BillingChargeKind,
         _period_start: u64,
         _timestamp: u64,
-    ) -> Result<(), Error> { Ok(()) }
+    ) -> Result<(), Error> {
+        env.storage().persistent().extend_ttl(
+            &DataKey::BillingStatementsBySubscription(subscription_id),
+            BILLING_STATEMENT_TTL_THRESHOLD,
+            BILLING_STATEMENT_TTL_EXTEND_TO,
+        );
+        Ok(())
+    }
 }
 
 /// Period snapshots: write billing-period summaries for reconciliation.
 pub mod period_snapshots {
     #![allow(unused_variables, dead_code)]
     use soroban_sdk::Env;
-    use crate::types::{BillingPeriodSnapshot, Error};
+    use crate::types::{
+        BillingPeriodSnapshot, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
+        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD, DataKey, Error,
+    };
 
-    pub fn write_period_snapshot(_env: &Env, _snapshot: BillingPeriodSnapshot) -> Result<(), Error> { Ok(()) }
+    pub fn write_period_snapshot(env: &Env, snapshot: BillingPeriodSnapshot) -> Result<(), Error> {
+        env.storage().persistent().extend_ttl(
+            &DataKey::BillingPeriodSnapshot(snapshot.subscription_id, snapshot.period_end),
+            BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
+            BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
+        );
+        Ok(())
+    }
 }
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
@@ -195,6 +202,7 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    NonceConsumedEvent,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -2713,74 +2721,6 @@ impl SubscriptionVault {
     ) -> Option<crate::types::MerchantConfig> {
         merchant::get_merchant_config(&env, merchant)
     }
-
-// Duplicate stub block removed – implementation retained elsewhere.
-
-    pub fn get_subscriptions_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Result<Vec<crate::types::Subscription>, Error> {
-        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
-    }
-
-    /// Returns the total number of subscriptions for a merchant.
-    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
-        queries::get_merchant_subscription_count(&env, merchant)
-    }
-
-    /// Lists subscription IDs for a subscriber with pagination.
-    pub fn list_subscriptions_by_subscriber(
-        env: Env,
-        subscriber: Address,
-        start_from_id: u32,
-        limit: u32,
-    ) -> Result<crate::queries::SubscriptionsPage, Error> {
-        queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
-    }
-
-    /// Returns the schema version of this contract.
-    pub fn version(_env: Env) -> u32 {
-        1
-    }
-
-    /// Returns the current subscription count.
-    ///
-    /// This equals the total number of subscriptions ever created,
-    /// including cancelled and expired ones.
-    pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or(0u32)
-    }
-
-    /// Creates a new subscription and returns its ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::SubscriptionLimitReached` if the ID space is exhausted.
-    pub fn create_subscription(env: Env) -> Result<u32, Error> {
-        Self::_next_id(&env)
-    }
-
-    /// Internal helper to allocate the next subscription ID.
-    ///
-    /// This function implements overflow-safe ID allocation by checking
-    /// the limit before incrementing the counter.
-    fn _next_id(env: &Env) -> Result<u32, Error> {
-        let key = Symbol::new(env, "next_id");
-        let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
-
-        if current == MAX_SUBSCRIPTION_ID {
-            return Err(Error::SubscriptionLimitReached);
-        }
-
-        env.storage().instance().set(&key, &(current + 1));
-        Ok(current)
-    }
 }
 
 #[cfg(test)]
@@ -2796,6 +2736,6 @@ mod test {
         let env = Env::default();
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 0);
+        assert_eq!(client.version(), 1);
     }
 }

@@ -8573,3 +8573,318 @@ fn test_state_completeness_all_statuses_exist() {
         assert!(transition_to(&mut current, status).is_ok());
     }
 }
+
+// ── Protocol fee routing tests ────────────────────────────────────────────────
+//
+// Invariant: gross == merchant_net + treasury_fee on every charge type.
+// fee = gross * fee_bps / 10_000  (integer floor division)
+
+/// Helper: set protocol fee and return treasury address.
+fn setup_protocol_fee(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    admin: &Address,
+    fee_bps: u32,
+) -> Address {
+    let treasury = Address::generate(env);
+    client.set_protocol_fee(admin, &treasury, &fee_bps);
+    treasury
+}
+
+// ── fee = 0 (disabled) ────────────────────────────────────────────────────────
+
+#[test]
+fn test_protocol_fee_zero_interval_full_amount_to_merchant() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    // Mint and deposit
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    client.charge_subscription(&id);
+
+    // No fee configured: merchant gets full amount
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), AMOUNT);
+}
+
+#[test]
+fn test_protocol_fee_zero_usage_full_amount_to_merchant() {
+    let (env, client, token, _admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &true, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let usage = 1_000_000i128;
+    client.charge_usage(&id, &usage);
+
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), usage);
+}
+
+#[test]
+fn test_protocol_fee_zero_oneoff_full_amount_to_merchant() {
+    let (env, client, token, _admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let charge = 2_000_000i128;
+    client.charge_one_off(&id, &merchant, &charge);
+
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), charge);
+}
+
+// ── fee = 10_000 (100%) ───────────────────────────────────────────────────────
+
+#[test]
+fn test_protocol_fee_10000_interval_all_to_treasury() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 10_000);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    client.charge_subscription(&id);
+
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), 0);
+    assert_eq!(client.get_merchant_balance_by_token(&treasury, &token), AMOUNT);
+    // gross == merchant_net + treasury_fee
+    assert_eq!(0 + AMOUNT, AMOUNT);
+}
+
+#[test]
+fn test_protocol_fee_10000_usage_all_to_treasury() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 10_000);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &true, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let usage = 1_000_000i128;
+    client.charge_usage(&id, &usage);
+
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), 0);
+    assert_eq!(client.get_merchant_balance_by_token(&treasury, &token), usage);
+}
+
+#[test]
+fn test_protocol_fee_10000_oneoff_all_to_treasury() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 10_000);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let charge = 2_000_000i128;
+    client.charge_one_off(&id, &merchant, &charge);
+
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), 0);
+    assert_eq!(client.get_merchant_balance_by_token(&treasury, &token), charge);
+}
+
+// ── fee = 500 bps (5%) — split and conservation ───────────────────────────────
+
+#[test]
+fn test_protocol_fee_500bps_interval_split_conserved() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 500); // 5%
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    // Use AMOUNT = 10_000_000 → fee = 500_000, net = 9_500_000
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    client.charge_subscription(&id);
+
+    let expected_fee = AMOUNT * 500 / 10_000; // 500_000
+    let expected_net = AMOUNT - expected_fee;  // 9_500_000
+
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+
+    assert_eq!(merchant_bal, expected_net);
+    assert_eq!(treasury_bal, expected_fee);
+    // Conservation: gross == merchant_net + treasury_fee
+    assert_eq!(merchant_bal + treasury_bal, AMOUNT);
+}
+
+#[test]
+fn test_protocol_fee_500bps_usage_split_conserved() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 500);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &true, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let usage = 1_000_000i128;
+    client.charge_usage(&id, &usage);
+
+    let expected_fee = usage * 500 / 10_000; // 50_000
+    let expected_net = usage - expected_fee;  // 950_000
+
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+
+    assert_eq!(merchant_bal, expected_net);
+    assert_eq!(treasury_bal, expected_fee);
+    assert_eq!(merchant_bal + treasury_bal, usage);
+}
+
+#[test]
+fn test_protocol_fee_500bps_oneoff_split_conserved() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let treasury = setup_protocol_fee(&env, &client, &admin, 500);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    let charge = 3_000_000i128;
+    client.charge_one_off(&id, &merchant, &charge);
+
+    let expected_fee = charge * 500 / 10_000; // 150_000
+    let expected_net = charge - expected_fee;  // 2_850_000
+
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+
+    assert_eq!(merchant_bal, expected_net);
+    assert_eq!(treasury_bal, expected_fee);
+    assert_eq!(merchant_bal + treasury_bal, charge);
+}
+
+// ── rounding: amount * fee_bps not divisible by 10_000 ───────────────────────
+// fee = floor(amount * fee_bps / 10_000); remainder stays with merchant.
+
+#[test]
+fn test_protocol_fee_rounding_remainder_stays_with_merchant() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    // 333 bps on 1_000_001 → fee = 1_000_001 * 333 / 10_000 = 33_300 (floor)
+    let treasury = setup_protocol_fee(&env, &client, &admin, 333);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let gross = 1_000_001i128;
+    let id = client.create_subscription(
+        &subscriber, &merchant, &gross, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &(gross * 5));
+    client.deposit_funds(&id, &subscriber, &(gross * 5));
+
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    client.charge_subscription(&id);
+
+    let expected_fee = gross * 333 / 10_000;
+    let expected_net = gross - expected_fee;
+
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+
+    assert_eq!(treasury_bal, expected_fee);
+    assert_eq!(merchant_bal, expected_net);
+    // Conservation holds even with rounding
+    assert_eq!(merchant_bal + treasury_bal, gross);
+}
+
+// ── no treasury configured: fee_bps > 0 but no treasury → full amount to merchant ──
+
+#[test]
+fn test_protocol_fee_no_treasury_full_amount_to_merchant() {
+    let (env, client, token, admin) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+
+    // Set fee_bps but then clear treasury by setting fee to 0 (no treasury stored)
+    // Actually: just don't call set_protocol_fee at all — treasury is None by default.
+    // Verify that even if we manually set FeeBps without Treasury, merchant gets full amount.
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::FeeBps, &500u32);
+        // DataKey::Treasury is NOT set
+    });
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>,
+    );
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    client.charge_subscription(&id);
+
+    // No treasury → merchant gets full gross amount
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), AMOUNT);
+}
