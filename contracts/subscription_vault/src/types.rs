@@ -15,10 +15,10 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 /// Threshold below which a persistent subscription record TTL is extended.
 /// If a subscription record is read or updated and its remaining TTL is less
 /// than this threshold, it is extended to `SUB_TTL_EXTEND_TO`.
-pub const SUB_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+pub const SUB_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days (ledgers)
 
 /// Target TTL for persistent subscription records when extended.
-pub const SUB_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+pub const SUB_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days (ledgers)
 
 /// Threshold below which a persistent billing statement secondary index TTL
 /// is extended.
@@ -1214,25 +1214,17 @@ pub struct UsageStatementEvent {
 pub enum UsageChargeResult {
     /// Usage charge was accepted and funds were debited.
     Charged = 0,
-    /// Duplicate reference — same off-chain event already processed.
-    Replay = 1,
-    /// Charge attempted too soon after the previous charge (burst protection).
-    BurstLimitExceeded = 2,
-    /// Rate-limit window call count exhausted.
-    RateLimitExceeded = 3,
-    /// Charge would exceed the per-period usage cap.
-    UsageCapExceeded = 4,
-}
-
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageChargeResult {
-    Charged = 0,
+    /// Subscriber's prepaid balance was insufficient to cover the charge.
     InsufficientBalance = 1,
+    /// Charge would push the subscription past its lifetime cap.
     LifetimeCapReached = 2,
+    /// Duplicate reference — same off-chain event already processed.
     Replay = 3,
+    /// Charge attempted too soon after the previous charge (burst protection).
     BurstLimitExceeded = 4,
+    /// Rate-limit window call count exhausted.
     RateLimitExceeded = 5,
+    /// Charge would exceed the per-period usage cap.
     UsageCapExceeded = 6,
 }
 

@@ -154,46 +154,181 @@ pub mod reentrancy {
 }
 
 /// Nonce: replay-protection counters for privileged operations.
+///
+/// Persistent, domain-separated, monotonic per-`(signer, domain)` counters. A
+/// captured nonce in one domain can never be replayed in another because the
+/// domain is part of the storage key. Auth **must** be verified before calling
+/// [`check_and_advance`] so invalid signers are rejected before any counter is
+/// touched.
 pub mod nonce {
     #![allow(unused_variables, dead_code)]
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
+    use crate::types::{DataKey, Error};
 
     pub const DOMAIN_BATCH_CHARGE: u32 = 0;
     pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
     pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 
-    pub fn get_nonce(_env: &Env, _signer: &Address, _domain: u32) -> u64 { 0 }
-    pub fn check_and_advance(_env: &Env, _signer: &Address, _domain: u32, _expected: u64) -> Result<(), crate::types::Error> { Ok(()) }
+    /// Current (next-expected) nonce for `(signer, domain)`; `0` before first use.
+    pub fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::AdminNonce(signer.clone(), domain))
+            .unwrap_or(0)
+    }
+
+    /// Verify `expected` matches the stored nonce exactly, then increment.
+    ///
+    /// Rejects replays and out-of-order submissions with
+    /// [`Error::NonceAlreadyUsed`]. Panics only on `u64::MAX` overflow (aborts
+    /// rather than wrapping, which would permit reuse).
+    pub fn check_and_advance(env: &Env, signer: &Address, domain: u32, expected: u64) -> Result<(), Error> {
+        let key = DataKey::AdminNonce(signer.clone(), domain);
+        let stored = env.storage().persistent().get::<DataKey, u64>(&key).unwrap_or(0);
+
+        if expected != stored {
+            return Err(Error::NonceAlreadyUsed);
+        }
+
+        let next = stored
+            .checked_add(1)
+            .expect("nonce overflow: u64::MAX reached");
+        env.storage().persistent().set(&key, &next);
+
+        env.events().publish(
+            (Symbol::new(env, "nonce_consumed"), signer.clone(), domain),
+            (stored, env.ledger().timestamp()),
+        );
+
+        Ok(())
+    }
 }
 
 /// Operator: least-privilege charge delegate.
+///
+/// The operator is a second privileged role, distinct from admin, that may only
+/// invoke the `operator_*` charge endpoints. It is stored under
+/// [`DataKey::Operator`] (instance storage) and authenticated independently from
+/// admin so that a compromised operator key cannot rotate admin, withdraw
+/// merchant funds, or touch any governance surface.
+///
+/// See `docs/admin_authorization_matrix.md` for the full privilege matrix.
 pub mod operator {
-    #![allow(unused_variables, dead_code)]
-    use soroban_sdk::{Address, Env, String, Vec};
-    use crate::types::{BatchChargeResult, ChargeExecutionResult, Error, UsageChargeResult};
+    use soroban_sdk::{Address, Env, String, Symbol, Vec};
+    use crate::types::{
+        BatchChargeResult, ChargeExecutionResult, DataKey, Error, OperatorRemovedEvent,
+        OperatorSetEvent, UsageChargeResult,
+    };
 
-    pub fn do_set_operator(_env: &Env, _admin: Address, _operator: Address) -> Result<(), Error> { Ok(()) }
-    pub fn do_remove_operator(_env: &Env, _admin: Address) -> Result<(), Error> { Ok(()) }
-    pub fn get_operator(_env: &Env) -> Option<Address> { None }
+    /// Read the currently stored operator address, if any.
+    pub fn get_operator(env: &Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Operator)
+    }
+
+    /// Authenticate a caller as the stored operator.
+    ///
+    /// Rejects with [`Error::Unauthorized`] if no operator is set or if the
+    /// claimed address does not exactly match the stored operator. Requires the
+    /// stored operator's signature — this is the auth path distinct from admin.
+    fn require_operator_auth(env: &Env, claimed: &Address) -> Result<Address, Error> {
+        let stored = get_operator(env).ok_or(Error::Unauthorized)?;
+        if claimed != &stored {
+            return Err(Error::Unauthorized);
+        }
+        stored.require_auth();
+        Ok(stored)
+    }
+
+    /// Assign the operator address. Admin only.
+    ///
+    /// The operator must be neither the contract's own address (which can never
+    /// sign) nor the admin (which would collapse the privilege separation). Both
+    /// rejections return [`Error::InvalidInput`]. Any previously stored operator
+    /// is replaced, immediately revoking its access.
+    pub fn do_set_operator(env: &Env, admin: Address, operator: Address) -> Result<(), Error> {
+        crate::admin::require_admin_auth(env, &admin)?;
+
+        // The contract address can never authorize a transaction; storing it
+        // would render the operator endpoints permanently unusable.
+        if operator == env.current_contract_address() {
+            return Err(Error::InvalidInput);
+        }
+        // Operator must remain a strictly lesser role than admin.
+        if operator == admin {
+            return Err(Error::InvalidInput);
+        }
+
+        env.storage().instance().set(&DataKey::Operator, &operator);
+
+        env.events().publish(
+            (Symbol::new(env, "operator_set"),),
+            OperatorSetEvent {
+                admin,
+                operator,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove the operator address. Admin only. No-op when none is set.
+    pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
+        crate::admin::require_admin_auth(env, &admin)?;
+
+        env.storage().instance().remove(&DataKey::Operator);
+
+        env.events().publish(
+            (Symbol::new(env, "operator_removed"),),
+            OperatorRemovedEvent {
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Batch interval charge driven by the operator.
+    ///
+    /// Mirrors the admin batch path but authenticates as operator and consumes a
+    /// nonce in the dedicated [`DOMAIN_OPERATOR_BATCH_CHARGE`] domain so captured
+    /// operator nonces can never be replayed as admin nonces.
+    ///
+    /// [`DOMAIN_OPERATOR_BATCH_CHARGE`]: crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE
     pub fn do_operator_batch_charge(
-        _env: &Env, _operator: Address, _ids: &Vec<u32>, _nonce: u64,
+        env: &Env, operator: Address, ids: &Vec<u32>, nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        let op = require_operator_auth(env, &operator)?;
+
+        // Nonce check runs before any state mutation to prevent replay, scoped
+        // to the operator's own counter in the operator domain.
+        crate::nonce::check_and_advance(env, &op, crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE, nonce)?;
+
+        Ok(crate::admin::execute_batch_charge(env, ids))
     }
+
+    /// Single interval charge driven by the operator.
     pub fn do_operator_charge_subscription(
-        _env: &Env, _op: Address, _subscription_id: u32,
+        env: &Env, op: Address, subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        let now = env.ledger().timestamp();
+        crate::charge_core::charge_one(env, subscription_id, now, None)
     }
+
+    /// Metered usage charge driven by the operator (no reference).
     pub fn do_operator_charge_usage(
-        _env: &Env, _op: Address, _subscription_id: u32, _usage_amount: i128,
+        env: &Env, op: Address, subscription_id: u32, usage_amount: i128,
     ) -> Result<UsageChargeResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, String::from_str(env, ""))
     }
+
+    /// Metered usage charge driven by the operator, with a reference string.
     pub fn do_operator_charge_usage_with_reference(
-        _env: &Env, _op: Address, _subscription_id: u32, _usage_amount: i128, _reference: String,
+        env: &Env, op: Address, subscription_id: u32, usage_amount: i128, reference: String,
     ) -> Result<UsageChargeResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, reference)
     }
 }
 
