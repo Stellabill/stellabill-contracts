@@ -50,20 +50,7 @@ pub mod blocklist {
 }
 
 /// State machine: validates and applies subscription status transitions.
-pub mod state_machine {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, SubscriptionStatus};
-
-    pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
-        *current = next;
-        Ok(())
-    }
-    pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool { true }
-    pub fn validate_status_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> Result<(), Error> { Ok(()) }
-    pub fn get_allowed_transitions(from: &SubscriptionStatus) -> soroban_sdk::Vec<SubscriptionStatus> {
-        soroban_sdk::Vec::new(&soroban_sdk::Env::default())
-    }
-}
+pub mod state_machine;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
