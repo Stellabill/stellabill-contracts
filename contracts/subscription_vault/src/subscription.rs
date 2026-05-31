@@ -823,13 +823,47 @@ pub fn do_charge_one_off(
 
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
+    let fee_bps = crate::admin::get_protocol_fee_bps(env);
+    let treasury_opt = crate::admin::get_treasury(env);
+    let (merchant_amount, fee_amount) = if fee_bps > 0 {
+        if let Some(ref _t) = treasury_opt {
+            let fee = amount * fee_bps as i128 / 10_000i128;
+            (amount - fee, fee)
+        } else {
+            (amount, 0i128)
+        }
+    } else {
+        (amount, 0i128)
+    };
     crate::merchant::credit_merchant_balance_for_token(
         env,
         &sub.merchant,
         &sub.token,
-        amount,
+        merchant_amount,
         BillingChargeKind::OneOff,
     )?;
+    if fee_amount > 0 {
+        if let Some(ref treasury) = treasury_opt {
+            crate::merchant::credit_merchant_balance_for_token(
+                env,
+                treasury,
+                &sub.token,
+                fee_amount,
+                BillingChargeKind::OneOff,
+            )?;
+            env.events().publish(
+                (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                crate::types::ProtocolFeeChargedEvent {
+                    subscription_id,
+                    merchant: sub.merchant.clone(),
+                    token: sub.token.clone(),
+                    fee_amount,
+                    treasury: treasury.clone(),
+                    timestamp: now,
+                },
+            );
+        }
+    }
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;

@@ -567,13 +567,47 @@ pub fn charge_usage_one(
     match crate::safe_math::safe_sub_balance(sub.prepaid_balance, usage_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
+            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let treasury_opt = crate::admin::get_treasury(env);
+            let (merchant_amount, fee_amount) = if fee_bps > 0 {
+                if let Some(ref _t) = treasury_opt {
+                    let fee = usage_amount * fee_bps as i128 / 10_000i128;
+                    (usage_amount - fee, fee)
+                } else {
+                    (usage_amount, 0i128)
+                }
+            } else {
+                (usage_amount, 0i128)
+            };
             crate::merchant::credit_merchant_balance_for_token(
                 env,
                 &sub.merchant,
                 &sub.token,
-                usage_amount,
+                merchant_amount,
                 BillingChargeKind::Usage,
             )?;
+            if fee_amount > 0 {
+                if let Some(ref treasury) = treasury_opt {
+                    crate::merchant::credit_merchant_balance_for_token(
+                        env,
+                        treasury,
+                        &sub.token,
+                        fee_amount,
+                        BillingChargeKind::Usage,
+                    )?;
+                    env.events().publish(
+                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                        crate::types::ProtocolFeeChargedEvent {
+                            subscription_id,
+                            merchant: sub.merchant.clone(),
+                            token: sub.token.clone(),
+                            fee_amount,
+                            treasury: treasury.clone(),
+                            timestamp: now,
+                        },
+                    );
+                }
+            }
 
             sub.lifetime_charged = pending_lifetime;
             let cap_reached = sub
