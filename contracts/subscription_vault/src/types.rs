@@ -526,6 +526,9 @@ pub struct NextChargeInfo {
     pub amount: i128,
     /// Token address for the charge.
     pub token: soroban_sdk::Address,
+    /// When the grace period expires (only set when `status == GracePeriod`).
+    /// `None` when not in grace.
+    pub grace_deadline: Option<u64>,
 }
 
 /// View of a subscription's lifetime cap status.
