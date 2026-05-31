@@ -114,14 +114,53 @@ pub mod period_snapshots {
 }
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
+///
+/// # Invariant
+///
+/// `total_accounted` is the sum of all tokens the contract has recognised as belonging to
+/// either subscribers (prepaid balances) or merchants (earnings). It is incremented on
+/// inbound token transfers (deposits, initial creation funding) and decremented on
+/// outbound transfers (withdrawals, refunds, merchant payouts). The contract's actual
+/// token balance should always be >= `total_accounted`; the difference, if any, is
+/// recoverable by `do_recover_stranded_funds`.
 pub mod accounting {
-    #![allow(unused_variables, dead_code)]
     use soroban_sdk::{Address, Env};
-    use crate::types::Error;
+    use crate::types::{DataKey, Error};
+    use crate::safe_add;
+    use crate::safe_sub;
 
-    pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> { Ok(()) }
-    pub fn sub_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> { Ok(()) }
-    pub fn get_total_accounted(_env: &Env, _token: &Address) -> i128 { 0 }
+    /// Records `amount` tokens of `token` as newly accounted-for.
+    ///
+    /// Called **after** the inbound token transfer has been confirmed so that
+    /// `total_accounted` only reflects tokens the contract actually holds.
+    pub fn add_total_accounted(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let key = DataKey::TotalAccounted(token.clone());
+        let storage = env.storage().instance();
+        let current: i128 = storage.get(&key).unwrap_or(0);
+        let new_total = safe_add(current, amount)?;
+        storage.set(&key, &new_total);
+        Ok(())
+    }
+
+    /// Records `amount` tokens of `token` as leaving contract custody.
+    ///
+    /// Called **before** the outbound token transfer to prevent double-spending
+    /// in the event of a reentrancy or failure. Safe subtraction guarantees that
+    /// accounted balance never goes negative.
+    pub fn sub_total_accounted(env: &Env, token: &Address, amount: i128) -> Result<(), Error> {
+        let key = DataKey::TotalAccounted(token.clone());
+        let storage = env.storage().instance();
+        let current: i128 = storage.get(&key).unwrap_or(0);
+        let new_total = safe_sub(current, amount)?;
+        storage.set(&key, &new_total);
+        Ok(())
+    }
+
+    /// Returns the total accounted balance for `token`, or 0 if never set.
+    pub fn get_total_accounted(env: &Env, token: &Address) -> i128 {
+        let key = DataKey::TotalAccounted(token.clone());
+        env.storage().instance().get(&key).unwrap_or(0)
+    }
 }
 
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
