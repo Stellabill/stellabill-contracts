@@ -2714,73 +2714,6 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
-// Duplicate stub block removed – implementation retained elsewhere.
-
-    pub fn get_subscriptions_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Result<Vec<crate::types::Subscription>, Error> {
-        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
-    }
-
-    /// Returns the total number of subscriptions for a merchant.
-    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
-        queries::get_merchant_subscription_count(&env, merchant)
-    }
-
-    /// Lists subscription IDs for a subscriber with pagination.
-    pub fn list_subscriptions_by_subscriber(
-        env: Env,
-        subscriber: Address,
-        start_from_id: u32,
-        limit: u32,
-    ) -> Result<crate::queries::SubscriptionsPage, Error> {
-        queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
-    }
-
-    /// Returns the schema version of this contract.
-    pub fn version(_env: Env) -> u32 {
-        1
-    }
-
-    /// Returns the current subscription count.
-    ///
-    /// This equals the total number of subscriptions ever created,
-    /// including cancelled and expired ones.
-    pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or(0u32)
-    }
-
-    /// Creates a new subscription and returns its ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::SubscriptionLimitReached` if the ID space is exhausted.
-    pub fn create_subscription(env: Env) -> Result<u32, Error> {
-        Self::_next_id(&env)
-    }
-
-    /// Internal helper to allocate the next subscription ID.
-    ///
-    /// This function implements overflow-safe ID allocation by checking
-    /// the limit before incrementing the counter.
-    fn _next_id(env: &Env) -> Result<u32, Error> {
-        let key = Symbol::new(env, "next_id");
-        let current: u32 = env.storage().instance().get(&key).unwrap_or(0u32);
-
-        if current == MAX_SUBSCRIPTION_ID {
-            return Err(Error::SubscriptionLimitReached);
-        }
-
-        env.storage().instance().set(&key, &(current + 1));
-        Ok(current)
-    }
 }
 
 #[cfg(test)]
@@ -2796,6 +2729,6 @@ mod test {
         let env = Env::default();
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 0);
+        assert_eq!(client.version(), 1);
     }
 }
