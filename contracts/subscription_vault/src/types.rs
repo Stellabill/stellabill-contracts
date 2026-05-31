@@ -12,6 +12,27 @@ pub const MAX_METADATA_KEY_LENGTH: u32 = 32;
 /// Maximum length of a metadata value in bytes.
 pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 
+/// Threshold below which a persistent subscription record TTL is extended.
+/// If a subscription record is read or updated and its remaining TTL is less
+/// than this threshold, it is extended to `SUB_TTL_EXTEND_TO`.
+pub const SUB_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+
+/// Target TTL for persistent subscription records when extended.
+pub const SUB_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+
+/// Threshold below which a persistent billing statement secondary index TTL
+/// is extended.
+pub const BILLING_STATEMENT_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+
+/// Target TTL for billing statement secondary index entries when extended.
+pub const BILLING_STATEMENT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+
+/// Threshold below which a persistent billing period snapshot TTL is extended.
+pub const BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+
+/// Target TTL for billing period snapshot entries when extended.
+pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+
 /// Storage keys for secondary indices.
 ///
 /// ## Storage Layout — Discriminant Registry
@@ -576,6 +597,34 @@ pub struct BillingStatementsPage {
 pub struct BillingRetentionConfig {
     /// Number of most-recent detailed rows to keep per subscription.
     pub keep_recent: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccruedTotals {
+    pub interval: i128,
+    pub usage: i128,
+    pub one_off: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    pub accruals: AccruedTotals,
+    pub withdrawals: i128,
+    pub refunds: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    pub token: Address,
+    pub computed_balance: i128,
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub stored_balance: i128,
+    pub matches: bool,
 }
 
 /// Aggregated compacted history for pruned rows.
@@ -1158,6 +1207,38 @@ pub struct UsageStatementEvent {
     pub token: Address,
     pub timestamp: u64,
     pub reference: String,
+}
+
+/// Result of a usage charge attempt, including enforcement outcomes.
+///
+/// Returned by `charge_usage_with_reference` / `charge_usage_one`.
+/// Non-`Charged` variants are emitted as `usage_charge_rejected` events so
+/// indexers can observe enforcement without relying on reverted transactions.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UsageChargeResult {
+    /// Usage charge was accepted and funds were debited.
+    Charged = 0,
+    /// Duplicate reference — same off-chain event already processed.
+    Replay = 1,
+    /// Charge attempted too soon after the previous charge (burst protection).
+    BurstLimitExceeded = 2,
+    /// Rate-limit window call count exhausted.
+    RateLimitExceeded = 3,
+    /// Charge would exceed the per-period usage cap.
+    UsageCapExceeded = 4,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UsageChargeResult {
+    Charged = 0,
+    InsufficientBalance = 1,
+    LifetimeCapReached = 2,
+    Replay = 3,
+    BurstLimitExceeded = 4,
+    RateLimitExceeded = 5,
+    UsageCapExceeded = 6,
 }
 
 #[contracttype]

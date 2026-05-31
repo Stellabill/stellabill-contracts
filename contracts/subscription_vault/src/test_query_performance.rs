@@ -491,7 +491,7 @@ mod benchmark {
         env.as_contract(&client.address, || {
             env.storage()
                 .instance()
-                .set(&Symbol::new(&env, "next_id"), &1000);
+                .set(&crate::types::DataKey::NextId, &1000);
         });
 
         env.budget().set_cpu_budget(2_000_000);
@@ -663,10 +663,10 @@ fn test_list_subscriber_sparse_ids_within_budget() {
         }
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &5000);
     });
 
-    with_perf_budget(
+    with_perf_budget,
         &env,
         perf_budgets::LIST_SUBSCRIBER_CPU,
         perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
@@ -845,7 +845,7 @@ fn test_subscriber_list_1000_items_multi_page_within_budget() {
         }
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &5000);
     });
 
     let page_size = 25u32;
@@ -904,7 +904,7 @@ fn test_dos_unbounded_scan_capped_by_max_scan_depth_and_budget() {
         });
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &10_010);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &10_010);
     });
 
     // Page 1: scans first MAX_SCAN_DEPTH IDs (1000), finds none, returns empty + cursor
