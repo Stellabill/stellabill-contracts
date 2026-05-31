@@ -139,49 +139,6 @@ pub enum DataKey {
     Operator,
 }
 
-
-
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageChargeResult {
-    Charged = 0,
-    Replay = 1,
-    BurstLimitExceeded = 2,
-    RateLimitExceeded = 3,
-    UsageCapExceeded = 4,
-}
-
-/// Accumulated totals for a merchant's earnings.
-#[contracttype]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
-}
-
-/// Per-merchant, per-token earnings tracking.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Reconciliation snapshot for a token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-    pub stored_balance: i128,
-    pub matches: bool,
-}
-
 /// Represents the lifecycle state of a subscription.
 ///
 /// See `docs/subscription_lifecycle.md` for how each status is entered and exited.

@@ -952,16 +952,30 @@ impl SubscriptionVault {
         expires_at: Option<u64>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        subscription::do_create_subscription(
+        let sub_id = subscription::do_create_subscription(
             &env,
-            subscriber,
-            merchant,
+            subscriber.clone(),
+            merchant.clone(),
             amount,
             interval_seconds,
             usage_enabled,
             lifetime_cap,
             expires_at,
-        )
+        )?;
+
+        env.events().publish(
+            (Symbol::new(&env, "created"), sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+            },
+        );
+        Ok(sub_id)
     }
 
     /// Creates a new subscription using a specific accepted token.
@@ -992,17 +1006,31 @@ impl SubscriptionVault {
         expires_at: Option<u64>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        subscription::do_create_subscription_with_token(
+        let sub_id = subscription::do_create_subscription_with_token(
             &env,
-            subscriber,
-            merchant,
+            subscriber.clone(),
+            merchant.clone(),
             token,
             amount,
             interval_seconds,
             usage_enabled,
             lifetime_cap,
             expires_at,
-        )
+        )?;
+
+        env.events().publish(
+            (Symbol::new(&env, "created"), sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+            },
+        );
+        Ok(sub_id)
     }
 
     /// Deposit additional funds into a subscription's prepaid balance.
@@ -1048,7 +1076,19 @@ impl SubscriptionVault {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds")?;
 
-        subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
+        subscription::do_deposit_funds(&env, subscription_id, subscriber.clone(), amount)?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        env.events().publish(
+            (Symbol::new(&env, "deposited"), subscription_id),
+            FundsDepositedEvent {
+                subscription_id,
+                subscriber,
+                amount,
+                prepaid_balance: sub.prepaid_balance,
+            },
+        );
+        Ok(())
     }
 
     /// Creates a reusable plan template for subscriptions.
@@ -1328,7 +1368,18 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_cancel_subscription(&env, subscription_id, authorizer)
+        subscription::do_cancel_subscription(&env, subscription_id, authorizer.clone())?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        env.events().publish(
+            (Symbol::new(&env, "subscription_cancelled"), subscription_id),
+            SubscriptionCancelledEvent {
+                subscription_id,
+                authorizer,
+                refund_amount: sub.prepaid_balance,
+            },
+        );
+        Ok(())
     }
 
     /// Withdraw remaining prepaid balance from a cancelled subscription.
@@ -1410,7 +1461,13 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_pause_subscription(&env, subscription_id, authorizer)
+        subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
+
+        env.events().publish(
+            (Symbol::new(&env, "sub_paused"), subscription_id),
+            SubscriptionPausedEvent { subscription_id, authorizer },
+        );
+        Ok(())
     }
 
     /// Resume a paused or underfunded subscription.
@@ -1444,7 +1501,13 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_resume_subscription(&env, subscription_id, authorizer)
+        subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
+
+        env.events().publish(
+            (Symbol::new(&env, "sub_resumed"), subscription_id),
+            SubscriptionResumedEvent { subscription_id, authorizer },
+        );
+        Ok(())
     }
 
     /// Archive an expired or cancelled subscription to mark it as clean up.
@@ -1503,7 +1566,19 @@ impl SubscriptionVault {
         // recursively (e.g., if a malicious token contract tries to call back).
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
 
-        charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
+        let result = charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        env.events().publish(
+            (Symbol::new(&env, "charged"),),
+            SubscriptionChargedEvent {
+                subscription_id,
+                merchant: sub.merchant,
+                amount: sub.amount,
+                lifetime_charged: sub.lifetime_charged,
+            },
+        );
+        Ok(result)
     }
 
     /// Charge a metered usage amount against the subscription's prepaid balance.
@@ -1625,7 +1700,20 @@ impl SubscriptionVault {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
 
-        merchant::withdraw_merchant_funds(&env, merchant, amount)
+        merchant::withdraw_merchant_funds(&env, merchant.clone(), amount)?;
+
+        let new_balance = merchant::get_merchant_balance(&env, &merchant);
+        let token: Address = env.storage().instance().get(&DataKey::Token).ok_or(Error::NotFound)?;
+        env.events().publish(
+            (Symbol::new(&env, "withdrawn"), merchant.clone(), token.clone()),
+            MerchantWithdrawalEvent {
+                merchant,
+                token,
+                amount,
+                remaining_balance: new_balance,
+            },
+        );
+        Ok(())
     }
 
     /// Withdraw earnings for a specific token.
