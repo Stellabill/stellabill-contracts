@@ -11,10 +11,10 @@ pub fn do_set_metadata(
     key: String,
     value: String,
 ) -> Result<(), Error> {
-    if key.len() > MAX_METADATA_KEY_LENGTH as usize {
+    if key.len() > MAX_METADATA_KEY_LENGTH as u32 {
         return Err(Error::MetadataKeyTooLong);
     }
-    if value.len() > MAX_METADATA_VALUE_LENGTH as usize {
+    if value.len() > MAX_METADATA_VALUE_LENGTH as u32 {
         return Err(Error::MetadataValueTooLong);
     }
 
@@ -33,7 +33,7 @@ pub fn do_set_metadata(
 
     let key_exists = keys.iter().any(|k| k == key);
 
-    if !key_exists && keys.len() >= MAX_METADATA_KEYS as usize {
+    if !key_exists && keys.len() >= MAX_METADATA_KEYS as u32 {
         return Err(Error::MetadataKeyLimitReached);
     }
 
