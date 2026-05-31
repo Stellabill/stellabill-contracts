@@ -45,7 +45,7 @@
 //! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
-use crate::subscription::next_charge_time;
+use crate::subscription::{extend_subscription_ttl, next_charge_time};
 use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
@@ -72,10 +72,13 @@ pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
-    env.storage()
+    let sub = env
+        .storage()
         .persistent()
         .get(&DataKey::Sub(subscription_id))
-        .ok_or(Error::NotFound)
+        .ok_or(Error::NotFound)?;
+    extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
+    Ok(sub)
 }
 
 pub fn estimate_topup_for_intervals(

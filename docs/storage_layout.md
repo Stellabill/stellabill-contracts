@@ -71,9 +71,11 @@ pub enum SubscriptionStatus {
 
 **Storage Operations**:
 - Create: `do_create_subscription()` → sets `DataKey::Sub(id)` key in persistent storage
-- Read: `get_subscription()` → reads `DataKey::Sub(id)` key from persistent storage
-- Update: All lifecycle functions modify and re-set `DataKey::Sub(id)` key in persistent storage
+- Read: `get_subscription()` → reads `DataKey::Sub(id)` key from persistent storage and extends its TTL when it is near expiration
+- Update: All lifecycle functions modify and re-set `DataKey::Sub(id)` key in persistent storage, then extend its TTL via `SUB_TTL_THRESHOLD` / `SUB_TTL_EXTEND_TO`
 - Delete: Not implemented (cancelled subscriptions remain in persistent storage)
+
+**TTL behavior:** Subscription entries are kept alive on every read and write. Billing statement secondary index entries and billing period snapshots also carry their own TTL thresholds (`BILLING_STATEMENT_TTL_THRESHOLD`, `BILLING_STATEMENT_TTL_EXTEND_TO`, `BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD`, `BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO`) and are extended when the corresponding storage operations execute.
 
 ---
 
