@@ -69,26 +69,46 @@ pub mod state_machine {
 pub mod statements {
     #![allow(unused_variables, dead_code)]
     use soroban_sdk::{Address, Env};
-    use crate::types::{BillingChargeKind, Error};
+    use crate::types::{
+        BillingChargeKind, DataKey, Error,
+        BILLING_STATEMENT_TTL_EXTEND_TO, BILLING_STATEMENT_TTL_THRESHOLD,
+    };
 
     pub fn append_statement(
-        _env: &Env,
-        _subscription_id: u32,
+        env: &Env,
+        subscription_id: u32,
         _amount: i128,
         _merchant: Address,
         _kind: BillingChargeKind,
         _period_start: u64,
         _timestamp: u64,
-    ) -> Result<(), Error> { Ok(()) }
+    ) -> Result<(), Error> {
+        env.storage().persistent().extend_ttl(
+            &DataKey::BillingStatementsBySubscription(subscription_id),
+            BILLING_STATEMENT_TTL_THRESHOLD,
+            BILLING_STATEMENT_TTL_EXTEND_TO,
+        );
+        Ok(())
+    }
 }
 
 /// Period snapshots: write billing-period summaries for reconciliation.
 pub mod period_snapshots {
     #![allow(unused_variables, dead_code)]
     use soroban_sdk::Env;
-    use crate::types::{BillingPeriodSnapshot, Error};
+    use crate::types::{
+        BillingPeriodSnapshot, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
+        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD, DataKey, Error,
+    };
 
-    pub fn write_period_snapshot(_env: &Env, _snapshot: BillingPeriodSnapshot) -> Result<(), Error> { Ok(()) }
+    pub fn write_period_snapshot(env: &Env, snapshot: BillingPeriodSnapshot) -> Result<(), Error> {
+        env.storage().persistent().extend_ttl(
+            &DataKey::BillingPeriodSnapshot(snapshot.subscription_id, snapshot.period_end),
+            BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
+            BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
+        );
+        Ok(())
+    }
 }
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
