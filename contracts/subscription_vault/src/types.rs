@@ -15,23 +15,23 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 /// Threshold below which a persistent subscription record TTL is extended.
 /// If a subscription record is read or updated and its remaining TTL is less
 /// than this threshold, it is extended to `SUB_TTL_EXTEND_TO`.
-pub const SUB_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+pub const SUB_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
 /// Target TTL for persistent subscription records when extended.
-pub const SUB_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+pub const SUB_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing statement secondary index TTL
 /// is extended.
-pub const BILLING_STATEMENT_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+pub const BILLING_STATEMENT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
 /// Target TTL for billing statement secondary index entries when extended.
-pub const BILLING_STATEMENT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+pub const BILLING_STATEMENT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing period snapshot TTL is extended.
-pub const BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD: u64 = 30 * 24 * 60 * 60; // 30 days
+pub const BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
 /// Target TTL for billing period snapshot entries when extended.
-pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 365 days
+pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Storage keys for secondary indices.
 ///
@@ -1214,25 +1214,17 @@ pub struct UsageStatementEvent {
 pub enum UsageChargeResult {
     /// Usage charge was accepted and funds were debited.
     Charged = 0,
-    /// Duplicate reference — same off-chain event already processed.
-    Replay = 1,
-    /// Charge attempted too soon after the previous charge (burst protection).
-    BurstLimitExceeded = 2,
-    /// Rate-limit window call count exhausted.
-    RateLimitExceeded = 3,
-    /// Charge would exceed the per-period usage cap.
-    UsageCapExceeded = 4,
-}
-
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageChargeResult {
-    Charged = 0,
+    /// Subscriber has insufficient prepaid balance to cover the usage amount.
     InsufficientBalance = 1,
+    /// Subscription lifetime cap has been reached; no further charges allowed.
     LifetimeCapReached = 2,
+    /// Duplicate reference — same off-chain event already processed.
     Replay = 3,
+    /// Charge attempted too soon after the previous charge (burst protection).
     BurstLimitExceeded = 4,
+    /// Rate-limit window call count exhausted.
     RateLimitExceeded = 5,
+    /// Charge would exceed the per-period usage cap.
     UsageCapExceeded = 6,
 }
 
