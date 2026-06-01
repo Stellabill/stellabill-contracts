@@ -156,6 +156,10 @@ pub enum DataKey {
     BillingPeriodSnapshotIndex(u32),
     /// Admin nonce for replay protection keyed by (admin_address, domain).
     AdminNonce(Address, u32),
+    /// Per-subscription metadata key-value pair.
+    Metadata(u32, String),
+    /// Per-subscription list of metadata keys.
+    MetadataKeys(u32),
     /// Operator key.
     Operator,
 }
@@ -1202,6 +1206,26 @@ pub struct UsageStatementEvent {
     pub token: Address,
     pub timestamp: u64,
     pub reference: String,
+}
+
+/// Result of a usage charge attempt, including enforcement outcomes.
+///
+/// Returned by `charge_usage_with_reference` / `charge_usage_one`.
+/// Non-`Charged` variants are emitted as `usage_charge_rejected` events so
+/// indexers can observe enforcement without relying on reverted transactions.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UsageChargeResult {
+    /// Usage charge was accepted and funds were debited.
+    Charged = 0,
+    /// Duplicate reference — same off-chain event already processed.
+    Replay = 1,
+    /// Charge attempted too soon after the previous charge (burst protection).
+    BurstLimitExceeded = 2,
+    /// Rate-limit window call count exhausted.
+    RateLimitExceeded = 3,
+    /// Charge would exceed the per-period usage cap.
+    UsageCapExceeded = 4,
 }
 
 #[contracttype]
