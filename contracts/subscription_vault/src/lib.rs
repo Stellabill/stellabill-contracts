@@ -2799,6 +2799,9 @@ mod test_charge_invariants;
 mod test_subscription_status_transitions;
 
 #[cfg(test)]
+mod test_require_auth;
+
+#[cfg(test)]
 mod test {
     use super::*;
     use crate::SubscriptionVaultClient;
