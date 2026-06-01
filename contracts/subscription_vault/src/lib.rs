@@ -127,17 +127,84 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use soroban_sdk::{Address, Env};
-    use crate::types::{Error, Subscription, OracleConfig};
+    use soroban_sdk::{Address, Env, Symbol};
+    use crate::types::{Error, Subscription, OracleConfig, OraclePrice, OracleConfigUpdatedEvent, OracleChargeResolvedEvent};
+    use crate::types::DataKey;
 
-    pub fn resolve_charge_amount(_env: &Env, _subscription_id: u32, sub: &Subscription) -> Result<i128, Error> {
-        Ok(sub.amount)
+    pub fn get_oracle_config(env: &Env) -> OracleConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .unwrap_or(OracleConfig { enabled: false, oracle: None, max_age_seconds: 0 })
     }
-    pub fn set_oracle_config(_env: &Env, _enabled: bool, _oracle: Option<Address>, _max_age: u64) -> Result<(), Error> {
+
+    pub fn set_oracle_config(env: &Env, enabled: bool, oracle: Option<Address>, max_age_seconds: u64) -> Result<(), Error> {
+        if enabled {
+            if oracle.is_none() {
+                return Err(Error::OracleNotConfigured);
+            }
+            if max_age_seconds == 0 {
+                return Err(Error::InvalidInput);
+            }
+        }
+
+        let cfg = OracleConfig { enabled, oracle: oracle.clone(), max_age_seconds };
+        env.storage().instance().set(&DataKey::Oracle, &cfg);
+        env.events().publish(
+            (Symbol::new(env, "oracle_config_updated"),),
+            OracleConfigUpdatedEvent { enabled, oracle, max_age_seconds, timestamp: env.ledger().timestamp() },
+        );
         Ok(())
     }
-    pub fn get_oracle_config(_env: &Env) -> OracleConfig {
-        OracleConfig { enabled: false, oracle: None, max_age_seconds: 0 }
+
+    pub fn resolve_charge_amount(env: &Env, subscription_id: u32, sub: &Subscription) -> Result<i128, Error> {
+        let cfg = get_oracle_config(env);
+        if !cfg.enabled {
+            return Ok(sub.amount);
+        }
+
+        let oracle_addr = cfg.oracle.ok_or(Error::OracleNotConfigured)?;
+
+        // Call oracle contract `latest_price()` with no args.
+        let args: soroban_sdk::Vec<soroban_sdk::Val> = soroban_sdk::Vec::new(env);
+        let price: OraclePrice = env.invoke_contract::<OraclePrice>(&oracle_addr, &Symbol::new(env, "latest_price"), args);
+
+        // Validate returned payload.
+        if price.timestamp == 0 {
+            return Err(Error::OraclePriceUnavailable);
+        }
+
+        let now = env.ledger().timestamp();
+        let age = now.saturating_sub(price.timestamp);
+        if cfg.max_age_seconds > 0 && age > cfg.max_age_seconds {
+            return Err(Error::OraclePriceStale);
+        }
+
+        if price.price <= 0 {
+            return Err(Error::OraclePriceInvalid);
+        }
+
+        // Token decimals for the subscription token.
+        let token_decimals = crate::admin::get_token_decimals(env, &sub.token)? as u32;
+
+        // Compute token_amount = ceil(quote_amount * 10^token_decimals / price)
+        let factor: i128 = 10i128.pow(token_decimals);
+        let numerator = sub.amount.checked_mul(factor).ok_or(Error::Overflow)?;
+        let token_amount = (numerator + price.price - 1).checked_div(price.price).ok_or(Error::InvalidInput)?;
+
+        env.events().publish(
+            (Symbol::new(env, "oracle_charge_resolved"), subscription_id),
+            OracleChargeResolvedEvent {
+                subscription_id,
+                quote_amount: sub.amount,
+                token_amount,
+                price: price.price,
+                price_timestamp: price.timestamp,
+                timestamp: now,
+            },
+        );
+
+        Ok(token_amount)
     }
 }
 
