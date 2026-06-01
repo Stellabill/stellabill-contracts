@@ -373,3 +373,69 @@ fn set_min_topup_correct_auth() {
     client.set_min_topup(&admin, &new_topup);
     assert_eq!(client.get_min_topup(), new_topup);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 7. init / set_min_topup — min_topup must be strictly positive
+//
+// A non-positive min_topup would make the `BelowMinimumTopup` guard in
+// `deposit_funds` meaningless and could permit zero-value deposits.
+// Both `do_init` and `do_set_min_topup` must reject min_topup <= 0 with
+// `Error::InvalidAmount` (3001).
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3001)")] // Error::InvalidAmount
+fn init_rejects_zero_min_topup() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    // min_topup = 0 must be rejected.
+    let _ = client.init(&token, &6, &admin, &0i128, &(7 * 24 * 60 * 60));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3001)")] // Error::InvalidAmount
+fn init_rejects_negative_min_topup() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    // min_topup = -1 must be rejected.
+    let _ = client.init(&token, &6, &admin, &-1i128, &(7 * 24 * 60 * 60));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3001)")] // Error::InvalidAmount
+fn set_min_topup_rejects_zero() {
+    let (_, client, _, admin) = setup();
+    // admin is correct, but min_topup = 0 must be rejected.
+    let _ = client.set_min_topup(&admin, &0i128);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3001)")] // Error::InvalidAmount
+fn set_min_topup_rejects_negative() {
+    let (_, client, _, admin) = setup();
+    // admin is correct, but min_topup < 0 must be rejected.
+    let _ = client.set_min_topup(&admin, &-1i128);
+}
+
+#[test]
+fn get_min_topup_returns_stored_value_unchanged() {
+    // Verify that get_min_topup is a pure read: it returns exactly what init stored.
+    let (_, client, _, admin) = setup();
+    assert_eq!(client.get_min_topup(), MIN_TOPUP);
+    // Update and confirm the new value is returned verbatim.
+    let new_topup = 3_000_000i128;
+    client.set_min_topup(&admin, &new_topup);
+    assert_eq!(client.get_min_topup(), new_topup);
+}

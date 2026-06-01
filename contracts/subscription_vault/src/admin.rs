@@ -31,7 +31,7 @@ pub fn do_init(
     if instance.has(&DataKey::Token) || instance.has(&DataKey::Admin) {
         return Err(Error::AlreadyInitialized);
     }
-    if min_topup < 0 {
+    if min_topup <= 0 {
         return Err(Error::InvalidAmount);
     }
     if token_decimals > 19 {
@@ -81,6 +81,9 @@ pub fn require_stored_admin_auth(env: &Env) -> Result<Address, Error> {
 
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
+    if min_topup <= 0 {
+        return Err(Error::InvalidAmount);
+    }
     env.storage()
         .instance()
         .set(&DataKey::MinTopup, &min_topup);

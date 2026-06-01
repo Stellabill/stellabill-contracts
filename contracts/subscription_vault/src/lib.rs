@@ -336,22 +336,18 @@ impl SubscriptionVault {
         admin::do_init(&env, token, token_decimals, admin, min_topup, grace_period)
     }
 
-    /// Initializes the contract.
+    /// Update the minimum top-up threshold. Admin only.
     ///
-    /// This should only be called once after deployment. If it’s called again,
-    /// it will fail since the admin is already set.
+    /// The new value takes effect immediately for all subsequent `deposit_funds`
+    /// calls. In-flight transactions are unaffected.
     ///
     /// # Arguments
-    /// - `token`: Address of the main token (e.g. USDC)
-    /// - `token_decimals`: Token precision (e.g. 7 for Stellar USDC)
-    /// - `admin`: Address that will manage the contract
-    /// - `min_topup`: Minimum allowed deposit amount
-    /// - `grace_period`: Time (in seconds) before a subscription can be cancelled
-    ///   after running out of funds
+    /// - `admin`: Must match the stored admin address.
+    /// - `min_topup`: New minimum deposit amount (token base units). Must be > 0.
     ///
     /// # Errors
-    /// - `AlreadyInitialized` if already set up
-    /// - `InvalidAmount` if `min_topup` is not valid
+    /// - `Unauthorized` if `admin` does not match the stored admin.
+    /// - `InvalidAmount` if `min_topup` is zero or negative.
     pub fn set_min_topup(env: Env, admin: Address, min_topup: i128) -> Result<(), Error> {
         admin::do_set_min_topup(&env, admin, min_topup)
     }
