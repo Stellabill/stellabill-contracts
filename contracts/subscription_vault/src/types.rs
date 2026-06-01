@@ -1224,17 +1224,6 @@ pub enum UsageChargeResult {
     UsageCapExceeded = 4,
 }
 
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageChargeResult {
-    Charged = 0,
-    InsufficientBalance = 1,
-    LifetimeCapReached = 2,
-    Replay = 3,
-    BurstLimitExceeded = 4,
-    RateLimitExceeded = 5,
-    UsageCapExceeded = 6,
-}
 
 #[contracttype]
 #[derive(Clone, Debug)]

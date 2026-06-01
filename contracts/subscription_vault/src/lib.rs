@@ -1480,6 +1480,11 @@ impl SubscriptionVault {
         subscriber: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        // Block partial refunds while emergency stop is active — refunds are
+        // mutating financial operations and must be guarded by the circuit
+        // breaker to avoid unexpected transfers during incidents.
+        require_not_emergency_stop(&env)?;
+
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "partial_refund")?;
 
