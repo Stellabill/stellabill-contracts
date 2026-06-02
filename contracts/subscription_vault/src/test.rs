@@ -8573,3 +8573,273 @@ fn test_state_completeness_all_statuses_exist() {
         assert!(transition_to(&mut current, status).is_ok());
     }
 }
+
+// -- Usage rate limit tests ---------------------------------------------------
+
+/// Helper: create a usage-enabled subscription with prepaid balance.
+fn setup_usage_sub(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+) -> (u32, Address, Address) {
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    fixtures::seed_balance(env, client, id, PREPAID);
+    (id, subscriber, merchant)
+}
+
+#[test]
+fn test_usage_charge_with_reference_succeeds() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, _) = setup_usage_sub(&env, &client);
+
+    let result = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_001"),
+    );
+    assert_eq!(result, crate::UsageChargeResult::Charged);
+}
+
+#[test]
+fn test_usage_replay_protection() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, _) = setup_usage_sub(&env, &client);
+
+    // First call succeeds
+    let r1 = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_dup"),
+    );
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // Same reference is rejected as Replay
+    let r2 = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_dup"),
+    );
+    assert_eq!(r2, crate::UsageChargeResult::Replay);
+}
+
+#[test]
+fn test_usage_burst_limit_exceeded() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // Configure burst: minimum 10 seconds between calls
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &10u64, // burst_min_interval_secs
+        &None::<i128>,
+    );
+
+    // First call at T0 succeeds
+    let r1 = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_b1"),
+    );
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // Second call at T0 (same timestamp, 0 elapsed) is rejected
+    let r2 = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_b2"),
+    );
+    assert_eq!(r2, crate::UsageChargeResult::BurstLimitExceeded);
+}
+
+#[test]
+fn test_usage_burst_exactly_at_minimum_allowed() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &5u64, // burst_min_interval_secs = 5
+        &None::<i128>,
+    );
+
+    // First call at T0
+    client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_c1"),
+    );
+
+    // Advance exactly 5 seconds — should be allowed (elapsed == burst_min_interval_secs)
+    env.ledger().with_mut(|li| li.timestamp = T0 + 5);
+    let r = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_c2"),
+    );
+    assert_eq!(r, crate::UsageChargeResult::Charged);
+}
+
+#[test]
+fn test_usage_rate_limit_exceeded() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // Allow 2 calls per 60-second window, no burst restriction
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &Some(2u32),
+        &60u64,
+        &0u64,
+        &None::<i128>,
+    );
+
+    let r1 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "r1"));
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+    let r2 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "r2"));
+    assert_eq!(r2, crate::UsageChargeResult::Charged);
+
+    // Third call in same window is rejected
+    let r3 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "r3"));
+    assert_eq!(r3, crate::UsageChargeResult::RateLimitExceeded);
+}
+
+#[test]
+fn test_usage_rate_limit_window_rollover_resets_count() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // 1 call per 60-second window
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &Some(1u32),
+        &60u64,
+        &0u64,
+        &None::<i128>,
+    );
+
+    let r1 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w1r1"));
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // Still in window — rejected
+    let r2 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w1r2"));
+    assert_eq!(r2, crate::UsageChargeResult::RateLimitExceeded);
+
+    // Advance past window boundary — counter resets
+    env.ledger().with_mut(|li| li.timestamp = T0 + 60);
+    let r3 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w2r1"));
+    assert_eq!(r3, crate::UsageChargeResult::Charged);
+}
+
+#[test]
+fn test_usage_cap_exceeded() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // Cap at 1_500_000 units per period
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &0u64,
+        &Some(1_500_000i128),
+    );
+
+    let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "cap1"));
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // 1_000_000 + 1_000_000 = 2_000_000 > 1_500_000 cap
+    let r2 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "cap2"));
+    assert_eq!(r2, crate::UsageChargeResult::UsageCapExceeded);
+}
+
+#[test]
+fn test_usage_cap_exactly_at_boundary_allowed() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // Cap at exactly 2_000_000 units
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &0u64,
+        &Some(2_000_000i128),
+    );
+
+    let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "bnd1"));
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // Exactly at cap boundary — allowed
+    let r2 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "bnd2"));
+    assert_eq!(r2, crate::UsageChargeResult::Charged);
+}
+
+#[test]
+fn test_usage_cap_resets_on_period_rollover() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    // Cap at 1_000_000 per period
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &0u64,
+        &Some(1_000_000i128),
+    );
+
+    let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p1c1"));
+    assert_eq!(r1, crate::UsageChargeResult::Charged);
+
+    // Still in same period — rejected
+    let r2 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p1c2"));
+    assert_eq!(r2, crate::UsageChargeResult::UsageCapExceeded);
+
+    // Advance into next billing period — cap resets
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL);
+    let r3 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p2c1"));
+    assert_eq!(r3, crate::UsageChargeResult::Charged);
+}
+
+#[test]
+fn test_usage_no_limits_configured_is_passthrough() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, _) = setup_usage_sub(&env, &client);
+
+    // No limits configured — all unique references should succeed
+    for i in 0u32..5 {
+        let reference = String::from_str(&env, &alloc::format!("pass_{}", i));
+        let r = client.charge_usage_with_reference(&id, &100_000, &reference);
+        assert_eq!(r, crate::UsageChargeResult::Charged);
+    }
+}

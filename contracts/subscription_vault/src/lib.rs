@@ -63,20 +63,7 @@ pub mod blocklist {
 }
 
 /// State machine: validates and applies subscription status transitions.
-pub mod state_machine {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, SubscriptionStatus};
-
-    pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
-        *current = next;
-        Ok(())
-    }
-    pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool { true }
-    pub fn validate_status_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> Result<(), Error> { Ok(()) }
-    pub fn get_allowed_transitions(from: &SubscriptionStatus) -> soroban_sdk::Vec<SubscriptionStatus> {
-        soroban_sdk::Vec::new(&soroban_sdk::Env::default())
-    }
-}
+pub mod state_machine;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
@@ -575,7 +562,7 @@ pub mod metadata {
     use soroban_sdk::{Address, Env, String, Vec};
     use crate::types::Error;
 
-    pub fn set_metadata(_env: &Env, _caller: Address, _subscription_id: u32, _key: String, _value: String) -> Result<(), Error> { Ok(()) }
+    pub fn set_metadata(_env: &Env, _subscription_id: u32, _caller: &Address, _key: String, _value: String) -> Result<(), Error> { Ok(()) }
     pub fn get_metadata(_env: &Env, _subscription_id: u32, _key: String) -> Result<String, Error> { Err(Error::NotFound) }
     pub fn delete_metadata(_env: &Env, _caller: Address, _subscription_id: u32, _key: String) -> Result<(), Error> { Ok(()) }
     pub fn list_metadata_keys(_env: &Env, _subscription_id: u32) -> Result<Vec<String>, Error> {
@@ -609,6 +596,7 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    NonceConsumedEvent,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -1894,6 +1882,7 @@ impl SubscriptionVault {
         let sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
 
+        let sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish(
             (Symbol::new(&env, "sub_paused"), subscription_id),
             SubscriptionPausedEvent {
@@ -1938,6 +1927,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
         let sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
@@ -2012,6 +2002,7 @@ impl SubscriptionVault {
         // recursively (e.g., if a malicious token contract tries to call back).
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
 
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
         let result = charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)?;
 
         let sub = queries::get_subscription(&env, subscription_id)?;
@@ -2338,28 +2329,6 @@ impl SubscriptionVault {
         queries::get_next_charge_info(&env, subscription_id)
     }
 
-    /// Return subscriptions for a merchant, paginated.
-    ///
-    /// `limit` must be between 1 and [`queries::MAX_SUBSCRIPTION_LIST_PAGE`] inclusive.
-    pub fn get_subscriptions_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Result<Vec<Subscription>, Error> {
-        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
-    }
-
-    /// Return the total number of subscriptions ever created.
-    pub fn get_subscription_count(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32)
-    }
-
-    /// Return the total number of subscriptions for a merchant.
-    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
-        queries::get_merchant_subscription_count(&env, merchant)
-    }
-
     /// Return the number of subscription ids indexed for a settlement token (for pagination).
     pub fn get_token_subscription_count(env: Env, token: Address) -> u32 {
         queries::get_token_subscription_count(&env, token)
@@ -2508,14 +2477,6 @@ impl SubscriptionVault {
         period_snapshots::list_period_snapshots(&env, subscription_id, limit)
     }
 
-/// Add a new accepted token.
-///
-/// # Auth
-/// - Admin only
-///
-/// # Errors
-/// - Unauthorized
-/// - TokenAlreadyAccepted
     pub fn add_accepted_token(
         env: Env,
         admin: Address,
@@ -2904,7 +2865,7 @@ impl SubscriptionVault {
     ///
     /// * [`Error::NotFound`] — Subscription does not exist, or key is not set.
     pub fn get_metadata(env: Env, subscription_id: u32, key: String) -> Result<String, Error> {
-        metadata::do_get_metadata(&env, subscription_id, key)
+        metadata::get_metadata(&env, subscription_id, key)
     }
 
     /// List all metadata keys for a subscription.
@@ -2917,7 +2878,7 @@ impl SubscriptionVault {
     ///
     /// * [`Error::NotFound`] — Subscription does not exist.
     pub fn list_metadata_keys(env: Env, subscription_id: u32) -> Result<Vec<String>, Error> {
-        metadata::do_list_metadata_keys(&env, subscription_id)
+        metadata::list_metadata_keys(&env, subscription_id)
     }
 
     // ── Protocol Fees ──────────────────────────────────────────────────────────
@@ -3192,6 +3153,6 @@ mod test {
         let env = Env::default();
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 0);
+        assert_eq!(client.version(), 1);
     }
 }
