@@ -37,9 +37,10 @@ use crate::subscription::{next_charge_time, write_subscription};
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
+    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
+    UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -226,9 +227,11 @@ pub fn charge_one(
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
 
-            // Recover from grace period or insufficient balance on successful charge
+            // Recover from grace period or insufficient balance on successful charge.
+            // Clear the grace clock so the next charge window uses fresh timestamps.
             if sub.status == SubscriptionStatus::GracePeriod || sub.status == SubscriptionStatus::InsufficientBalance {
                 transition_to(&mut sub.status, SubscriptionStatus::Active)?;
+                sub.grace_start_timestamp = None;
             }
 
             // Check if cap is now exactly reached -- auto-cancel
@@ -305,23 +308,44 @@ pub fn charge_one(
         }
         Err(_) => {
             let grace_duration = crate::admin::get_grace_period(env)?;
-            let due_timestamp = sub
-                .last_payment_timestamp
-                .checked_add(sub.interval_seconds)
-                .ok_or(Error::Overflow)?;
+            let previous_status = sub.status;
 
-            let grace_expires = due_timestamp
-                .checked_add(grace_duration)
-                .ok_or(Error::Overflow)?;
+            if sub.status == SubscriptionStatus::GracePeriod {
+                // Already in grace — check whether the window has expired since
+                // the clock first started.  Keep the original grace_start_timestamp
+                // so a single deposit within the window restores Active.
+                if let Some(grace_start) = sub.grace_start_timestamp {
+                    let grace_expires = grace_start.saturating_add(grace_duration);
+                    if grace_duration == 0 || now >= grace_expires {
+                        // Grace window closed — move to InsufficientBalance
+                        transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                        sub.grace_start_timestamp = None;
+                    }
+                    // else: stay in GracePeriod, keep clock unchanged
+                } else {
+                    // Sanity: GracePeriod status without a timestamp — treat as
+                    // fresh entry so the clock is always initialised.
+                    sub.grace_start_timestamp = Some(now);
+                }
+            } else if grace_duration > 0 {
+                // First underfunded charge — enter GracePeriod and start the clock
+                transition_to(&mut sub.status, SubscriptionStatus::GracePeriod)?;
+                sub.grace_start_timestamp = Some(now);
 
-            let target_status = if grace_duration > 0 && now < grace_expires {
-                SubscriptionStatus::GracePeriod
+                let grace_expires_at = now.saturating_add(grace_duration);
+                env.events().publish(
+                    (Symbol::new(env, "grace_period_entered"), subscription_id),
+                    GracePeriodEnteredEvent {
+                        subscription_id,
+                        previous_status,
+                        grace_expires_at,
+                        timestamp: now,
+                    },
+                );
             } else {
-                SubscriptionStatus::InsufficientBalance
-            };
-
-            if sub.status != target_status {
-                transition_to(&mut sub.status, target_status.clone())?;
+                // No grace period configured — go straight to InsufficientBalance
+                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                sub.grace_start_timestamp = None;
             }
 
             write_subscription(env, subscription_id, &sub);
@@ -335,7 +359,7 @@ pub fn charge_one(
                     required_amount: charge_amount,
                     available_balance: sub.prepaid_balance,
                     shortfall,
-                    resulting_status: target_status,
+                    resulting_status: sub.status,
                     timestamp: now,
                 },
             );
