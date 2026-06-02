@@ -74,6 +74,9 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 36
 /// | 25 | `TokenDecimals(Address)` | instance |
 /// | 37 | `AdminNonce(Address, u32)` | persistent |
 /// | 38 | `Operator` | instance |
+/// | 39 | `BillingRetentionConfig` | instance |
+/// | 40 | `BillingStatementSequence(u32)` | persistent |
+/// | 41 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -158,6 +161,12 @@ pub enum DataKey {
     AdminNonce(Address, u32),
     /// Operator key.
     Operator,
+    /// Global billing statement retention configuration.
+    BillingRetentionConfig,
+    /// Monotonic per-subscription statement sequence counter.
+    BillingStatementSequence(u32),
+    /// Aggregated totals from compacted billing statements.
+    BillingStatementAggregate(u32),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -592,32 +601,13 @@ pub struct BillingRetentionConfig {
     pub keep_recent: u32,
 }
 
+/// Per-charge category totals accumulated from compacted billing history.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccruedTotals {
     pub interval: i128,
     pub usage: i128,
     pub one_off: i128,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub computed_balance: i128,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub stored_balance: i128,
-    pub matches: bool,
 }
 
 /// Aggregated compacted history for pruned rows.
@@ -1269,6 +1259,16 @@ pub enum ChargeExecutionResult {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UsageChargeResult {
+    Charged = 0,
+    Replay = 1,
+    BurstLimitExceeded = 2,
+    RateLimitExceeded = 3,
+    UsageCapExceeded = 4,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageLimits {
     pub rate_limit_max_calls: Option<u32>,
@@ -1453,6 +1453,26 @@ pub struct MerchantCapDefaultUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
     pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    pub accruals: AccruedTotals,
+    pub withdrawals: i128,
+    pub refunds: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    pub token: Address,
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub computed_balance: i128,
+    pub stored_balance: i128,
+    pub matches: bool,
 }
 
 /// Summary of all liabilities for a single settlement token.
