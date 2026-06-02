@@ -19,6 +19,7 @@ mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+pub mod period_snapshots;
 
 pub use safe_math::*;
 
@@ -97,20 +98,6 @@ pub mod statements {
     pub fn get_statements_by_subscription_cursor(_env: &Env, _subscription_id: u32, _cursor: Option<u32>, _limit: u32, _newest_first: bool) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage { statements: soroban_sdk::Vec::new(_env), next_cursor: None, total: 0 })
     }
-}
-
-/// Period snapshots: write billing-period summaries for reconciliation.
-pub mod period_snapshots {
-    #![allow(unused_variables, dead_code)]
-    use soroban_sdk::Env;
-    use crate::types::{
-        BillingPeriodSnapshot, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD, DataKey, Error,
-    };
-
-    pub fn write_period_snapshot(_env: &Env, _snapshot: BillingPeriodSnapshot) -> Result<(), Error> { Ok(()) }
-    pub fn get_period_snapshot(_env: &Env, _subscription_id: u32, _period_index: u64) -> Option<BillingPeriodSnapshot> { None }
-    pub fn list_period_snapshots(_env: &Env, _subscription_id: u32, _limit: u32) -> soroban_sdk::Vec<BillingPeriodSnapshot> { soroban_sdk::Vec::new(_env) }
 }
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
@@ -2794,6 +2781,9 @@ impl SubscriptionVault {
 
 #[cfg(test)]
 mod test_charge_invariants;
+
+#[cfg(test)]
+mod test_billing_period_snapshots;
 
 #[cfg(test)]
 mod test {

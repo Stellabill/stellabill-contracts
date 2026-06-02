@@ -39,7 +39,7 @@ use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
     LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -625,6 +625,25 @@ pub fn charge_usage_one(
             write_subscription(env, subscription_id, &sub);
             env.storage().instance().set(&ref_key, &true); // Mark reference as used
 
+            let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
+            let period_start = sub.start_time
+                .checked_add(period_index.checked_mul(sub.interval_seconds).ok_or(Error::Overflow)?)
+                .ok_or(Error::Overflow)?;
+
+            crate::period_snapshots::write_period_snapshot(
+                env,
+                BillingPeriodSnapshot {
+                    subscription_id,
+                    period_index,
+                    period_start,
+                    period_end: now,
+                    total_charged: usage_amount,
+                    total_usage_units: usage_amount,
+                    status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
+                    finalized_at: now,
+                },
+            )?;
+
             append_statement(
                 env,
                 subscription_id,
@@ -682,4 +701,3 @@ pub fn charge_usage_one(
         }
     }
 }
-
