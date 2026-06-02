@@ -74,6 +74,9 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u64 = 365 * 24 * 60 * 60; // 36
 /// | 25 | `TokenDecimals(Address)` | instance |
 /// | 37 | `AdminNonce(Address, u32)` | persistent |
 /// | 38 | `Operator` | instance |
+/// | 39 | `BillingRetentionConfig` | instance |
+/// | 40 | `BillingStatementSequence(u32)` | persistent |
+/// | 41 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -158,6 +161,12 @@ pub enum DataKey {
     AdminNonce(Address, u32),
     /// Operator key.
     Operator,
+    /// Global billing statement retention configuration.
+    BillingRetentionConfig,
+    /// Monotonic per-subscription statement sequence counter.
+    BillingStatementSequence(u32),
+    /// Aggregated totals from compacted billing statements.
+    BillingStatementAggregate(u32),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -389,6 +398,14 @@ pub enum Error {
     // --- Subscription Update (9000-9099) ---
     /// Attempting to change usage_enabled on an existing subscription is not allowed.
     CannotChangeUsageMode = 9001,
+
+    // --- Schema Migration (9100-9199) ---
+    /// Stored schema version is newer than the binary's STORAGE_VERSION; downgrade rejected.
+    SchemaMigrationDowngrade = 9101,
+    /// Alias for [`SchemaMigrationDowngrade`]: stored version is higher than the binary version.
+    ///
+    /// Returned by the `migrate_schema` entrypoint when a downgrade is attempted.
+    SchemaVersionTooHigh = 9102,
 }
 
 impl Error {
@@ -476,6 +493,23 @@ pub struct MigrationExportEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when the contract schema is upgraded on-chain.
+///
+/// Emitted by [`SubscriptionVault::migrate`] after `DataKey::SchemaVersion`
+/// has been updated. Off-chain indexers use this to detect and audit upgrades.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SchemaMigratedEvent {
+    /// Admin address that authorised the migration.
+    pub admin: Address,
+    /// Schema version stored on-chain before this migration.
+    pub from_version: u32,
+    /// Schema version written to storage by this migration (equals `STORAGE_VERSION`).
+    pub to_version: u32,
+    /// Ledger timestamp when the migration was executed.
+    pub timestamp: u64,
+}
+
 /// Defines a reusable subscription plan template.
 ///
 /// Plan templates allow merchants to define standard subscription offerings
@@ -526,6 +560,9 @@ pub struct NextChargeInfo {
     pub amount: i128,
     /// Token address for the charge.
     pub token: soroban_sdk::Address,
+    /// When the grace period expires (only set when `status == GracePeriod`).
+    /// `None` when not in grace.
+    pub grace_deadline: Option<u64>,
 }
 
 /// View of a subscription's lifetime cap status.
@@ -592,32 +629,13 @@ pub struct BillingRetentionConfig {
     pub keep_recent: u32,
 }
 
+/// Per-charge category totals accumulated from compacted billing history.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccruedTotals {
     pub interval: i128,
     pub usage: i128,
     pub one_off: i128,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub computed_balance: i128,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub stored_balance: i128,
-    pub matches: bool,
 }
 
 /// Aggregated compacted history for pruned rows.
@@ -1261,6 +1279,16 @@ pub enum ChargeExecutionResult {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UsageChargeResult {
+    Charged = 0,
+    Replay = 1,
+    BurstLimitExceeded = 2,
+    RateLimitExceeded = 3,
+    UsageCapExceeded = 4,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageLimits {
     pub rate_limit_max_calls: Option<u32>,
@@ -1447,6 +1475,26 @@ pub struct MerchantCapDefaultUpdatedEvent {
     pub timestamp: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    pub accruals: AccruedTotals,
+    pub withdrawals: i128,
+    pub refunds: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    pub token: Address,
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub computed_balance: i128,
+    pub stored_balance: i128,
+    pub matches: bool,
+}
+
 /// Summary of all liabilities for a single settlement token.
 ///
 /// Used by auditors to validate the accounting equation:
@@ -1536,3 +1584,4 @@ pub struct PrepaidQueryResult {
     /// Whether more subscriptions may exist beyond this scan window.
     pub has_more: bool,
 }
+
