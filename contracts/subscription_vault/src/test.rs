@@ -7393,8 +7393,83 @@ mod storage_layout {
                 .expect("schema_version must be set after init")
         });
 
-        // Must be a positive version number (current: 2).
-        assert!(version >= 1, "schema version must be >= 1, got {version}");
+        assert_eq!(version, crate::STORAGE_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_schema_same_version_is_noop() {
+        let (env, client, _token, admin) = setup_test_env();
+        let before_events = env.events().all().len();
+
+        client.migrate_schema(&admin);
+
+        let after_events = env.events().all().len();
+        assert_eq!(before_events, after_events, "same-version migration should not emit an event");
+
+        let version: u32 = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::SchemaVersion)
+                .expect("schema_version must still be present")
+        });
+        assert_eq!(version, crate::STORAGE_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_schema_rejects_downgrade() {
+        let (env, client, _token, admin) = setup_test_env();
+
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION.saturating_add(1));
+        });
+
+        let result = client.try_migrate_schema(&admin);
+        assert_eq!(result.unwrap_err(), Error::SchemaVersionTooHigh);
+    }
+
+    #[test]
+    fn test_migrate_schema_requires_admin() {
+        let (env, client, _token, admin) = setup_test_env();
+        let stranger = Address::generate(&env);
+
+        let result = client.try_migrate_schema(&stranger);
+        assert_eq!(result.unwrap_err(), Error::Unauthorized);
+
+        // Ensure the stored version is unchanged.
+        let version: u32 = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::SchemaVersion)
+                .expect("schema_version must still be present")
+        });
+        assert_eq!(version, crate::STORAGE_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_schema_upgrades_legacy_version() {
+        let (env, client, _token, admin) = setup_test_env();
+
+        env.as_contract(&client.address, || {
+            env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
+        });
+
+        client.migrate_schema(&admin);
+
+        let version: u32 = env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::SchemaVersion)
+                .expect("schema_version must be present after migration")
+        });
+        assert_eq!(version, crate::STORAGE_VERSION);
+
+        let events = env.events().all();
+        assert!(events.iter().any(|event| {
+            Symbol::from_val(&env, &event.1.get(0).expect("missing topic 0"))
+                == Symbol::new(&env, "schema_migrated")
+        }), "schema_migrated event must be emitted on upgrade");
     }
 
     // -------------------------------------------------------------------------
@@ -8842,4 +8917,249 @@ fn test_usage_no_limits_configured_is_passthrough() {
         let r = client.charge_usage_with_reference(&id, &100_000, &reference);
         assert_eq!(r, crate::UsageChargeResult::Charged);
     }
+}
+
+// ── Schema Migration Tests ────────────────────────────────────────────────────
+//
+// Covers the `migrate` entrypoint and the underlying `do_migrate` logic.
+// Requirements from issue #435:
+//   - init must write DataKey::SchemaVersion
+//   - downgrade (stored > binary) is rejected
+//   - same-version call is a no-op success (no event emitted)
+//   - forward upgrade writes new version and emits SchemaMigratedEvent
+//   - non-admin caller is rejected
+
+/// Helper: read the on-chain SchemaVersion directly from instance storage.
+fn read_schema_version(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::SchemaVersion)
+            .unwrap_or(0)
+    })
+}
+
+/// Helper: forcibly overwrite SchemaVersion in storage (for downgrade/upgrade tests).
+fn write_schema_version(env: &Env, contract_id: &Address, version: u32) {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
+    });
+}
+
+/// Helper: check whether any event in `events` has the given symbol as its first topic.
+fn has_event_with_symbol(env: &Env, events: &soroban_sdk::Vec<(Address, soroban_sdk::Vec<Val>, Val)>, sym_name: &str) -> bool {
+    let target = Symbol::new(env, sym_name);
+    for (_, topics, _) in events.iter() {
+        if let Some(first) = topics.get(0) {
+            if Symbol::from_val(env, &first) == target {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[test]
+fn test_init_writes_schema_version() {
+    // After init, DataKey::SchemaVersion must equal STORAGE_VERSION (2).
+    let (env, client, _token, _admin) = setup_test_env();
+    let version = read_schema_version(&env, &client.address);
+    assert_eq!(version, 2, "init must write SchemaVersion = STORAGE_VERSION");
+}
+
+#[test]
+fn test_migrate_same_version_is_noop_success() {
+    // Calling migrate when stored == binary must return Ok and emit no event.
+    let (env, client, _token, admin) = setup_test_env();
+
+    // Confirm version is already 2.
+    assert_eq!(read_schema_version(&env, &client.address), 2);
+
+    // migrate should succeed silently.
+    let result = client.try_migrate(&admin);
+    assert!(result.is_ok(), "same-version migrate must be Ok");
+
+    // Version must remain unchanged.
+    assert_eq!(read_schema_version(&env, &client.address), 2);
+
+    // No schema_migrated event should have been emitted (env.events().all()
+    // returns only events from the most recent invocation).
+    let events = env.events().all();
+    assert!(
+        !has_event_with_symbol(&env, &events, "schema_migrated"),
+        "no schema_migrated event should be emitted for a no-op migration"
+    );
+}
+
+#[test]
+fn test_migrate_downgrade_is_rejected() {
+    // If stored version > binary version, migrate must return SchemaMigrationDowngrade.
+    let (env, client, _token, admin) = setup_test_env();
+
+    // Simulate a future on-chain version (e.g. 99) that is newer than the binary.
+    write_schema_version(&env, &client.address, 99);
+    assert_eq!(read_schema_version(&env, &client.address), 99);
+
+    let result = client.try_migrate(&admin);
+    assert_eq!(
+        result,
+        Err(Ok(Error::SchemaMigrationDowngrade)),
+        "downgrade must be rejected with SchemaMigrationDowngrade"
+    );
+
+    // Version must remain unchanged after rejection.
+    assert_eq!(read_schema_version(&env, &client.address), 99);
+}
+
+#[test]
+fn test_migrate_non_admin_is_rejected() {
+    // A non-admin caller must be rejected with Unauthorized.
+    let (env, client, _token, _admin) = setup_test_env();
+    let non_admin = Address::generate(&env);
+
+    let result = client.try_migrate(&non_admin);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "non-admin migrate must be rejected with Unauthorized"
+    );
+}
+
+#[test]
+fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
+    // Simulate a contract deployed before init wrote SchemaVersion (stored = 0)
+    // being upgraded to binary version 2.
+    let (env, client, _token, admin) = setup_test_env();
+
+    // Patch stored version to 0 to simulate a pre-migration deployment.
+    write_schema_version(&env, &client.address, 0);
+    assert_eq!(read_schema_version(&env, &client.address), 0);
+
+    // Run migration.
+    let result = client.try_migrate(&admin);
+    assert!(result.is_ok(), "forward migration must succeed");
+
+    // Version must now equal STORAGE_VERSION (2).
+    assert_eq!(
+        read_schema_version(&env, &client.address),
+        2,
+        "stored version must equal STORAGE_VERSION after migration"
+    );
+
+    // A schema_migrated event must have been emitted.
+    let events = env.events().all();
+    assert!(
+        has_event_with_symbol(&env, &events, "schema_migrated"),
+        "schema_migrated event must be emitted after a forward upgrade"
+    );
+}
+
+#[test]
+fn test_migrate_forward_from_version_1_to_2() {
+    // Simulate upgrade from version 1 → 2.
+    let (env, client, _token, admin) = setup_test_env();
+
+    write_schema_version(&env, &client.address, 1);
+    assert_eq!(read_schema_version(&env, &client.address), 1);
+
+    let result = client.try_migrate(&admin);
+    assert!(result.is_ok(), "v1 → v2 migration must succeed");
+    assert_eq!(read_schema_version(&env, &client.address), 2);
+}
+
+#[test]
+fn test_migrate_is_idempotent_after_forward_upgrade() {
+    // After a successful forward migration, calling migrate again must be a no-op.
+    let (env, client, _token, admin) = setup_test_env();
+
+    // First call: forward upgrade from 0 → 2.
+    write_schema_version(&env, &client.address, 0);
+    client.migrate(&admin);
+    assert_eq!(read_schema_version(&env, &client.address), 2);
+
+    // Second call: already at version 2, must be a no-op.
+    let result = client.try_migrate(&admin);
+    assert!(result.is_ok(), "second migrate call must be a no-op success");
+    assert_eq!(read_schema_version(&env, &client.address), 2);
+}
+
+#[test]
+fn test_migrate_does_not_affect_subscriptions() {
+    // Running migrate must not alter any subscription state.
+    let (env, client, token, admin) = setup_test_env();
+
+    // Create a subscription and record its state.
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_client.mint(&subscriber, &PREPAID);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    client.deposit_funds(&id, &subscriber, &PREPAID);
+    let before = client.get_subscription(&id);
+
+    // Simulate a forward migration.
+    write_schema_version(&env, &client.address, 0);
+    client.migrate(&admin);
+
+    // Subscription must be unchanged.
+    let after = client.get_subscription(&id);
+    assert_eq!(before.status, after.status);
+    assert_eq!(before.prepaid_balance, after.prepaid_balance);
+    assert_eq!(before.amount, after.amount);
+    assert_eq!(before.interval_seconds, after.interval_seconds);
+}
+
+#[test]
+fn test_migrate_event_fields_are_correct() {
+    // Verify the SchemaMigratedEvent fields: from_version, to_version, admin, timestamp.
+    let (env, client, _token, admin) = setup_test_env();
+
+    let ts: u64 = 1_234_567;
+    env.ledger().with_mut(|li| li.timestamp = ts);
+
+    // Patch to version 1 so a real migration fires.
+    write_schema_version(&env, &client.address, 1);
+    client.migrate(&admin);
+
+    // Find the schema_migrated event and decode its data payload.
+    let events = env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        if let Some(first) = topics.get(0) {
+            if Symbol::from_val(&env, &first) == Symbol::new(&env, "schema_migrated") {
+                let evt: crate::SchemaMigratedEvent = FromVal::from_val(&env, &data);
+                assert_eq!(evt.from_version, 1, "from_version must be 1");
+                assert_eq!(evt.to_version, 2, "to_version must be STORAGE_VERSION (2)");
+                assert_eq!(evt.admin, admin, "event admin must match caller");
+                assert_eq!(evt.timestamp, ts, "event timestamp must match ledger");
+                found = true;
+            }
+        }
+    }
+    assert!(found, "schema_migrated event must be present");
+}
+
+#[test]
+fn test_migrate_downgrade_does_not_emit_event() {
+    // A rejected downgrade must not emit any schema_migrated event.
+    let (env, client, _token, admin) = setup_test_env();
+
+    write_schema_version(&env, &client.address, 99);
+    let _ = client.try_migrate(&admin);
+
+    let events = env.events().all();
+    assert!(
+        !has_event_with_symbol(&env, &events, "schema_migrated"),
+        "no schema_migrated event must be emitted on a rejected downgrade"
+    );
 }

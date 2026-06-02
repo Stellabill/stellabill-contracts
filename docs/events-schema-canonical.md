@@ -509,6 +509,20 @@ Emitted when subscriptions are exported via `export_subscription_summaries()`.
 
 ---
 
+### SchemaMigratedEvent
+
+**Topic:** `("schema_migrated",)`
+
+Emitted when the contract schema is upgraded via `migrate_schema()`.
+
+**Fields:**
+- `from`: u32 — previous stored schema version
+- `to`: u32 — new schema version
+- `admin`: Address
+- `timestamp`: u64
+
+---
+
 ## Security Considerations
 
 ### No Sensitive Data in Events
