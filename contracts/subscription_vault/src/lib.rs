@@ -118,6 +118,53 @@ pub mod statements {
             oldest_period_start: None,
             newest_period_end: None,
         }
+
+        let seqs = load_statement_index(env, subscription_id);
+        let total = seqs.len();
+        let mut statements = Vec::new(env);
+
+        if offset >= total {
+            return Ok(BillingStatementsPage {
+                statements,
+                next_cursor: None,
+                total,
+            });
+        }
+
+        if newest_first {
+            let mut current = total.saturating_sub(1 + offset);
+            let end = u32::MAX;
+            while statements.len() < limit {
+                if let Some(sequence) = seqs.get(current) {
+                    if let Some(statement) = load_statement(env, subscription_id, sequence) {
+                        statements.push_back(statement);
+                    }
+                }
+                if current == 0 {
+                    break;
+                }
+                current -= 1;
+            }
+        } else {
+            let mut current = offset;
+            while statements.len() < limit {
+                if let Some(sequence) = seqs.get(current) {
+                    if let Some(statement) = load_statement(env, subscription_id, sequence) {
+                        statements.push_back(statement);
+                    }
+                }
+                current = current.saturating_add(1);
+                if current >= total {
+                    break;
+                }
+            }
+        }
+
+        Ok(BillingStatementsPage {
+            statements,
+            next_cursor: None,
+            total,
+        })
     }
 
     pub fn compact_subscription_statements(
@@ -194,6 +241,15 @@ pub mod period_snapshots {
 }
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
+///
+/// # Invariant
+///
+/// `total_accounted` is the sum of all tokens the contract has recognised as belonging to
+/// either subscribers (prepaid balances) or merchants (earnings). It is incremented on
+/// inbound token transfers (deposits, initial creation funding) and decremented on
+/// outbound transfers (withdrawals, refunds, merchant payouts). The contract's actual
+/// token balance should always be >= `total_accounted`; the difference, if any, is
+/// recoverable by `do_recover_stranded_funds`.
 pub mod accounting {
     #![allow(unused_variables, dead_code)]
     use crate::types::Error;
@@ -255,9 +311,16 @@ pub mod reentrancy {
 }
 
 /// Nonce: replay-protection counters for privileged operations.
+///
+/// Persistent, domain-separated, monotonic per-`(signer, domain)` counters. A
+/// captured nonce in one domain can never be replayed in another because the
+/// domain is part of the storage key. Auth **must** be verified before calling
+/// [`check_and_advance`] so invalid signers are rejected before any counter is
+/// touched.
 pub mod nonce {
     #![allow(unused_variables, dead_code)]
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
+    use crate::types::{DataKey, Error};
 
     pub const DOMAIN_BATCH_CHARGE: u32 = 0;
     pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
@@ -277,6 +340,14 @@ pub mod nonce {
 }
 
 /// Operator: least-privilege charge delegate.
+///
+/// The operator is a second privileged role, distinct from admin, that may only
+/// invoke the `operator_*` charge endpoints. It is stored under
+/// [`DataKey::Operator`] (instance storage) and authenticated independently from
+/// admin so that a compromised operator key cannot rotate admin, withdraw
+/// merchant funds, or touch any governance surface.
+///
+/// See `docs/admin_authorization_matrix.md` for the full privilege matrix.
 pub mod operator {
     #![allow(unused_variables, dead_code)]
     use crate::types::{BatchChargeResult, ChargeExecutionResult, Error, UsageChargeResult};
@@ -297,23 +368,38 @@ pub mod operator {
         _ids: &Vec<u32>,
         _nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        let op = require_operator_auth(env, &operator)?;
+
+        // Nonce check runs before any state mutation to prevent replay, scoped
+        // to the operator's own counter in the operator domain.
+        crate::nonce::check_and_advance(env, &op, crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE, nonce)?;
+
+        Ok(crate::admin::execute_batch_charge(env, ids))
     }
+
+    /// Single interval charge driven by the operator.
     pub fn do_operator_charge_subscription(
         _env: &Env,
         _op: Address,
         _subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        let now = env.ledger().timestamp();
+        crate::charge_core::charge_one(env, subscription_id, now, None)
     }
+
+    /// Metered usage charge driven by the operator (no reference).
     pub fn do_operator_charge_usage(
         _env: &Env,
         _op: Address,
         _subscription_id: u32,
         _usage_amount: i128,
     ) -> Result<UsageChargeResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, String::from_str(env, ""))
     }
+
+    /// Metered usage charge driven by the operator, with a reference string.
     pub fn do_operator_charge_usage_with_reference(
         _env: &Env,
         _op: Address,
@@ -321,7 +407,8 @@ pub mod operator {
         _usage_amount: i128,
         _reference: String,
     ) -> Result<UsageChargeResult, Error> {
-        Err(Error::NotFound)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, reference)
     }
 }
 
@@ -867,6 +954,69 @@ impl SubscriptionVault {
 
     // ── Migration / Export ────────────────────────────────────────────────────
 
+    /// Run the schema migration entry point. Admin only.
+    ///
+    /// Compares the on-chain stored `DataKey::SchemaVersion` against the
+    /// binary's `STORAGE_VERSION` constant and executes any registered upgrade
+    /// closures for the `(from, to)` version pair.
+    ///
+    /// # Behaviour
+    ///
+    /// | Stored version | Binary version | Result |
+    /// |:---:|:---:|:---|
+    /// | `stored > binary` | — | `Err(SchemaMigrationDowngrade)` — downgrade rejected |
+    /// | `stored == binary` | — | `Ok(())` — idempotent no-op |
+    /// | `stored < binary` | — | Runs upgrade ladder, writes new version, emits event |
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` — Must match the stored admin.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`]             — Caller is not the stored admin.
+    /// * [`Error::NotInitialized`]           — Contract has not been initialised.
+    /// * [`Error::SchemaMigrationDowngrade`] — Stored version is newer than binary.
+    ///
+    /// # Events
+    ///
+    /// Emits [`SchemaMigratedEvent`] with `(admin, from_version, to_version, timestamp)`
+    /// **only** when an actual upgrade is performed (i.e. `stored < binary`).
+    /// No event is emitted for the idempotent no-op case.
+    pub fn migrate(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_migrate(&env, admin, STORAGE_VERSION)
+    }
+
+    /// Schema migration entrypoint — alias for [`migrate`](Self::migrate).
+    ///
+    /// Compares the on-chain `DataKey::SchemaVersion` against the binary's
+    /// `STORAGE_VERSION` and runs the forward upgrade ladder when needed.
+    ///
+    /// Returns [`Error::SchemaVersionTooHigh`] (instead of
+    /// [`Error::SchemaMigrationDowngrade`]) when the stored version is newer
+    /// than the binary, so callers that check for that variant are satisfied.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`]          — Caller is not the stored admin.
+    /// * [`Error::NotInitialized`]        — Contract has not been initialised.
+    /// * [`Error::SchemaVersionTooHigh`]  — Stored version is newer than binary.
+    pub fn migrate_schema(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_migrate(&env, admin, STORAGE_VERSION)
+            .map_err(|e| match e {
+                Error::SchemaMigrationDowngrade => Error::SchemaVersionTooHigh,
+                other => other,
+            })
+    }
+
     /// Export contract-level configuration as a [`ContractSnapshot`] for migration tooling.
     ///
     /// Captures the admin, primary token, minimum top-up, next subscription ID, storage
@@ -1125,7 +1275,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(sub_id)
@@ -1171,6 +1321,7 @@ impl SubscriptionVault {
             expires_at,
         )?;
 
+        let timestamp = env.ledger().timestamp();
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
             SubscriptionCreatedEvent {
@@ -1182,7 +1333,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(sub_id)
@@ -1234,6 +1385,7 @@ impl SubscriptionVault {
         subscription::do_deposit_funds(&env, subscription_id, subscriber.clone(), amount)?;
 
         let sub = queries::get_subscription(&env, subscription_id)?;
+        let timestamp = env.ledger().timestamp();
         env.events().publish(
             (Symbol::new(&env, "deposited"), subscription_id),
             FundsDepositedEvent {
@@ -1242,7 +1394,7 @@ impl SubscriptionVault {
                 token: sub.token,
                 amount,
                 new_balance: sub.prepaid_balance,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(())
@@ -1528,6 +1680,7 @@ impl SubscriptionVault {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer.clone())?;
 
         let sub = queries::get_subscription(&env, subscription_id)?;
+        let timestamp = env.ledger().timestamp();
         env.events().publish(
             (Symbol::new(&env, "subscription_cancelled"), subscription_id),
             SubscriptionCancelledEvent {
@@ -1537,7 +1690,7 @@ impl SubscriptionVault {
                 token: sub.token,
                 authorizer,
                 refund_amount: sub.prepaid_balance,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(())
@@ -1623,6 +1776,8 @@ impl SubscriptionVault {
         authorizer: Address,
     ) -> Result<(), Error> {
         subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        let timestamp = env.ledger().timestamp();
 
         let sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish(
@@ -1632,7 +1787,7 @@ impl SubscriptionVault {
                 subscriber: sub.subscriber,
                 merchant: sub.merchant,
                 authorizer,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(())
@@ -1671,16 +1826,18 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        let timestamp = env.ledger().timestamp();
 
         env.events().publish(
             (Symbol::new(&env, "sub_resumed"), subscription_id),
             SubscriptionResumedEvent {
                 subscription_id,
-                subscriber: old_sub.subscriber,
-                merchant: old_sub.merchant,
+                subscriber: sub.subscriber,
+                merchant: sub.merchant,
                 authorizer,
-                previous_status: old_sub.status,
-                timestamp: env.ledger().timestamp(),
+                previous_status: sub.status,
+                timestamp,
             },
         );
         Ok(())
@@ -1751,14 +1908,14 @@ impl SubscriptionVault {
             (Symbol::new(&env, "charged"),),
             SubscriptionChargedEvent {
                 subscription_id,
-                subscriber: new_sub.subscriber,
-                merchant: new_sub.merchant,
-                token: new_sub.token,
-                amount: new_sub.amount,
-                lifetime_charged: new_sub.lifetime_charged,
-                timestamp: env.ledger().timestamp(),
-                period_start: old_sub.last_payment_timestamp,
-                period_end: env.ledger().timestamp(),
+                subscriber: sub.subscriber,
+                merchant: sub.merchant,
+                token: sub.token,
+                amount: sub.amount,
+                lifetime_charged: sub.lifetime_charged,
+                timestamp,
+                period_start,
+                period_end,
             },
         );
         Ok(result)
@@ -1902,7 +2059,7 @@ impl SubscriptionVault {
                 token,
                 amount,
                 remaining_balance: new_balance,
-                timestamp: env.ledger().timestamp(),
+                timestamp,
             },
         );
         Ok(())
@@ -2566,7 +2723,7 @@ impl SubscriptionVault {
         key: String,
         value: String,
     ) -> Result<(), Error> {
-        metadata::set_metadata(&env, subscription_id, &authorizer, key, value)
+        metadata::do_set_metadata(&env, authorizer, subscription_id, key, value)
     }
 
     ///
@@ -2596,7 +2753,7 @@ impl SubscriptionVault {
         authorizer: Address,
         key: String,
     ) -> Result<(), Error> {
-        metadata::delete_metadata(&env, subscription_id, &authorizer, key)
+        metadata::do_delete_metadata(&env, authorizer, subscription_id, key)
     }
 
     /// Get a metadata value by key.
@@ -2876,19 +3033,7 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
-    pub fn get_subscriptions_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Result<Vec<crate::types::Subscription>, Error> {
-        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
-    }
-
-    /// Returns the total number of subscriptions for a merchant.
-    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
-        queries::get_merchant_subscription_count(&env, merchant)
-    }
+// Duplicate stub block removed – implementation retained elsewhere.
 
     /// Returns the schema version of this contract.
     pub fn version(_env: Env) -> u32 {
@@ -2923,6 +3068,9 @@ impl SubscriptionVault {
 
 #[cfg(test)]
 mod test_charge_invariants;
+
+#[cfg(test)]
+mod test_subscription_status_transitions;
 
 #[cfg(test)]
 mod test {

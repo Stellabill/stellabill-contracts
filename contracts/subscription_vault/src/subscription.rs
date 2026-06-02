@@ -140,7 +140,7 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
-        .extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        .extend_ttl(key, SUB_TTL_THRESHOLD.try_into().unwrap(), SUB_TTL_EXTEND_TO.try_into().unwrap());
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
@@ -540,6 +540,7 @@ pub fn do_deposit_funds(
         && sub.prepaid_balance >= sub.amount
     {
         sub.status = SubscriptionStatus::Active;
+        sub.grace_start_timestamp = None;
         write_subscription(env, subscription_id, &sub);
 
         env.events().publish(
