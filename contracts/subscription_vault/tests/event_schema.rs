@@ -26,8 +26,7 @@ fn test_nonce_consumed_and_admin_rotated_event_topics_and_shapes() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    let min_topup: i128 = 1_000_000;
-    let grace_period: u64 = 3600;
+    client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
 
     client.init(&token_address, &7u32, &admin, &min_topup, &grace_period);
 

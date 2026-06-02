@@ -540,6 +540,7 @@ pub fn do_deposit_funds(
         && sub.prepaid_balance >= sub.amount
     {
         sub.status = SubscriptionStatus::Active;
+        sub.grace_start_timestamp = None;
         write_subscription(env, subscription_id, &sub);
 
         env.events().publish(
