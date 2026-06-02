@@ -140,7 +140,7 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
-        .extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        .extend_ttl(key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
@@ -361,9 +361,8 @@ pub fn do_create_subscription_with_token(
 ) -> Result<u32, Error> {
     subscriber.require_auth();
 
-    if crate::blocklist::is_blocklisted(env, &subscriber) {
-        return Err(Error::SubscriberBlocklisted);
-    }
+    crate::blocklist::require_not_blocklisted(env, &subscriber)?;
+    crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
     if amount < 0 {
         return Err(Error::InvalidAmount);
@@ -481,6 +480,8 @@ pub fn do_deposit_funds(
         return Err(Error::Unauthorized);
     }
 
+    crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
+
     // Block deposits to subscriptions whose merchant is paused — paused
     // merchants must not accumulate new subscriber funds.
     if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
@@ -540,6 +541,7 @@ pub fn do_deposit_funds(
         && sub.prepaid_balance >= sub.amount
     {
         sub.status = SubscriptionStatus::Active;
+        sub.grace_start_timestamp = None;
         write_subscription(env, subscription_id, &sub);
 
         env.events().publish(
@@ -586,10 +588,29 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
+    // Reject double-cancellation of an already Cancelled subscription.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+
     transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
 
+    // EFFECTS: zero balance before external token transfer (CEI pattern).
+    sub.prepaid_balance = 0;
+    let token_addr = sub.token.clone();
     write_subscription(env, subscription_id, &sub);
+
+    // INTERACTIONS: transfer remaining prepaid balance to subscriber.
+    if refund_amount > 0 {
+        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &sub.subscriber,
+            &refund_amount,
+        );
+        crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
+    }
 
     // Remove from index
     let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
@@ -727,10 +748,9 @@ pub fn do_resume_subscription(
         return Err(Error::InsufficientBalance);
     }
 
+    let previous_status = sub.status;
     transition_to(&mut sub.status, SubscriptionStatus::Active)?;
 
-    let previous_status = sub.status;
-    sub.status = SubscriptionStatus::Active;
     write_subscription(env, subscription_id, &sub);
 
      env.events().publish(
@@ -760,6 +780,9 @@ pub fn do_charge_one_off(
     merchant.require_auth();
 
     let mut sub = get_subscription(env, subscription_id)?;
+
+    crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
+    crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
 
     let now = env.ledger().timestamp();
     // Expiration guard

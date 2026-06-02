@@ -1,5 +1,56 @@
 # Subscription Vault — Prepaid & Deposit Flow
 
+## Deposit Flow Security & Atomicity
+
+The `deposit_funds` flow is **atomic by construction**: if the token transfer fails for any
+reason (insufficient balance, transfer error, etc.), Soroban's transactional semantics abort
+the entire host call, reverting **both** the `prepaid_balance` update and the token transfer.
+There is no intermediate state where the balance changed but tokens did not move.
+
+### Invariants Guaranteed
+
+| Invariant | Mechanism | Test Coverage |
+|-----------|-----------|---------------|
+| **No state change on insufficient balance** | `prepaid_balance` is written to storage _before_ `token.transfer`; Soroban rollback on transfer failure leaves state unchanged | `test_deposit_insufficient_token_balance_reverts`, `test_deposit_insufficient_partial_balance_reverts` |
+| **Credit limit enforced before mutation** | `enforce_credit_limit_for_delta` scans aggregate subscriber exposure and rejects deposits that would exceed the configured limit before any state write | `test_deposit_rejected_when_credit_limit_exceeded`, `test_deposit_allowed_within_credit_limit`, `test_deposit_credit_limit_aggregate_two_subs` |
+| **CEI pattern** | Checks → Effects (`prepaid_balance += amount`) → Interactions (`token.transfer`) | All deposit-flow tests in `test_insufficient_balance.rs` and `test_reentrancy_invariants.rs` |
+| **Reentrancy guard** | `ReentrancyGuard` acquired at entry-point prevents recursive deposit calls | `test_reentrancy_guard_lock_is_released_after_operation` |
+| **Lifetime cap gating** | `enforce_deposit_cap` rejects deposits that would lock funds beyond remaining chargeable capacity | `test_deposit_failure_leaves_state_unchanged` |
+| **Overflow protection** | `safe_add_balance` enforces `checked_add` + non-negative validation | N/A (arithmetic property) |
+| **Accounting mirror** | `add_total_accounted` incremented after each transfer = vault can reconcile `contract_balance == accounted + merchant_earnings` | N/A (reconciliation query) |
+
+### Atomicity Proof (Sequence Diagram)
+
+```
+deposit_funds(id, subscriber, amount)
+  │
+  ├─ CHECK: subscriber.require_auth()
+  ├─ CHECK: amount >= min_topup
+  ├─ CHECK: subscription exists & active
+  ├─ CHECK: credit_limit(enforce_credit_limit_for_delta)
+  ├─ CHECK: enforce_deposit_cap (lifetime cap guard)
+  │
+  ├─ EFFECT: prepaid_balance += amount        ◄── persisted to storage
+  ├─ EFFECT: write_subscription(state)        ◄── committed on-ledger
+  │
+  ├─ INTERACT: token.transfer(sub → vault)    ◄── if this FAILS → Soroban ROLLS BACK
+  │                                              both the effect AND the interaction
+  └─ INTERACT: add_total_accounted(token, amt)
+```
+
+**Key insight**: Because effects are written to storage _before_ the external call, a failure
+during the token transfer causes the entire transaction to revert. The `prepaid_balance` is
+never visible in a partially-updated state — it either committed together with the transfer
+or not at all.
+
+### Test Coverage
+
+All deposit atomicity and credit-limit invariants are validated in:
+- `test_insufficient_balance.rs` — 5 tests covering insufficient balance, credit limit enforcement, and aggregate exposure
+- `test_reentrancy_invariants.rs` — CEI pattern, guard lifecycle, and emergency path tests
+
+---
+
 This contract manages prepaid balances for subscriptions. Funds enter the vault in two ways:
 
 1. **`create_subscription`** — initial pull of the first interval amount during subscription creation.

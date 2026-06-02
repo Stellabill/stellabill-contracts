@@ -23,7 +23,6 @@ The following operations remain available during an active emergency stop to ens
 | `pause_subscription` / `resume_subscription` | State management; no fund movement |
 | `withdraw_subscriber_funds` | Subscribers can reclaim prepaid balance from cancelled subscriptions |
 | `withdraw_merchant_funds` / `withdraw_merchant_token_funds` | Merchants can collect already-earned balances |
-| `partial_refund` | Admin can issue refunds during the stop |
 
 This ensures that even under a prolonged emergency stop, no party is permanently locked out of their funds.
 
@@ -129,6 +128,7 @@ These operations will fail with `Error::EmergencyStopActive` (1009):
 | Charge Usage (Reference) | `charge_usage_with_reference` | Usage-based billing with caller-supplied reference/idempotency key |
 | One-off Charge | `charge_one_off` | Merchant-triggered ad-hoc prepaid debits |
 | Batch Charge | `batch_charge` | Bulk subscription charging |
+| Partial Refund | `partial_refund` | Admin-authorized partial refunds against prepaid balances |
 
 ### Allowed Operations (No Financial Risk)
 

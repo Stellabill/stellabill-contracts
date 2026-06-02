@@ -39,7 +39,7 @@ fn test_multi_actor_e2e_flow() {
     token_admin_client.mint(&subscriber, &initial_mint);
 
     // Deploy and Init Vault
-    let vault_id = env.register_contract(None, SubscriptionVault);
+    let vault_id = env.register(SubscriptionVault, ());
     let vault = SubscriptionVaultClient::new(&env, &vault_id);
 
     let min_topup = 1_000_000; // 0.1 tokens
@@ -63,13 +63,14 @@ fn test_multi_actor_e2e_flow() {
     let interval_seconds = 30 * 24 * 60 * 60; // 30 days
     let usage_enabled = false;
 
-    let sub_id = vault.create_subscription(
+    let sub_id =     vault.create_subscription(
         &subscriber,
         &merchant,
         &amount,
         &interval_seconds,
         &usage_enabled,
         &None,
+        &None::<u64>,
     );
 
     let sub_state = vault.get_subscription(&sub_id);
@@ -114,21 +115,28 @@ fn test_multi_actor_e2e_flow() {
     assert_eq!(vault.get_merchant_balance(&merchant), 2 * amount - partial_withdraw);
     assert_eq!(token.balance(&vault_id), deposit_amount - partial_withdraw);
 
-    // Step 5: `cancel_subscription` & Refund Routing
+    // Step 5: `cancel_subscription` — automatically refunds remaining prepaid balance
+    let subscriber_balance_before_cancel = token.balance(&subscriber);
+    let vault_balance_before_cancel = token.balance(&vault_id);
+    let sub_before_cancel = vault.get_subscription(&sub_id);
+    let expected_refund = sub_before_cancel.prepaid_balance;
+
     vault.cancel_subscription(&sub_id, &subscriber);
 
     let sub_state = vault.get_subscription(&sub_id);
     assert_eq!(sub_state.status, SubscriptionStatus::Cancelled);
+    assert_eq!(sub_state.prepaid_balance, 0);
 
-    let remaining_prepaid = sub_state.prepaid_balance;
-    let pre_withdraw_subscriber_balance = token.balance(&subscriber);
-    
-    vault.withdraw_subscriber_funds(&sub_id, &subscriber);
-
-    assert_eq!(token.balance(&subscriber), pre_withdraw_subscriber_balance + remaining_prepaid);
-    
-    let sub_state_after_withdraw = vault.get_subscription(&sub_id);
-    assert_eq!(sub_state_after_withdraw.prepaid_balance, 0);
+    // Subscriber received the refund
+    assert_eq!(
+        token.balance(&subscriber),
+        subscriber_balance_before_cancel + expected_refund
+    );
+    // Vault no longer holds the refunded amount
+    assert_eq!(
+        token.balance(&vault_id),
+        vault_balance_before_cancel - expected_refund
+    );
     
     // Vault balance should now exactly match the merchant's unwithdrawn funds
     assert_eq!(token.balance(&vault_id), vault.get_merchant_balance(&merchant));

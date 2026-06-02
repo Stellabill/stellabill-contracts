@@ -23,7 +23,7 @@
 //! - Out-of-order submission is rejected: only the exact stored value is accepted.
 
 use soroban_sdk::{Address, Env};
-use crate::types::{DataKey, Error};
+use crate::types::{DataKey, Error, NonceConsumedEvent};
 
 /// Domain constant for batch charge operations.
 /// Prevents replay of batch_charge nonces into rotate_admin and vice versa.
@@ -34,17 +34,6 @@ pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
 
 /// Domain constant for operator batch charge operations.
 pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
-
-/// Event emitted when a nonce is successfully consumed.
-///
-/// Published to enable off-chain indexing and audit trails.
-#[derive(Clone)]
-pub struct NonceConsumedEvent {
-    pub signer: Address,
-    pub domain: u32,
-    pub nonce: u64,
-    pub timestamp: u64,
-}
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///
@@ -95,7 +84,7 @@ pub fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
 ///
 /// Auth check **must** run before calling this function. Invalid signers are rejected
 /// before the nonce counter is touched, preventing auth bypass via nonce manipulation.
-pub fn consume_nonce(
+pub fn check_and_advance(
     env: &Env,
     signer: &Address,
     domain: u32,
