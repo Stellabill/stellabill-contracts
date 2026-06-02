@@ -229,6 +229,14 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Archived => Symbol::new(env, "archived"),
     };
 
+    let grace_deadline = if subscription.status == SubscriptionStatus::GracePeriod {
+        subscription
+            .grace_start_timestamp
+            .map(|start| start.saturating_add(crate::admin::get_grace_period(env).unwrap_or(0)))
+    } else {
+        None
+    };
+
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,
@@ -236,6 +244,7 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         reason,
         amount: subscription.amount,
         token: subscription.token.clone(),
+        grace_deadline,
     }
 }
 
