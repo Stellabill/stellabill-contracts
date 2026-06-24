@@ -119,10 +119,9 @@ pub(crate) const MAX_WRITE_PATH_SCAN_DEPTH: u32 = 5_000;
 
 #[allow(dead_code)]
 pub fn next_id(env: &Env) -> u32 {
-    let storage = env.storage().instance();
-    let id: u32 = storage.get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     let next = id.checked_add(1).unwrap_or(id);
-    storage.set(&DataKey::NextId, &next);
+    crate::admin::write_config(env, &DataKey::NextId, &next);
     id
 }
 
@@ -182,7 +181,7 @@ fn count_active_subscriptions_for_plan(
     subscriber: &Address,
     plan_template_id: u32,
 ) -> Result<u32, Error> {
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs to prevent
     // excessive storage reads in high-volume contracts.
@@ -264,7 +263,7 @@ fn compute_subscriber_exposure(
     subscriber: &Address,
     token: &Address,
 ) -> Result<i128, Error> {
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs.
     if next_id > MAX_WRITE_PATH_SCAN_DEPTH {
@@ -410,13 +409,13 @@ pub fn do_create_subscription_with_token(
     };
 
     // Allocate ID with overflow / limit guard.
-    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
     let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
 
-    env.storage().instance().set(&DataKey::NextId, &next_id);
+    crate::admin::write_config(env, &DataKey::NextId, &next_id);
     write_subscription(env, id, &sub);
 
     // Maintain merchant -> subscription-ID index
@@ -1233,7 +1232,7 @@ pub fn do_update_subscription_cap(
     write_subscription(env, subscription_id, &sub);
 
     // Get admin address for event, fallback to a zero-address if not set
-    let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
+    let admin_addr = crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
     
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
@@ -1372,9 +1371,9 @@ pub fn do_create_subscription_from_plan(
     // Enforce per-plan concurrency limit for this subscriber/plan pair.
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
-    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
-    env.storage().instance().set(&DataKey::NextId, &next_id);
+    crate::admin::write_config(env, &DataKey::NextId, &next_id);
 
     let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
     let sub = Subscription {
