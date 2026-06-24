@@ -117,8 +117,7 @@ pub mod statements {
 pub mod period_snapshots {
     #![allow(unused_variables, dead_code)]
     use crate::types::{
-        BillingPeriodSnapshot, DataKey, Error, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
+        BillingPeriodSnapshot, Error,
     };
     use soroban_sdk::Env;
 
@@ -246,7 +245,7 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        Ok(Vec::new(env))
     }
 
     /// Single interval charge driven by the operator.

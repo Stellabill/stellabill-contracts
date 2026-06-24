@@ -9,7 +9,7 @@
 //! confirming the Checks-Effects-Interactions pattern is followed.
 
 use crate::{
-    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
+    SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
