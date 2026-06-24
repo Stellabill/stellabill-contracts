@@ -21,7 +21,6 @@ mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-pub mod period_snapshots;
 
 pub use safe_math::*;
 
@@ -1913,7 +1912,6 @@ impl SubscriptionVault {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
 
-        let timestamp = env.ledger().timestamp();
         merchant::withdraw_merchant_funds(&env, merchant.clone(), amount)?;
 
         let new_balance = merchant::get_merchant_balance(&env, &merchant);
@@ -2951,6 +2949,8 @@ mod test_charge_invariants;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
+
+#[cfg(test)]
 mod test_insufficient_balance;
 
 #[cfg(test)]
