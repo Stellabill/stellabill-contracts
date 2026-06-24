@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Vec};
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -1562,5 +1562,36 @@ pub struct PrepaidQueryResult {
     pub next_start_id: Option<u32>,
     /// Whether more subscriptions may exist beyond this scan window.
     pub has_more: bool,
+}
+
+// ── Idempotency Key Ring Buffer ─────────────────────────────────────────────
+
+/// Maximum number of idempotency keys retained per subscription.
+pub const IDEM_HISTORY: u32 = 32;
+
+/// Entrypoint domains for idempotency key scoping.
+///
+/// Each entrypoint type uses a unique domain so that the same raw key supplied
+/// to `charge_subscription` vs `deposit_funds` produces a different on-chain
+/// fingerprint and cannot accidentally replay across operations.
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 0;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
+
+/// Ring buffer of recently-seen idempotency key hashes for one subscription.
+///
+/// `DataKey::IdemKey(subscription_id)` stores this structure so that the same
+/// caller-supplied key is recognised within `IDEM_HISTORY` consecutive charges
+/// and rejected with `Error::Replay`.
+///
+/// # Eviction
+/// When the buffer is full the next push overwrites the oldest entry (cursor
+/// wraps around). The caller must therefore ensure their retry window does not
+/// exceed `IDEM_HISTORY` operations for a single subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdemRingBuffer {
+    pub entries: Vec<BytesN<32>>,
+    pub cursor: u32,
 }
 

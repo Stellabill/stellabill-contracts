@@ -37,13 +37,10 @@ use crate::subscription::{next_charge_time, write_subscription};
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
     GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
-    UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    UsageLimits, UsageState, UsageStatementEvent,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -122,14 +119,14 @@ pub fn charge_one(
 
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
-        if let Some(stored) = env
-            .storage()
-            .instance()
-            .get::<_, soroban_sdk::BytesN<32>>(&DataKey::IdemKey(subscription_id))
-        {
-            if stored == *k {
-                return Ok(ChargeExecutionResult::Charged);
-            }
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_CHARGE_INTERVAL,
+            subscription_id,
+            k,
+        );
+        if crate::idempotency::check_key(env, subscription_id, &hashed) {
+            return Ok(ChargeExecutionResult::Charged);
         }
     }
 
@@ -273,7 +270,13 @@ pub fn charge_one(
             // Record charged period and optional idempotency key
             storage.set(&DataKey::ChargedPeriod(subscription_id), &period_index);
             if let Some(k) = idempotency_key {
-                storage.set(&DataKey::IdemKey(subscription_id), &k);
+                let hashed = crate::idempotency::hash_idem_key(
+                    env,
+                    crate::types::DOMAIN_CHARGE_INTERVAL,
+                    subscription_id,
+                    &k,
+                );
+                crate::idempotency::push_key(env, subscription_id, &hashed);
             }
 
             env.events().publish(

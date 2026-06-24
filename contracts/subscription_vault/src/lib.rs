@@ -15,6 +15,7 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod idempotency;
 mod merchant;
 mod metadata;
 mod queries;
@@ -113,36 +114,9 @@ pub mod statements {
     }
 }
 
-/// Period snapshots: write billing-period summaries for reconciliation.
-pub mod period_snapshots {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{
-        BillingPeriodSnapshot, DataKey, Error, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
-    };
-    use soroban_sdk::Env;
-
-    pub fn write_period_snapshot(
-        _env: &Env,
-        _snapshot: BillingPeriodSnapshot,
-    ) -> Result<(), Error> {
-        Ok(())
-    }
-    pub fn get_period_snapshot(
-        _env: &Env,
-        _subscription_id: u32,
-        _period_index: u64,
-    ) -> Option<BillingPeriodSnapshot> {
-        None
-    }
-    pub fn list_period_snapshots(
-        _env: &Env,
-        _subscription_id: u32,
-        _limit: u32,
-    ) -> soroban_sdk::Vec<BillingPeriodSnapshot> {
-        soroban_sdk::Vec::new(_env)
-    }
-}
+// ── Period snapshots (stub — separated into own file) ───────────────────────
+// The actual implementation lives in `period_snapshots.rs`.  The module is
+// declared at the top of this file.
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 ///
@@ -246,7 +220,7 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        Ok(Vec::new(env))
     }
 
     /// Single interval charge driven by the operator.
@@ -1213,18 +1187,25 @@ impl SubscriptionVault {
     /// # Events
     ///
     /// Emits [`FundsDepositedEvent`] with `subscription_id`, `amount`, and timestamp.
+    ///
+    /// # Idempotency
+    ///
+    /// When `idem_key` is `Some(key)` and a deposit with the same key has already been
+    /// processed for this subscription, the call is a no-op that returns `Ok(())` without
+    /// modifying state or transferring tokens.
     pub fn deposit_funds(
         env: Env,
         subscription_id: u32,
         subscriber: Address,
         amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
 
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds")?;
 
-        subscription::do_deposit_funds(&env, subscription_id, subscriber.clone(), amount)?;
+        subscription::do_deposit_funds(&env, subscription_id, subscriber.clone(), amount, idem_key)?;
 
         let sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
@@ -1708,18 +1689,25 @@ impl SubscriptionVault {
     /// This function acquires a reentrancy guard to prevent recursive calls during
     /// state mutations. The guard is automatically released (even on error) via the
     /// Drop trait, guaranteeing cleanup.
+    ///
+    /// # Idempotency
+    ///
+    /// When `idem_key` is `Some(key)` and a one-off charge with the same key has already
+    /// been processed for this subscription, the call is a no-op that returns `Ok(())`
+    /// without modifying state.
     pub fn charge_one_off(
         env: Env,
         subscription_id: u32,
         merchant: Address,
         amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
 
         // Acquire reentrancy guard
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_one_off")?;
 
-        subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
+        subscription::do_charge_one_off(&env, subscription_id, merchant, amount, idem_key)
     }
 
     // ── Charging ──────────────────────────────────────────────────────────────
@@ -1736,9 +1724,17 @@ impl SubscriptionVault {
     /// This function acquires a reentrancy guard to prevent recursive calls during
     /// state mutations. The guard is automatically released (even on error) via the
     /// Drop trait, guaranteeing cleanup.
+    /// # Idempotency
+    ///
+    /// When `idem_key` is `Some(key)` and a charge with the same key has already been
+    /// processed for this subscription, the call returns the same `ChargeExecutionResult`
+    /// without modifying state.  The key is domain-separated (scoped to the
+    /// `charge_subscription` entrypoint) so that the same raw key cannot accidentally
+    /// replay across `deposit_funds` or `charge_one_off`.
     pub fn charge_subscription(
         env: Env,
         subscription_id: u32,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
     ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
 
@@ -1749,7 +1745,7 @@ impl SubscriptionVault {
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
         let result =
-            charge_core::charge_one(&env, subscription_id, timestamp, None)?;
+            charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
         let period_start = old_sub.last_payment_timestamp;
@@ -2931,7 +2927,11 @@ mod test_charge_invariants;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
+#[cfg(test)]
 mod test_insufficient_balance;
+
+#[cfg(test)]
+mod test_idempotency_keys;
 
 #[cfg(test)]
 mod test {
