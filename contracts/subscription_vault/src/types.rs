@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -1495,6 +1495,11 @@ pub struct TokenLiabilities {
     pub computed_total: i128,
     /// Whether the accounting equation balances (contract_balance == computed_total).
     pub is_balanced: bool,
+    pub normalized_prepaid: i128,
+    pub normalized_merchant_liab: i128,
+    pub normalized_recoverable: i128,
+    pub normalized_contract_balance: i128,
+    pub normalized_computed_total: i128,
 }
 
 /// Paginated result for reconciliation queries across all tokens.
@@ -1563,4 +1568,65 @@ pub struct PrepaidQueryResult {
     /// Whether more subscriptions may exist beyond this scan window.
     pub has_more: bool,
 }
+
+/// Normalize any token's amount to a 9-decimal base (1e9 internal) using `DataKey::TokenDecimals`.
+///
+/// Returns `Error::InvalidTokenDecimals` if decimals is 0.
+/// Returns `Error::Overflow` on multiplier overflow.
+/// Returns `Error::InvalidInput` on precision loss if decimals > 9.
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals <= 9 {
+        let diff = 9 - decimals;
+        let factor = 10_i128.pow(diff);
+        raw.checked_mul(factor).ok_or(Error::Overflow)
+    } else {
+        let diff = decimals - 9;
+        let factor = 10_i128.pow(diff);
+        if raw % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(raw / factor)
+    }
+}
+
+/// Denormalize any token's amount from a 9-decimal base (1e9 internal) back to its raw decimals.
+///
+/// Returns `Error::InvalidTokenDecimals` if decimals is 0.
+/// Returns `Error::Overflow` on multiplier overflow.
+/// Returns `Error::InvalidInput` on precision loss if decimals < 9.
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals <= 9 {
+        let diff = 9 - decimals;
+        let factor = 10_i128.pow(diff);
+        if normalized % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(normalized / factor)
+    } else {
+        let diff = decimals - 9;
+        let factor = 10_i128.pow(diff);
+        normalized.checked_mul(factor).ok_or(Error::Overflow)
+    }
+}
+
 

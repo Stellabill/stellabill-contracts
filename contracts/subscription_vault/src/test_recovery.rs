@@ -244,6 +244,11 @@ fn test_get_token_reconciliation_empty_contract() {
     assert_eq!(reconciliation.contract_balance, 0);
     assert_eq!(reconciliation.computed_total, 0);
     assert!(reconciliation.is_balanced);
+    assert_eq!(reconciliation.normalized_prepaid, 0);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_contract_balance, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 0);
 }
 
 #[test]
@@ -270,6 +275,12 @@ fn test_get_token_reconciliation_with_prepaid() {
     assert_eq!(reconciliation.recoverable_amount, 0);
     assert_eq!(reconciliation.computed_total, 50_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 50_000_000_000);
 }
 
 #[test]
@@ -298,6 +309,12 @@ fn test_get_token_reconciliation_after_charge() {
     assert_eq!(reconciliation.recoverable_amount, 0);
     assert_eq!(reconciliation.computed_total, 50_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 40_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 10_000_000_000);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 50_000_000_000);
 }
 
 #[test]
@@ -325,6 +342,12 @@ fn test_get_token_reconciliation_with_recoverable() {
     assert_eq!(reconciliation.recoverable_amount, 25_000_000);
     assert_eq!(reconciliation.computed_total, 75_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 75_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 25_000_000_000);
+    assert_eq!(reconciliation.normalized_computed_total, 75_000_000_000);
 }
 
 #[test]
@@ -339,6 +362,8 @@ fn test_get_contract_reconciliation_summary() {
 
     let token_summary = summary.token_summaries.get(0).unwrap();
     assert_eq!(token_summary.token, token_addr);
+    assert_eq!(token_summary.normalized_prepaid, 0);
+    assert_eq!(token_summary.normalized_merchant_liab, 0);
 }
 
 #[test]

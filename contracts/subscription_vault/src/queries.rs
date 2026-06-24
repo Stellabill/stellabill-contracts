@@ -416,6 +416,12 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
 
     let is_balanced = contract_balance == computed_total;
 
+    let normalized_prepaid = crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
+    let normalized_merchant_liab = crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
+    let normalized_recoverable = crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
+    let normalized_contract_balance = crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
+    let normalized_computed_total = crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
+
     TokenLiabilities {
         token,
         total_prepaid,
@@ -424,6 +430,11 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
         contract_balance,
         computed_total,
         is_balanced,
+        normalized_prepaid,
+        normalized_merchant_liab,
+        normalized_recoverable,
+        normalized_contract_balance,
+        normalized_computed_total,
     }
 }
 

@@ -2901,7 +2901,11 @@ mod test_charge_invariants;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
+#[cfg(test)]
 mod test_insufficient_balance;
+
+#[cfg(test)]
+mod test_decimal_normalization;
 
 #[cfg(test)]
 mod test {
