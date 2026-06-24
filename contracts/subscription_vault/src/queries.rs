@@ -220,14 +220,8 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Cancelled => soroban_sdk::symbol_short!("cancelled"),
         SubscriptionStatus::Expired => soroban_sdk::symbol_short!("expired"),
         SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
-        SubscriptionStatus::Active => Symbol::new(env, "active"),
-        SubscriptionStatus::GracePeriod => Symbol::new(env, "grace"),
-        SubscriptionStatus::InsufficientBalance => Symbol::new(env, "insuf_bal"),
-        SubscriptionStatus::Paused => Symbol::new(env, "paused"),
-        SubscriptionStatus::Cancelled => Symbol::new(env, "cancelled"),
-        SubscriptionStatus::Expired => Symbol::new(env, "expired"),
-        SubscriptionStatus::Archived => Symbol::new(env, "archived"),
     };
+
 
     let grace_deadline = if subscription.status == SubscriptionStatus::GracePeriod {
         subscription

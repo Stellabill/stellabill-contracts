@@ -37,13 +37,10 @@ use crate::subscription::{next_charge_time, write_subscription};
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
     GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
     UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -114,11 +111,11 @@ pub fn charge_one(
 
     let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
     let period_start = sub.start_time
-        .checked_add(period_index.checked_mul(sub.interval_seconds).ok_or(Error::Overflow)?)
-        .ok_or(Error::Overflow)?;
+        .checked_add(period_index.saturating_mul(sub.interval_seconds))
+        .unwrap_or(u64::MAX);
     let period_end = period_start
         .checked_add(sub.interval_seconds)
-        .ok_or(Error::Overflow)?;
+        .unwrap_or(u64::MAX);
 
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
@@ -224,7 +221,7 @@ pub fn charge_one(
                     );
                 }
             }
-            sub.last_payment_timestamp = period_start;
+            sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
 
