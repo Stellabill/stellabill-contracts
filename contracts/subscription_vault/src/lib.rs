@@ -1617,6 +1617,50 @@ impl SubscriptionVault {
     /// - `NotFound` if subscription doesn’t exist
     /// - `Unauthorized` if caller is not subscriber or merchant
     /// - `InvalidStatusTransition` if not active
+
+        /// Schedule a future cancellation for a subscription.
+        ///
+        /// On the next `charge_subscription` call where `now >= cancel_at`, the
+        /// subscription is transitioned to `Cancelled` and any remaining prepaid
+        /// balance is refunded instead of being charged.
+        ///
+        /// # Authorization
+        /// Only the subscription's `subscriber` or `merchant` may call this.
+        ///
+        /// # Errors
+        /// - `InvalidInput` if `cancel_at` is not strictly in the future
+        /// - `Forbidden` if caller is not subscriber or merchant
+        /// - `InvalidStatusTransition` if subscription is already `Cancelled`
+        /// - `SubscriptionExpired` if subscription has expired
+        pub fn schedule_cancel(
+            env: Env,
+            subscription_id: u32,
+            authorizer: Address,
+            cancel_at: u64,
+        ) -> Result<(), Error> {
+            let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "schedule_cancel")?;
+            subscription::do_schedule_cancel(&env, subscription_id, authorizer, cancel_at)
+        }
+
+        /// Clear a previously scheduled future cancellation.
+        ///
+        /// Idempotent: safe to call even when no cancellation was scheduled.
+        ///
+        /// # Authorization
+        /// Only the subscription's `subscriber` or `merchant` may call this.
+        ///
+        /// # Errors
+        /// - `Forbidden` if caller is not subscriber or merchant
+        /// - `InvalidStatusTransition` if subscription is already `Cancelled`
+        pub fn unschedule_cancel(
+            env: Env,
+            subscription_id: u32,
+            authorizer: Address,
+        ) -> Result<(), Error> {
+            let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "unschedule_cancel")?;
+            subscription::do_unschedule_cancel(&env, subscription_id, authorizer)
+        }
+
     pub fn pause_subscription(
         env: Env,
         subscription_id: u32,
@@ -2928,6 +2972,9 @@ mod test_utils;
 
 #[cfg(test)]
 mod test_charge_invariants;
+
+#[cfg(test)]
+mod test_scheduled_cancel;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;

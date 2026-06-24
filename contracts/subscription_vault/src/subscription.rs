@@ -46,7 +46,8 @@ use crate::types::{
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
+    SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
     SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
     SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
@@ -407,6 +408,7 @@ pub fn do_create_subscription_with_token(
         start_time: env.ledger().timestamp(),
         expires_at,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -652,6 +654,102 @@ pub fn do_cancel_subscription(
     );
     Ok(())
 }
+
+/// Schedule a future cancellation for a subscription.
+///
+/// When `now >= cancel_at` on the next `charge_one` call, the subscription is
+/// automatically transitioned to `Cancelled` instead of being charged.
+///
+/// # Authorization
+/// Only the subscription's `subscriber` or `merchant` may schedule.
+///
+/// # Validation
+/// - `cancel_at` must be strictly greater than the current ledger timestamp.
+/// - Subscription must not already be `Cancelled` or `Expired`.
+///
+/// # Events
+/// Emits [`SubscriptionCancelScheduledEvent`].
+pub fn do_schedule_cancel(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    cancel_at: u64,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let now = env.ledger().timestamp();
+    if cancel_at <= now {
+        return Err(Error::InvalidInput);
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    if sub.is_expired(now) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    sub.cancel_at = Some(cancel_at);
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "cancel_scheduled"), subscription_id),
+        SubscriptionCancelScheduledEvent {
+            subscription_id,
+            cancel_at,
+            scheduled_by: authorizer,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+/// Clear a previously scheduled future cancellation.
+///
+/// Safe to call even when no cancellation was scheduled (idempotent).
+///
+/// # Authorization
+/// Only the subscription's `subscriber` or `merchant` may unschedule.
+///
+/// # Events
+/// Emits [`SubscriptionCancelUnscheduledEvent`].
+pub fn do_unschedule_cancel(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+
+    sub.cancel_at = None;
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "cancel_unscheduled"), subscription_id),
+        SubscriptionCancelUnscheduledEvent {
+            subscription_id,
+            unscheduled_by: authorizer,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
 
 /// Pause a subscription (no charges until resumed).
 ///
@@ -1392,6 +1490,7 @@ pub fn do_create_subscription_from_plan(
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
 
     write_subscription(env, id, &sub);

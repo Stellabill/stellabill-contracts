@@ -216,6 +216,10 @@ pub(crate) fn execute_batch_charge(env: &Env, subscription_ids: &Vec<u32>) -> Ve
                 success: false,
                 error_code: Error::LifetimeCapReached.to_code(),
             },
+            Ok(ChargeExecutionResult::ScheduledCancellation) => BatchChargeResult {
+                success: true,
+                error_code: 0,
+            },
             Err(e) => BatchChargeResult {
                 success: false,
                 error_code: e.to_code(),

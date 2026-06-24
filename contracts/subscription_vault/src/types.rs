@@ -253,6 +253,9 @@ pub struct Subscription {
     pub expires_at: Option<u64>,
     /// Timestamp when a grace-period started. `None` means not in grace period.
     pub grace_start_timestamp: Option<u64>,
+    /// Scheduled future cancellation timestamp. When `Some(t)` and `now >= t`,
+    /// `charge_one` transitions the subscription to `Cancelled` instead of charging.
+    pub cancel_at: Option<u64>,
 }
 
 impl Subscription {
@@ -1025,6 +1028,25 @@ pub struct SubscriptionCancelledEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when a future cancellation is scheduled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelScheduledEvent {
+    pub subscription_id: u32,
+    pub cancel_at: u64,
+    pub scheduled_by: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a scheduled cancellation is cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelUnscheduledEvent {
+    pub subscription_id: u32,
+    pub unscheduled_by: Address,
+    pub timestamp: u64,
+}
+
 /// Event emitted when a subscription is paused.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1265,6 +1287,7 @@ pub enum ChargeExecutionResult {
     Charged = 0,
     InsufficientBalance = 1,
     LifetimeCapReached = 2,
+    ScheduledCancellation = 3,
 }
 
 #[contracttype]
