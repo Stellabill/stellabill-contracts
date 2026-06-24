@@ -21,7 +21,6 @@ mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-pub mod period_snapshots;
 
 pub use safe_math::*;
 
@@ -246,7 +245,7 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        Ok(Vec::new(env))
     }
 
     /// Single interval charge driven by the operator.
