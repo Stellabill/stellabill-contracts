@@ -113,36 +113,9 @@ pub mod statements {
     }
 }
 
-/// Period snapshots: write billing-period summaries for reconciliation.
-pub mod period_snapshots {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{
-        BillingPeriodSnapshot, DataKey, Error, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
-    };
-    use soroban_sdk::Env;
-
-    pub fn write_period_snapshot(
-        _env: &Env,
-        _snapshot: BillingPeriodSnapshot,
-    ) -> Result<(), Error> {
-        Ok(())
-    }
-    pub fn get_period_snapshot(
-        _env: &Env,
-        _subscription_id: u32,
-        _period_index: u64,
-    ) -> Option<BillingPeriodSnapshot> {
-        None
-    }
-    pub fn list_period_snapshots(
-        _env: &Env,
-        _subscription_id: u32,
-        _limit: u32,
-    ) -> soroban_sdk::Vec<BillingPeriodSnapshot> {
-        soroban_sdk::Vec::new(_env)
-    }
-}
+// Period snapshots live in `period_snapshots.rs` (declared above as
+// `pub mod period_snapshots;`). The earlier inline stub module was a stale
+// merge artifact that duplicated that real module and is removed here.
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 ///
@@ -246,7 +219,7 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        Ok(Vec::new(env))
     }
 
     /// Single interval charge driven by the operator.
@@ -311,6 +284,7 @@ pub use types::{
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
+    SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
     OP_CHARGE, OP_WITHDRAW, OP_REFUND, OP_BILLING_PAUSE, OP_AUTO_RENEWAL,
     DEFAULT_ALLOWED_OPS,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
