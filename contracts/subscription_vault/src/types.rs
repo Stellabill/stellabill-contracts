@@ -77,6 +77,7 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// | 39 | `BillingRetentionConfig` | instance |
 /// | 40 | `BillingStatementSequence(u32)` | persistent |
 /// | 41 | `BillingStatementAggregate(u32)` | persistent |
+/// | 45 | `PayoutSchedule(Address)` | instance |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -171,6 +172,8 @@ pub enum DataKey {
     BillingStatementSequence(u32),
     /// Aggregated totals from compacted billing statements.
     BillingStatementAggregate(u32),
+    /// Per-merchant scheduled payout configuration.
+    PayoutSchedule(Address),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -1071,6 +1074,32 @@ pub struct SubscriptionExpiredEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionArchivedEvent {
     pub subscription_id: u32,
+    pub timestamp: u64,
+}
+
+/// Per-merchant automated payout schedule configuration.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PayoutSchedule {
+    /// Minimum interval in seconds between automatic payout flushes.
+    pub cadence_seconds: u64,
+    /// Minimum accrued balance required per token to trigger a payout.
+    pub min_payout: i128,
+    /// Timestamp of the last payout flush (0 if never flushed).
+    pub last_payout_at: u64,
+}
+
+/// Event emitted when a scheduled payout flush processes payouts for a merchant.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ScheduledPayoutEvent {
+    /// Merchant that received the payout.
+    pub merchant: Address,
+    /// Address that triggered the flush (anyone can call flush_payouts).
+    pub caller: Address,
+    /// Number of tokens for which a payout was actually executed.
+    pub tokens_paid: u32,
+    /// Ledger timestamp when the flush was processed.
     pub timestamp: u64,
 }
 
