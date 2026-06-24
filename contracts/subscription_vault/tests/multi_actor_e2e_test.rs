@@ -54,6 +54,17 @@ fn test_multi_actor_e2e_flow() {
         &grace_period,
     );
 
+    // Initialize merchant config
+    let redirect_url = soroban_sdk::String::from_str(&env, "https://example.com");
+    vault.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &0x1F,
+        &None,
+        &redirect_url,
+    );
+
     // Pre-assertions
     assert_eq!(token.balance(&subscriber), initial_mint);
     assert_eq!(token.balance(&vault_id), 0);
