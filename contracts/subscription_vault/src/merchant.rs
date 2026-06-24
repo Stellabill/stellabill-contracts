@@ -24,8 +24,8 @@ use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
-    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
-    OP_CHARGE,
+    TokenEarnings, TokenReconciliationSnapshot, MerchantBalanceSnapshotEvent, MAX_FEE_BIPS,
+    is_valid_allowed_operations, OP_CHARGE, Subscription,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -534,4 +534,129 @@ pub fn update_merchant_config(
     );
 
     Ok(config)
+}
+
+/// Admin callable: emit a single merchant+token balance snapshot event.
+pub fn emit_merchant_balance_snapshot(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    token: Address,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let balance = get_merchant_balance_by_token(env, &merchant, &token);
+    let earnings = get_merchant_token_earnings(env, &merchant, &token);
+    let accrued = earnings
+        .accruals
+        .interval
+        .checked_add(earnings.accruals.usage)
+        .unwrap_or(0)
+        .checked_add(earnings.accruals.one_off)
+        .unwrap_or(0);
+    let withdrawn = earnings.withdrawals;
+    let refunded = earnings.refunds;
+
+    let ledger_sequence = env.ledger().sequence();
+    let timestamp = env.ledger().timestamp();
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        MerchantBalanceSnapshotEvent {
+            merchant: merchant.clone(),
+            token: token.clone(),
+            balance,
+            accrued,
+            withdrawn,
+            refunded,
+            ledger_sequence,
+            timestamp,
+        },
+    );
+
+    Ok(())
+}
+
+/// Admin callable: scan subscriptions in `[start_id, start_id+limit)` and emit
+/// balance snapshot events for each unique (merchant, token) discovered.
+pub fn emit_all_balances_snapshot(
+    env: &Env,
+    admin: Address,
+    start_id: u32,
+    limit: u32,
+) -> Result<Vec<MerchantBalanceSnapshotEvent>, Error> {
+    // Keep behaviour aligned with export limits used elsewhere (100)
+    if limit > 100 {
+        return Err(Error::InvalidExportLimit);
+    }
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    if limit == 0 {
+        return Ok(Vec::new(env));
+    }
+
+    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    if start_id >= next_id {
+        return Ok(Vec::new(env));
+    }
+
+    let end_id = start_id.saturating_add(limit).min(next_id);
+    let mut out = Vec::new(env);
+    let mut seen: Vec<(Address, Address)> = Vec::new(env);
+
+    let mut id = start_id;
+    while id < end_id {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
+            let pair = (sub.merchant.clone(), sub.token.clone());
+            // linear dedupe within the page (bounded by `limit`)
+            let mut already = false;
+            for p in seen.iter() {
+                if p.0 == pair.0 && p.1 == pair.1 {
+                    already = true;
+                    break;
+                }
+            }
+            if !already {
+                seen.push_back(pair.clone());
+
+                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let accrued = earnings
+                    .accruals
+                    .interval
+                    .checked_add(earnings.accruals.usage)
+                    .unwrap_or(0)
+                    .checked_add(earnings.accruals.one_off)
+                    .unwrap_or(0);
+                let withdrawn = earnings.withdrawals;
+                let refunded = earnings.refunds;
+                let ledger_sequence = env.ledger().sequence();
+                let timestamp = env.ledger().timestamp();
+
+                let ev = MerchantBalanceSnapshotEvent {
+                    merchant: pair.0.clone(),
+                    token: pair.1.clone(),
+                    balance,
+                    accrued,
+                    withdrawn,
+                    refunded,
+                    ledger_sequence,
+                    timestamp,
+                };
+
+                env.events().publish(
+                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    ev.clone(),
+                );
+                out.push_back(ev);
+            }
+        }
+        id += 1;
+    }
+
+    Ok(out)
 }

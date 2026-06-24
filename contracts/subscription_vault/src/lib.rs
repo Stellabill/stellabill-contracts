@@ -1058,6 +1058,31 @@ impl SubscriptionVault {
         Ok(out)
     }
 
+    /// Emit a single on-chain merchant balance snapshot event. Admin only.
+    ///
+    /// Snapshot is parameterised by `(merchant, token)` so indexers can fast-forward
+    /// to this anchor and continue streaming events from that ledger onward.
+    pub fn emit_merchant_balance_snapshot(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        token: Address,
+    ) -> Result<(), Error> {
+        crate::merchant::emit_merchant_balance_snapshot(&env, admin, merchant, token)
+    }
+
+    /// Emit paginated merchant balance snapshots discovered by scanning subscription IDs.
+    /// Admin only. Scans subscriptions in `[start_id, start_id + limit)` and emits one
+    /// snapshot per unique `(merchant, token)` encountered in that window.
+    pub fn emit_all_balances_snapshot(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<Vec<crate::types::MerchantBalanceSnapshotEvent>, Error> {
+        crate::merchant::emit_all_balances_snapshot(&env, admin, start_id, limit)
+    }
+
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.

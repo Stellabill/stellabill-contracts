@@ -16,6 +16,7 @@ env.events().publish(
 ```
 
 **Key Principles:**
+
 - Topic tuple format: `(Symbol, optional_id)` — enables filtering by event type and resource
 - Data struct: always a named type (never raw tuples) — provides stable schema for indexers
 - Timestamp: included when useful for ordering/metrics
@@ -31,6 +32,7 @@ env.events().publish(
 Emitted when a subscription is created via `create_subscription()` or `create_subscription_from_plan()`.
 
 **Fields:**
+
 - `subscription_id`: u32 — unique subscription identifier
 - `subscriber`: Address — subscriber account
 - `merchant`: Address — merchant account receiving payments
@@ -40,6 +42,7 @@ Emitted when a subscription is created via `create_subscription()` or `create_su
 - `expires_at`: Option<u64> — optional expiration timestamp
 
 **Example Use Cases:**
+
 - Build subscription graph in explorer
 - Display user's active subscriptions
 - Calculate subscription creation metrics
@@ -53,12 +56,14 @@ Emitted when a subscription is created via `create_subscription()` or `create_su
 Emitted when a subscriber deposits funds into a subscription vault via `deposit_funds()`.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `subscriber`: Address
 - `amount`: i128 — amount deposited (in token base units)
 - `prepaid_balance`: i128 — total prepaid balance after deposit
 
 **Example Use Cases:**
+
 - Display deposit history in subscriber UI
 - Monitor prepaid balance trends
 - Trigger low-balance alerts
@@ -69,17 +74,19 @@ Emitted when a subscriber deposits funds into a subscription vault via `deposit_
 
 ### SubscriptionChargedEvent
 
-**Topic:** `("charged",)` *(no subscription ID in topic)*
+**Topic:** `("charged",)` _(no subscription ID in topic)_
 
 Emitted when an interval-based charge succeeds via `charge_subscription()` or `batch_charge()`.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `merchant`: Address — merchant receiving the payment
 - `amount`: i128 — total charged amount
 - `lifetime_charged`: i128 — cumulative total charged over subscription lifetime
 
 **Example Use Cases:**
+
 - Generate merchant revenue reports
 - Track subscription payment history
 - Aggregate merchant earnings by token
@@ -93,6 +100,7 @@ Emitted when an interval-based charge succeeds via `charge_subscription()` or `b
 Emitted when a charge attempt fails due to insufficient balance. Subscription transitions to `InsufficientBalance` or `GracePeriod` status.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `merchant`: Address
 - `required_amount`: i128 — amount that was attempted to be charged
@@ -102,6 +110,7 @@ Emitted when a charge attempt fails due to insufficient balance. Subscription tr
 - `timestamp`: u64
 
 **Example Use Cases:**
+
 - Send notifications when subscription enters non-active states
 - Track recovery candidates for re-engagement
 - Monitor subscription health metrics
@@ -115,6 +124,7 @@ Emitted when a charge attempt fails due to insufficient balance. Subscription tr
 Emitted when a merchant initiates an off-interval charge via `charge_one_off()`.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `merchant`: Address
 - `amount`: i128
@@ -128,6 +138,7 @@ Emitted when a merchant initiates an off-interval charge via `charge_one_off()`.
 Emitted when protocol fees are extracted and routed to treasury during `charge_subscription()` batch operations.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `treasury`: Address — fee recipient
 - `fee_amount`: i128 — amount routed to treasury
@@ -143,12 +154,14 @@ Emitted when protocol fees are extracted and routed to treasury during `charge_s
 Emitted when a subscription's lifetime charge cap is exhausted. Subscription is automatically cancelled.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `lifetime_cap`: i128 — configured maximum total charges
 - `lifetime_charged`: i128 — total charged at time of cap hit
 - `timestamp`: u64
 
 **Example Use Cases:**
+
 - Trigger subscription renewal flows
 - Track cap-reached metrics
 - Archive completed subscriptions
@@ -162,6 +175,7 @@ Emitted when a subscription's lifetime charge cap is exhausted. Subscription is 
 Emitted when usage-based charges are processed via `charge_usage()`.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `merchant`: Address
 - `usage_amount`: i128 — metered charge amount
@@ -180,10 +194,12 @@ Emitted when usage-based charges are processed via `charge_usage()`.
 Emitted when a subscription is paused via `pause_subscription()`. No charges processed while paused.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `authorizer`: Address — subscriber or merchant who initiated pause
 
 **Example Use Cases:**
+
 - Display subscription pause status
 - Analytics on pause/resume cycles
 - Update merchant UI
@@ -197,10 +213,12 @@ Emitted when a subscription is paused via `pause_subscription()`. No charges pro
 Emitted when a subscription is resumed from Paused/GracePeriod/InsufficientBalance via `resume_subscription()` OR automatically after a successful deposit rebalances an underfunded subscription.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `authorizer`: Address — subscriber or merchant who initiated resume
 
 **Example Use Cases:**
+
 - Update subscription status in UI
 - Track recovery metrics
 - Trigger billing resumption workflows
@@ -214,11 +232,13 @@ Emitted when a subscription is resumed from Paused/GracePeriod/InsufficientBalan
 Emitted when a subscription is cancelled via `cancel_subscription()`. Terminal state.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `authorizer`: Address — subscriber or merchant who cancelled
 - `refund_amount`: i128 — prepaid balance available for refund
 
 **Example Use Cases:**
+
 - Process refunds to subscribers
 - Calculate churn metrics
 - Archive cancelled subscriptions
@@ -232,6 +252,7 @@ Emitted when a subscription is cancelled via `cancel_subscription()`. Terminal s
 Emitted when a subscription is automatically expired due to `expires_at` timestamp being reached.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `timestamp`: u64
 
@@ -244,6 +265,7 @@ Emitted when a subscription is automatically expired due to `expires_at` timesta
 Emitted after a deposit when a previously underfunded subscription (`InsufficientBalance` or `GracePeriod`) is restored to sufficient balance and automatically transitions to `Active`.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `subscriber`: Address
 - `prepaid_balance`: i128
@@ -261,12 +283,14 @@ Emitted after a deposit when a previously underfunded subscription (`Insufficien
 Emitted when a merchant withdraws earned funds via `withdraw_merchant_funds()` or `withdraw_merchant_token_funds()`.
 
 **Fields:**
+
 - `merchant`: Address
 - `token`: Address — token being withdrawn
 - `amount`: i128 — amount withdrawn
 - `remaining_balance`: i128 — balance after withdrawal
 
 **Example Use Cases:**
+
 - Track merchant payout history
 - Display earnings ledger
 - Reconcile merchant balances
@@ -280,6 +304,7 @@ Emitted when a merchant withdraws earned funds via `withdraw_merchant_funds()` o
 Emitted when a cancelled subscription has its refund amount transferred back to subscriber.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `subscriber`: Address
 - `amount`: i128
@@ -294,6 +319,7 @@ Emitted when a cancelled subscription has its refund amount transferred back to 
 Emitted when a merchant refunds a subscriber's balance via `merchant_refund()`.
 
 **Fields:**
+
 - `merchant`: Address
 - `subscriber`: Address
 - `token`: Address
@@ -308,6 +334,7 @@ Emitted when a merchant refunds a subscriber's balance via `merchant_refund()`.
 Emitted when a subscriber withdraws funds from a cancelled subscription.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `subscriber`: Address
 - `amount`: i128
@@ -323,6 +350,7 @@ Emitted when a subscriber withdraws funds from a cancelled subscription.
 Emitted when admin triggers emergency stop via `enable_emergency_stop()`.
 
 **Fields:**
+
 - `admin`: Address
 - `timestamp`: u64
 
@@ -335,6 +363,7 @@ Emitted when admin triggers emergency stop via `enable_emergency_stop()`.
 Emitted when admin disables emergency stop via `disable_emergency_stop()`.
 
 **Fields:**
+
 - `admin`: Address
 - `timestamp`: u64
 
@@ -347,6 +376,7 @@ Emitted when admin disables emergency stop via `disable_emergency_stop()`.
 Emitted when admin is rotated to a new address via `rotate_admin()`.
 
 **Fields:**
+
 - `old_admin`: Address
 - `new_admin`: Address
 - `timestamp`: u64
@@ -360,6 +390,7 @@ Emitted when admin is rotated to a new address via `rotate_admin()`.
 Emitted when admin recovers stranded funds via `recover_stranded_funds()`.
 
 **Fields:**
+
 - `admin`: Address
 - `recipient`: Address
 - `token`: Address
@@ -376,6 +407,7 @@ Emitted when admin recovers stranded funds via `recover_stranded_funds()`.
 Emitted when billing statement compaction is run via `compact_statements()`.
 
 **Fields:**
+
 - `admin`: Address
 - `subscription_id`: u32
 - `pruned_count`: u32
@@ -398,6 +430,7 @@ Emitted when billing statement compaction is run via `compact_statements()`.
 Emitted when a merchant enables blanket pause via `pause_merchant()`.
 
 **Fields:**
+
 - `merchant`: Address
 - `timestamp`: u64
 
@@ -412,6 +445,7 @@ Emitted when a merchant enables blanket pause via `pause_merchant()`.
 Emitted when a merchant disables blanket pause via `unpause_merchant()`.
 
 **Fields:**
+
 - `merchant`: Address
 - `timestamp`: u64
 
@@ -424,6 +458,7 @@ Emitted when a merchant disables blanket pause via `unpause_merchant()`.
 Emitted when a plan template is updated to a new version.
 
 **Fields:**
+
 - `template_key`: u32 — logical template group shared by all versions
 - `old_plan_id`: u32
 - `new_plan_id`: u32
@@ -440,6 +475,7 @@ Emitted when a plan template is updated to a new version.
 Emitted when a plan's maximum active subscriptions limit is configured.
 
 **Fields:**
+
 - `plan_template_id`: u32
 - `merchant`: Address
 - `max_active`: u32 — (`0` = no limit)
@@ -454,6 +490,7 @@ Emitted when a plan's maximum active subscriptions limit is configured.
 Emitted when a subscription is migrated from one plan template version to another.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `template_key`: u32
 - `from_plan_id`: u32
@@ -473,6 +510,7 @@ Emitted when a subscription is migrated from one plan template version to anothe
 Emitted when subscription metadata is set or updated.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `key`: String
 - `authorizer`: Address
@@ -486,6 +524,7 @@ Emitted when subscription metadata is set or updated.
 Emitted when subscription metadata is deleted.
 
 **Fields:**
+
 - `subscription_id`: u32
 - `key`: String
 - `authorizer`: Address
@@ -501,6 +540,7 @@ Emitted when subscription metadata is deleted.
 Emitted when subscriptions are exported via `export_subscription_summaries()`.
 
 **Fields:**
+
 - `admin`: Address
 - `start_id`: u32
 - `limit`: u32
@@ -516,6 +556,7 @@ Emitted when subscriptions are exported via `export_subscription_summaries()`.
 Emitted when the contract schema is upgraded via `migrate_schema()`.
 
 **Fields:**
+
 - `from`: u32 — previous stored schema version
 - `to`: u32 — new schema version
 - `admin`: Address
@@ -561,16 +602,16 @@ This enables audit trails for compliance.
 
 ## Indexing Recommendations
 
-| Event | Index By | Aggregate By |
-|-------|----------|--------------|
-| SubscriptionCreatedEvent | subscription_id, subscriber, merchant | time (metrics) |
-| FundsDepositedEvent | subscription_id, subscriber | balance progression |
-| SubscriptionChargedEvent | subscription_id, merchant, token | merchant earnings, pvt revenue |
-| SubscriptionChargeFailedEvent | subscription_id, subscriber | recovery metrics |
-| MerchantWithdrawalEvent | merchant, token, timestamp | payout history |
-| LifetimeCapReachedEvent | subscription_id, merchant, timestamp | completion metrics |
-| SubscriptionCancelledEvent | subscription_id, subscriber, timestamp | churn metrics |
-| MerchantPausedEvent | merchant, timestamp | merchant downtime |
+| Event                         | Index By                               | Aggregate By                   |
+| ----------------------------- | -------------------------------------- | ------------------------------ |
+| SubscriptionCreatedEvent      | subscription_id, subscriber, merchant  | time (metrics)                 |
+| FundsDepositedEvent           | subscription_id, subscriber            | balance progression            |
+| SubscriptionChargedEvent      | subscription_id, merchant, token       | merchant earnings, pvt revenue |
+| SubscriptionChargeFailedEvent | subscription_id, subscriber            | recovery metrics               |
+| MerchantWithdrawalEvent       | merchant, token, timestamp             | payout history                 |
+| LifetimeCapReachedEvent       | subscription_id, merchant, timestamp   | completion metrics             |
+| SubscriptionCancelledEvent    | subscription_id, subscriber, timestamp | churn metrics                  |
+| MerchantPausedEvent           | merchant, timestamp                    | merchant downtime              |
 
 ---
 

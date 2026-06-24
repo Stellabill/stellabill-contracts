@@ -1371,6 +1371,28 @@ pub struct MerchantRefundEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted as an on-chain balance snapshot for a (merchant, token) pair.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceSnapshotEvent {
+    /// Merchant address
+    pub merchant: Address,
+    /// Settlement token address
+    pub token: Address,
+    /// Stored on-chain balance for this merchant+token
+    pub balance: i128,
+    /// Total accruals (interval + usage + one_off)
+    pub accrued: i128,
+    /// Total withdrawals recorded in TokenEarnings
+    pub withdrawn: i128,
+    /// Total refunds recorded in TokenEarnings
+    pub refunded: i128,
+    /// Ledger sequence at snapshot time (temporal anchor)
+    pub ledger_sequence: u32,
+    /// Ledger timestamp in seconds
+    pub timestamp: u64,
+}
+
 /// Event emitted when protocol fees are configured.
 #[contracttype]
 #[derive(Clone, Debug)]

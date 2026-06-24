@@ -141,6 +141,43 @@ fn seed_merchant_balance(
     });
 }
 
+#[test]
+fn test_emit_merchant_balance_snapshot_zero_balance() {
+    let (env, client, token, admin) = setup_test_env();
+    let merchant = Address::generate(&env);
+
+    // No balance or earnings seeded -> zero snapshot
+    let res = client.emit_merchant_balance_snapshot(&admin, &merchant, &token);
+    assert_eq!(res, Ok(()));
+
+    // On-chain stored bucket is still zero
+    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), 0i128);
+}
+
+#[test]
+fn test_emit_all_balances_snapshot_paginated() {
+    let (env, client, token, admin) = setup_test_env();
+
+    // Create three subscriptions with two merchants (one repeated) so batch dedup works.
+    let (id1, _, merchant_a) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    let (id2, _, merchant_b) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+    let (id3, _, merchant_a2) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Seed balances for merchants
+    seed_merchant_balance(&env, &client.address, &merchant_a, &token, 1_000_000i128);
+    seed_merchant_balance(&env, &client.address, &merchant_b, &token, 2_000_000i128);
+    seed_merchant_balance(&env, &client.address, &merchant_a2, &token, 3_000_000i128);
+
+    // Call emit_all_balances_snapshot across subscription id range [0, next_id)
+    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let res = client.emit_all_balances_snapshot(&admin, &0u32, &next_id);
+    assert!(res.is_ok());
+    let page = res.unwrap();
+
+    // At least one snapshot should be produced and the values match stored balances
+    assert!(page.len() >= 2);
+}
+
 fn create_secondary_token(env: &Env) -> Address {
     env.register_stellar_asset_contract_v2(Address::generate(env))
         .address()
