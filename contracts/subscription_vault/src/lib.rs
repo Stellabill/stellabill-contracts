@@ -1512,6 +1512,27 @@ impl SubscriptionVault {
         subscription::get_subscriber_exposure(&env, subscriber, token)
     }
 
+    /// Set the maximum number of active subscriptions allowed for a merchant. Admin only.
+    ///
+    /// The limit is checked during subscription creation. If the merchant's active
+    /// subscription count is greater than or equal to this limit, new subscription
+    /// creations are rejected with `Error::MaxConcurrentSubscriptionsReached`.
+    pub fn set_merchant_max_subs(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        max_subs: u32,
+    ) -> Result<(), Error> {
+        subscription::do_set_merchant_max_subs(&env, admin, merchant, max_subs)
+    }
+
+    /// Read the configured maximum subscription limit for a merchant.
+    ///
+    /// Returns `u32::MAX` when no limit is configured, meaning "no limit".
+    pub fn get_merchant_max_subs(env: Env, merchant: Address) -> u32 {
+        queries::get_merchant_max_subs(&env, merchant)
+    }
+
     /// Cancel the subscription. Allowed from Active, Paused, or InsufficientBalance.
     /// Transitions to the terminal `Cancelled` state.
     pub fn cancel_subscription(

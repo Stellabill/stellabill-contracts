@@ -9212,3 +9212,162 @@ fn test_migrate_downgrade_does_not_emit_event() {
         "no schema_migrated event must be emitted on a rejected downgrade"
     );
 }
+
+#[test]
+fn test_merchant_max_subs_default() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    // Default limit should be u32::MAX.
+    assert_eq!(test_env.client.get_merchant_max_subs(&merchant), u32::MAX);
+
+    // Create a subscription.
+    let _id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    assert_eq!(test_env.client.get_merchant_subscription_count(&merchant), 1);
+}
+
+#[test]
+fn test_merchant_max_subs_blocks_creation() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let admin = &test_env.admin;
+
+    // Set max subs limit to 2.
+    test_env.client.set_merchant_max_subs(admin, &merchant, &2);
+    assert_eq!(test_env.client.get_merchant_max_subs(&merchant), 2);
+
+    // First subscription succeeds.
+    let _id1 = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    // Second subscription succeeds.
+    let _id2 = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    // Third subscription is rejected.
+    let result = test_env.client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    assert_eq!(result, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+
+    // Create plan template under the same merchant.
+    let plan_id = test_env.client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+
+    // Subscribing to plan template is also rejected since the merchant cap is exhausted.
+    let plan_result = test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    assert_eq!(plan_result, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+}
+
+#[test]
+fn test_merchant_max_subs_cancellation_frees_slot() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let admin = &test_env.admin;
+
+    // Set limit to 1.
+    test_env.client.set_merchant_max_subs(admin, &merchant, &1);
+
+    // First subscription succeeds.
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    // Second creation is blocked.
+    let result = test_env.client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    assert_eq!(result, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+
+    // Cancel first subscription.
+    test_env.client.cancel_subscription(&id, &subscriber);
+
+    // Now creation succeeds.
+    let _id2 = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+}
+
+#[test]
+fn test_merchant_max_subs_and_plan_max_active_interaction() {
+    let test_env = TestEnv::default();
+    let subscriber_a = Address::generate(&test_env.env);
+    let subscriber_b = Address::generate(&test_env.env);
+    let subscriber_c = Address::generate(&test_env.env);
+    let subscriber_d = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let admin = &test_env.admin;
+
+    // Set merchant global limit to 3.
+    test_env.client.set_merchant_max_subs(admin, &merchant, &3);
+
+    // Set plan template limit to 1 per-subscriber.
+    let plan_id = test_env.client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    test_env.client.set_plan_max_active_subs(&merchant, &plan_id, &1);
+
+    // Subscriber A subscribes to plan: succeeds (merchant total active = 1).
+    let _sub_a = test_env.client.create_subscription_from_plan(&subscriber_a, &plan_id);
+
+    // Subscriber A subscribing again: rejected by PlanMaxActive limit.
+    let result_a2 = test_env.client.try_create_subscription_from_plan(&subscriber_a, &plan_id);
+    assert_eq!(result_a2, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+
+    // Subscriber B subscribes to plan: succeeds (merchant total active = 2).
+    let _sub_b = test_env.client.create_subscription_from_plan(&subscriber_b, &plan_id);
+
+    // Subscriber C subscribes to plan: succeeds (merchant total active = 3).
+    let _sub_c = test_env.client.create_subscription_from_plan(&subscriber_c, &plan_id);
+
+    // Subscriber D subscribes to plan: rejected by MerchantMaxSubs limit.
+    let result_d = test_env.client.try_create_subscription_from_plan(&subscriber_d, &plan_id);
+    assert_eq!(result_d, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+}

@@ -364,6 +364,13 @@ pub fn do_create_subscription_with_token(
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
+    // Enforce per-merchant active subscription limit.
+    let active_count = crate::queries::get_merchant_subscription_count(env, merchant.clone());
+    let max_subs = crate::queries::get_merchant_max_subs(env, merchant.clone());
+    if active_count >= max_subs {
+        return Err(Error::MaxConcurrentSubscriptionsReached);
+    }
+
     if amount < 0 {
         return Err(Error::InvalidAmount);
     }
@@ -1366,6 +1373,13 @@ pub fn do_create_subscription_from_plan(
         return Err(Error::InvalidInput);
     }
 
+    // Enforce per-merchant active subscription limit.
+    let active_count = crate::queries::get_merchant_subscription_count(env, plan.merchant.clone());
+    let max_subs = crate::queries::get_merchant_max_subs(env, plan.merchant.clone());
+    if active_count >= max_subs {
+        return Err(Error::MaxConcurrentSubscriptionsReached);
+    }
+
     // Enforce subscriber-level credit limit for the plan's token.
     enforce_credit_limit_for_delta(env, &subscriber, &plan.token, plan.amount)?;
 
@@ -1679,6 +1693,30 @@ pub fn do_set_subscriber_credit_limit(
     env.storage()
         .instance()
         .set(&credit_limit_key(&subscriber, &token), &limit);
+
+    Ok(())
+}
+
+pub fn do_set_merchant_max_subs(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    max_subs: u32,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantMaxSubs(merchant.clone()), &max_subs);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_max_subs_updated"), merchant.clone()),
+        crate::types::MerchantMaxSubsUpdatedEvent {
+            merchant,
+            max_subs,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(())
 }

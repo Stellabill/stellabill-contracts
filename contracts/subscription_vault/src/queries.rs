@@ -277,6 +277,14 @@ pub fn get_plan_max_active_subs(env: &Env, plan_template_id: u32) -> u32 {
     env.storage().instance().get(&key).unwrap_or(0)
 }
 
+/// Returns the configured max-active-subscriptions limit for a merchant.
+///
+/// A return value of `u32::MAX` means no limit is enforced for that merchant.
+pub fn get_merchant_max_subs(env: &Env, merchant: Address) -> u32 {
+    let key = DataKey::MerchantMaxSubs(merchant);
+    env.storage().instance().get(&key).unwrap_or(u32::MAX)
+}
+
 /// Result of a paginated query for subscriptions by subscriber.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
