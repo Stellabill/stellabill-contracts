@@ -9,7 +9,7 @@
 //! confirming the Checks-Effects-Interactions pattern is followed.
 
 use crate::{
-    SubscriptionVault, SubscriptionVaultClient,
+    Error, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -36,7 +36,7 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 fn create_sub(
     env: &Env,
     client: &SubscriptionVaultClient,
-    token: &Address,
+    _token: &Address,
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
