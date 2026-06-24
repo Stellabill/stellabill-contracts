@@ -77,6 +77,18 @@ pub enum SubscriptionStatus {
 
 **TTL behavior:** Subscription entries are kept alive on every read and write. Billing statement secondary index entries and billing period snapshots also carry their own TTL thresholds (`BILLING_STATEMENT_TTL_THRESHOLD`, `BILLING_STATEMENT_TTL_EXTEND_TO`, `BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD`, `BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO`) and are extended when the corresponding storage operations execute.
 
+#### TTL exhaustion semantics
+
+A `DataKey::Sub(id)` entry is readable while `live_until_ledger >= current_ledger`. The contract refreshes this window on every `get_subscription`/`write_subscription` via `extend_ttl(SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO)`, so an entry that is touched at least once per `SUB_TTL_EXTEND_TO` window (365 days) never expires.
+
+If the window does lapse, the entry is **archived/expired by the host**, and the next access does **not** degrade gracefully to `Error::NotFound` (which would only surface for a key that was never written). Instead the Soroban host aborts with `Error(Storage, InternalError)`, surfaced to the SDK test harness as a panic. This is the safe outcome: an expired record can never be silently read back as live data. On-chain, accessing it would require a `RestoreFootprint` operation before the read.
+
+This behavior is pinned by `contracts/subscription_vault/tests/ttl_exhaustion.rs`, which forces the env past the TTL boundary and asserts:
+- the record is readable at *exactly* its last live ledger;
+- one ledger later the access raises the host error (no stale read);
+- a read at the last live ledger re-extends the TTL and restores access past the original window;
+- a second full TTL cycle preserves the record byte-for-byte, then expires again once unrefreshed.
+
 ---
 
 ## Storage Access Patterns
