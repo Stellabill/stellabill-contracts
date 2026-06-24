@@ -121,15 +121,6 @@ pub fn check_and_advance(
     Ok(())
 }
 
-/// Alias for [`consume_nonce`] — used by admin.rs.
-pub fn check_and_advance(
-    env: &Env,
-    signer: &Address,
-    domain: u32,
-    expected: u64,
-) -> Result<(), Error> {
-    consume_nonce(env, signer, domain, expected)
-}
 
 #[cfg(test)]
 mod tests {
