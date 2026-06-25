@@ -485,6 +485,45 @@ pub struct SubscriptionSummary {
     pub expires_at: Option<u64>,
 }
 
+/// Merchant balance entry returned in snapshot pages.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceEntry {
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Full snapshot page containing subscriptions and merchant balances.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FullSnapshotPage {
+    pub subscriptions: Vec<SubscriptionSummary>,
+    pub balances: Vec<MerchantBalanceEntry>,
+    /// Next start id for paging across subscription ids. `None` when complete.
+    pub next_start_id: Option<u32>,
+}
+
+/// Event emitted when a snapshot page is exported by admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SnapshotExportedEvent {
+    pub admin: Address,
+    pub start_id: u32,
+    pub exported: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a snapshot page is restored by admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SnapshotRestoredEvent {
+    pub admin: Address,
+    pub start_id: u32,
+    pub restored: u32,
+    pub timestamp: u64,
+}
+
 /// Event emitted when subscriptions are exported for migration.
 #[contracttype]
 #[derive(Clone, Debug)]

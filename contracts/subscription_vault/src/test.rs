@@ -4018,6 +4018,75 @@ fn test_export_subscription_summaries() {
     assert_eq!(summaries.get(0).unwrap().subscription_id, id);
 }
 
+#[test]
+fn test_export_full_snapshot_page() {
+    let test_env = TestEnv::default();
+    let (id, _subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // obtain the contract token address from the contract snapshot
+    let cs = test_env.client.export_contract_snapshot(&test_env.admin);
+    let token = cs.token;
+
+    // seed a merchant balance for the (merchant, token) pair
+    seed_merchant_balance(&test_env.env, &test_env.client.address, &merchant, &token, 42_000);
+
+    let page = test_env
+        .client
+        .export_full_snapshot_page(&test_env.admin, &0, &10)
+        .unwrap();
+
+    assert_eq!(page.subscriptions.len(), 1);
+    assert_eq!(page.balances.len(), 1);
+    let s = page.subscriptions.get(0).unwrap();
+    assert_eq!(s.subscription_id, id);
+    let b = page.balances.get(0).unwrap();
+    assert_eq!(b.merchant, merchant);
+    assert_eq!(b.token, token);
+}
+
+#[test]
+fn test_restore_snapshot_page() {
+    // source environment: create subscription and export a page
+    let src = TestEnv::default();
+    let (id, _subscriber, merchant) =
+        fixtures::create_subscription(&src.env, &src.client, SubscriptionStatus::Active);
+    let cs = src.client.export_contract_snapshot(&src.admin);
+    let token = cs.token;
+    seed_merchant_balance(&src.env, &src.client.address, &merchant, &token, 99_999);
+
+    let page = src
+        .client
+        .export_full_snapshot_page(&src.admin, &0, &10)
+        .unwrap();
+
+    // target environment: fresh contract where we will restore
+    let target_env = Env::default();
+    let (target_client, _target_token, target_admin) = setup_contract(&target_env);
+
+    // enable emergency stop on the target so restores are allowed
+    target_client.enable_emergency_stop(&target_admin).unwrap();
+
+    // perform restore
+    target_client
+        .restore_snapshot_page(&target_admin, &0, &page.subscriptions, &page.balances, &page.next_start_id)
+        .unwrap();
+
+    // verify subscription exists in target
+    let restored = target_client.get_subscription(&id);
+    assert_eq!(restored.subscription_id, id);
+
+    // verify merchant balance written into target storage
+    let bal: i128 = target_env.as_contract(&target_client.address, || {
+        target_env
+            .storage()
+            .instance()
+            .get(&DataKey::MerchantBalance(merchant.clone(), token.clone()))
+            .unwrap_or(0i128)
+    });
+    assert_eq!(bal, 99_999);
+}
+
 // =============================================================================
 // Metadata Key-Value Store Tests
 // =============================================================================
