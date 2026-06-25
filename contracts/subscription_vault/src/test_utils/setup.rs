@@ -1,10 +1,11 @@
 use crate::{SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 pub struct TestEnv {
     pub env: Env,
     pub client: SubscriptionVaultClient<'static>,
     pub admin: Address,
+    pub token: Address,
 }
 
 impl Default for TestEnv {
@@ -21,6 +22,16 @@ impl Default for TestEnv {
             .address();
 
         client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-        TestEnv { env, client, admin }
+        TestEnv { env, client, admin, token }
+    }
+}
+
+impl TestEnv {
+    pub fn stellar_token_client(&self) -> soroban_sdk::token::StellarAssetClient<'static> {
+        soroban_sdk::token::StellarAssetClient::new(&self.env, &self.token)
+    }
+
+    pub fn jump(&self, seconds: u64) {
+        self.env.ledger().set_timestamp(self.env.ledger().timestamp() + seconds);
     }
 }

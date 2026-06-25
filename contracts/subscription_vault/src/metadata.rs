@@ -77,6 +77,7 @@ pub fn set_metadata(
             subscription_id,
             key,
             authorizer: caller.clone(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -112,7 +113,8 @@ pub fn delete_metadata(
         .unwrap_or(Vec::new(env));
 
     if let Some(idx) = keys.iter().position(|k| k == key) {
-        keys.remove(idx.try_into().unwrap());
+        let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
+        keys.remove(idx_u32);
         env.storage()
             .persistent()
             .set(&DataKey::MetadataKeys(subscription_id), &keys);
@@ -127,6 +129,7 @@ pub fn delete_metadata(
                 subscription_id,
                 key,
                 authorizer: caller.clone(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
     }
