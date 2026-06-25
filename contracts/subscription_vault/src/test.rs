@@ -3422,6 +3422,7 @@ fn test_withdraw_merchant_funds_reduces_default_bucket_and_emits_event() {
         amount: 4_000_000i128,
         remaining_balance: 5_000_000i128,
         timestamp: env.ledger().timestamp(),
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
     }
     .into_val(&env);
     let event = MerchantWithdrawalEvent::try_from_val(&env, &encoded).unwrap();
@@ -3545,6 +3546,7 @@ fn test_withdraw_merchant_token_funds_only_debits_requested_bucket_and_emits_eve
         amount: 2_000_000i128,
         remaining_balance: 5_000_000i128,
         timestamp: env.ledger().timestamp(),
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
     }
     .into_val(&env);
     let event = MerchantWithdrawalEvent::try_from_val(&env, &encoded).unwrap();

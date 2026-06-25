@@ -4,18 +4,20 @@ use crate::{
         BillingPeriodSnapshot, Error, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
         SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
     },
+    SubscriptionVault,
 };
-use soroban_sdk::{testutils::Ledger, Env};
+use soroban_sdk::{testutils::Ledger, Env, Address};
 
-fn setup() -> Env {
+fn setup() -> (Env, Address) {
     let env = Env::default();
     env.ledger().set_timestamp(1_000_000);
-    env
+    let contract_id = env.register(SubscriptionVault, ());
+    (env, contract_id)
 }
 
 #[test]
 fn test_write_and_get_snapshot() {
-    let env = setup();
+    let (env, contract_id) = setup();
     let sub_id = 1;
     let period_index = 0;
 
@@ -30,15 +32,15 @@ fn test_write_and_get_snapshot() {
         finalized_at: 200,
     };
 
-    assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
+    assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, snapshot.clone())).is_ok());
 
-    let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
+    let fetched = env.as_contract(&contract_id, || get_period_snapshot(&env, sub_id, period_index)).unwrap();
     assert_eq!(fetched, snapshot);
 }
 
 #[test]
 fn test_list_period_snapshots_returns_latest_n() {
-    let env = setup();
+    let (env, contract_id) = setup();
     let sub_id = 2;
 
     for i in 0..5 {
@@ -52,11 +54,11 @@ fn test_list_period_snapshots_returns_latest_n() {
             status_flags: SNAPSHOT_FLAG_INTERVAL_CHARGED | SNAPSHOT_FLAG_CLOSED,
             finalized_at: 200 + i * 100,
         };
-        assert!(write_period_snapshot(&env, snapshot).is_ok());
+        assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, snapshot)).is_ok());
     }
 
     // Get latest 3
-    let latest = list_period_snapshots(&env, sub_id, 3);
+    let latest = env.as_contract(&contract_id, || list_period_snapshots(&env, sub_id, 3));
     assert_eq!(latest.len(), 3);
     
     // Should return newest first
@@ -67,7 +69,7 @@ fn test_list_period_snapshots_returns_latest_n() {
 
 #[test]
 fn test_overwrite_closed_snapshot_rejected() {
-    let env = setup();
+    let (env, contract_id) = setup();
     let sub_id = 3;
     let period_index = 0;
 
@@ -82,17 +84,17 @@ fn test_overwrite_closed_snapshot_rejected() {
         finalized_at: 200,
     };
 
-    assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
+    assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, snapshot.clone())).is_ok());
 
     // Try to update closed snapshot
     snapshot.total_charged = 1000;
-    let result = write_period_snapshot(&env, snapshot);
+    let result = env.as_contract(&contract_id, || write_period_snapshot(&env, snapshot));
     assert_eq!(result, Err(Error::InvalidStatusTransition));
 }
 
 #[test]
 fn test_empty_period_sets_empty_flag() {
-    let env = setup();
+    let (env, contract_id) = setup();
     let sub_id = 4;
     let period_index = 0;
 
@@ -107,15 +109,15 @@ fn test_empty_period_sets_empty_flag() {
         finalized_at: 200,
     };
 
-    assert!(write_period_snapshot(&env, snapshot).is_ok());
+    assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, snapshot)).is_ok());
 
-    let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
+    let fetched = env.as_contract(&contract_id, || get_period_snapshot(&env, sub_id, period_index)).unwrap();
     assert_eq!(fetched.status_flags, SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_EMPTY);
 }
 
 #[test]
 fn test_mixed_interval_and_usage_sets_both_flags() {
-    let env = setup();
+    let (env, contract_id) = setup();
     let sub_id = 5;
     let period_index = 0;
 
@@ -130,7 +132,7 @@ fn test_mixed_interval_and_usage_sets_both_flags() {
         status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
         finalized_at: 150,
     };
-    assert!(write_period_snapshot(&env, usage_snapshot).is_ok());
+    assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, usage_snapshot)).is_ok());
 
     // 2. Write interval charge closing the period
     let interval_snapshot = BillingPeriodSnapshot {
@@ -143,9 +145,9 @@ fn test_mixed_interval_and_usage_sets_both_flags() {
         status_flags: SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_INTERVAL_CHARGED,
         finalized_at: 200,
     };
-    assert!(write_period_snapshot(&env, interval_snapshot).is_ok());
+    assert!(env.as_contract(&contract_id, || write_period_snapshot(&env, interval_snapshot)).is_ok());
 
-    let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
+    let fetched = env.as_contract(&contract_id, || get_period_snapshot(&env, sub_id, period_index)).unwrap();
     
     // Assert merged state
     assert_eq!(fetched.total_charged, 1200);
@@ -161,7 +163,7 @@ fn test_mixed_interval_and_usage_sets_both_flags() {
 
 #[test]
 fn test_integrity_checks() {
-    let env = setup();
+    let (env, contract_id) = setup();
     
     // Invalid boundaries
     let bad_bounds = BillingPeriodSnapshot {
@@ -174,7 +176,10 @@ fn test_integrity_checks() {
         status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
         finalized_at: 150,
     };
-    assert_eq!(write_period_snapshot(&env, bad_bounds), Err(Error::InvalidInput));
+    assert_eq!(
+        env.as_contract(&contract_id, || write_period_snapshot(&env, bad_bounds)),
+        Err(Error::InvalidInput)
+    );
 
     // Interval charge requires period_start < period_end
     let bad_interval = BillingPeriodSnapshot {
@@ -187,5 +192,8 @@ fn test_integrity_checks() {
         status_flags: SNAPSHOT_FLAG_INTERVAL_CHARGED,
         finalized_at: 100,
     };
-    assert_eq!(write_period_snapshot(&env, bad_interval), Err(Error::InvalidInput));
+    assert_eq!(
+        env.as_contract(&contract_id, || write_period_snapshot(&env, bad_interval)),
+        Err(Error::InvalidInput)
+    );
 }

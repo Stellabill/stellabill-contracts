@@ -317,7 +317,7 @@ pub fn list_subscriptions_by_subscriber(
         return Err(Error::InvalidInput);
     }
 
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Cap the scan window to MAX_SCAN_DEPTH IDs per call.
     // If the budget is exhausted before `limit` matches are found, `next_start_id`
@@ -560,11 +560,7 @@ pub fn query_prepaid_balances_paginated(
     request: PrepaidQueryRequest,
 ) -> PrepaidQueryResult {
     let scan_limit = request.scan_limit.min(MAX_PREPAID_SCAN_DEPTH);
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     if next_id == 0 || request.start_subscription_id >= next_id {
         return PrepaidQueryResult {
@@ -608,11 +604,7 @@ pub fn query_prepaid_balances_paginated(
 // ── Internal helpers for reconciliation ────────────────────────────────────
 
 fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     let mut total: i128 = 0;
     for id in 0..next_id {
@@ -630,11 +622,7 @@ fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
 }
 
 fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     let mut total: i128 = 0;
     let mut count: u32 = 0;
