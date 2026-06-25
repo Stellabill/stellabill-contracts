@@ -63,16 +63,16 @@ fn test_expiration_timing_and_charging() {
         &None::<i128>,
         &Some(expires_at),
     );
-    client.deposit_funds(&sub_id, &subscriber, &(amount * 5));
+    client.deposit_funds(&sub_id, &subscriber, &(amount * 5, &None::<soroban_sdk::BytesN<32>>));
 
     // Before expiry: charge succeeds
     env.ledger().with_mut(|l| l.timestamp = T0 + INTERVAL);
-    client.charge_subscription(&sub_id);
+    client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(client.get_subscription(&sub_id).lifetime_charged, amount);
 
     // At expiry boundary — subscription expires_at = T0 + 2*INTERVAL
     env.ledger().with_mut(|l| l.timestamp = T0 + 2 * INTERVAL);
-    let res = client.try_charge_subscription(&sub_id);
+    let res = client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
     assert!(res.is_err(), "charge at expiry should be rejected");
 
     // expires_at field is preserved on the subscription
@@ -80,7 +80,7 @@ fn test_expiration_timing_and_charging() {
 
     // After expiry — still rejects
     env.ledger().with_mut(|l| l.timestamp = T0 + 3 * INTERVAL);
-    let res2 = client.try_charge_subscription(&sub_id);
+    let res2 = client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
     assert!(res2.is_err(), "charge after expiry should be rejected");
 
     // Check withdrawal behavior after expiry
@@ -119,7 +119,7 @@ fn test_cleanup_and_archival() {
 
     // Advance past expiry and trigger it via a charge attempt
     env.ledger().with_mut(|l| l.timestamp = T0 + 2 * INTERVAL);
-    let _ = client.try_charge_subscription(&sub_id); // transitions to Expired
+    let _ = client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>); // transitions to Expired
 
     // Perform cleanup which archives the subscription
     client.cleanup_subscription(&sub_id, &subscriber);
@@ -227,9 +227,9 @@ fn test_deposit_rejected_when_expired() {
     // Advance past expiry
     env.ledger().with_mut(|l| l.timestamp = T0 + 100);
     // Trigger the expiration by attempting a charge
-    let _ = client.try_charge_subscription(&sub_id);
+    let _ = client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
 
     // subscription.is_expired(now) is true; deposit should be rejected
-    let res = client.try_deposit_funds(&sub_id, &subscriber, &min_topup);
+    let res = client.try_deposit_funds(&sub_id, &subscriber, &min_topup, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(res, Err(Ok(Error::SubscriptionExpired)));
 }

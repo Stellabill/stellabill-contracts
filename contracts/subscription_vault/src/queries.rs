@@ -311,7 +311,7 @@ pub fn list_subscriptions_by_subscriber(
         return Err(Error::InvalidInput);
     }
 
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Cap the scan window to MAX_SCAN_DEPTH IDs per call.
     // If the budget is exhausted before `limit` matches are found, `next_start_id`
@@ -410,6 +410,12 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
 
     let is_balanced = contract_balance == computed_total;
 
+    let normalized_prepaid = crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
+    let normalized_merchant_liab = crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
+    let normalized_recoverable = crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
+    let normalized_contract_balance = crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
+    let normalized_computed_total = crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
+
     TokenLiabilities {
         token,
         total_prepaid,
@@ -418,6 +424,11 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
         contract_balance,
         computed_total,
         is_balanced,
+        normalized_prepaid,
+        normalized_merchant_liab,
+        normalized_recoverable,
+        normalized_contract_balance,
+        normalized_computed_total,
     }
 }
 
@@ -554,11 +565,7 @@ pub fn query_prepaid_balances_paginated(
     request: PrepaidQueryRequest,
 ) -> PrepaidQueryResult {
     let scan_limit = request.scan_limit.min(MAX_PREPAID_SCAN_DEPTH);
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     if next_id == 0 || request.start_subscription_id >= next_id {
         return PrepaidQueryResult {
@@ -602,11 +609,7 @@ pub fn query_prepaid_balances_paginated(
 // ── Internal helpers for reconciliation ────────────────────────────────────
 
 fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     let mut total: i128 = 0;
     for id in 0..next_id {
@@ -624,11 +627,7 @@ fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
 }
 
 fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
-    let next_id: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::NextId)
-        .unwrap_or(0u32);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
 
     let mut total: i128 = 0;
     let mut count: u32 = 0;

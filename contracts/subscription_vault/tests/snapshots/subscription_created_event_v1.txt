@@ -9,4 +9,3 @@ data:
   lifetime_cap: <Option<i128>>
   expires_at: <Option<u64>>
   timestamp: <u64>
-  schema_version: 2
