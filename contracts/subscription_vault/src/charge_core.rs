@@ -71,6 +71,7 @@ pub fn charge_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -91,6 +92,7 @@ pub fn charge_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }
@@ -167,6 +169,7 @@ pub fn charge_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -217,6 +220,7 @@ pub fn charge_one(
                             fee_amount,
                             treasury: treasury.clone(),
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -285,6 +289,7 @@ pub fn charge_one(
                     timestamp: now,
                     period_start,
                     period_end,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -297,6 +302,7 @@ pub fn charge_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -338,6 +344,7 @@ pub fn charge_one(
                         previous_status,
                         grace_expires_at,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             } else {
@@ -359,6 +366,7 @@ pub fn charge_one(
                     shortfall,
                     resulting_status: sub.status,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -395,6 +403,7 @@ pub fn charge_usage_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -413,6 +422,7 @@ pub fn charge_usage_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }
@@ -456,6 +466,7 @@ pub fn charge_usage_one(
                 timestamp: now,
                 reference,
                 result: UsageChargeResult::Replay,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         return Ok(UsageChargeResult::Replay);
@@ -494,6 +505,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::BurstLimitExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::BurstLimitExceeded);
@@ -521,6 +533,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::RateLimitExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::RateLimitExceeded);
@@ -549,6 +562,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::UsageCapExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::UsageCapExceeded);
@@ -578,6 +592,7 @@ pub fn charge_usage_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
             return Ok(UsageChargeResult::Charged);
@@ -624,6 +639,7 @@ pub fn charge_usage_one(
                             fee_amount,
                             treasury: treasury.clone(),
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -683,6 +699,7 @@ pub fn charge_usage_one(
                     token: sub.token.clone(),
                     timestamp: now,
                     reference,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -695,6 +712,7 @@ pub fn charge_usage_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -715,6 +733,7 @@ pub fn charge_usage_one(
                     shortfall: usage_amount.saturating_sub(sub.prepaid_balance),
                     resulting_status: SubscriptionStatus::InsufficientBalance,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
             Ok(UsageChargeResult::Charged)

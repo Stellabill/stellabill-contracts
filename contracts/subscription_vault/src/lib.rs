@@ -301,18 +301,18 @@ pub use types::{
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
-    MetadataSetEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
-    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
-    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    EmergencyStopEnabledEvent, Error, EVENT_SCHEMA_VERSION, FundsDepositedEvent,
+    LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MigrationExportEvent,
+    NextChargeInfo, OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent,
+    RecoveryEvent, RecoveryReason, SchemaMigratedEvent, Subscription, SubscriptionArchivedEvent,
+    SubscriptionCancelledEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    SubscriptionCreatedEvent, SubscriptionExpiredEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
-    SubscriptionArchivedEvent, SubscriptionExpiredEvent,
-    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
+    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
+    TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
@@ -776,6 +776,7 @@ impl SubscriptionVault {
             EmergencyStopEnabledEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -815,6 +816,7 @@ impl SubscriptionVault {
             EmergencyStopDisabledEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -947,6 +949,7 @@ impl SubscriptionVault {
                 limit: 1,
                 exported: 1,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -1054,6 +1057,7 @@ impl SubscriptionVault {
                 limit,
                 exported,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -1117,6 +1121,7 @@ impl SubscriptionVault {
                 lifetime_cap,
                 expires_at,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1175,6 +1180,7 @@ impl SubscriptionVault {
                 lifetime_cap,
                 expires_at,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1236,6 +1242,7 @@ impl SubscriptionVault {
                 amount,
                 new_balance: sub.prepaid_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1532,6 +1539,7 @@ impl SubscriptionVault {
                 authorizer,
                 refund_amount: sub.prepaid_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1634,6 +1642,7 @@ impl SubscriptionVault {
                 merchant: sub.merchant,
                 authorizer,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1684,6 +1693,7 @@ impl SubscriptionVault {
                 authorizer,
                 previous_status: sub.status,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1766,6 +1776,7 @@ impl SubscriptionVault {
                 timestamp,
                 period_start: old_sub.last_payment_timestamp,
                 period_end: timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(result)
@@ -1911,6 +1922,7 @@ impl SubscriptionVault {
                 amount,
                 remaining_balance: new_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2527,6 +2539,7 @@ impl SubscriptionVault {
                 aggregate_total_amount: aggregate.total_amount,
                 aggregate_oldest_period_start: aggregate.oldest_period_start,
                 aggregate_newest_period_end: aggregate.newest_period_end,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(summary)

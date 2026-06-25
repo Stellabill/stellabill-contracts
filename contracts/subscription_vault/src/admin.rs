@@ -351,6 +351,7 @@ pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address, no
             old_admin: current_admin,
             new_admin,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -400,6 +401,7 @@ pub fn do_recover_stranded_funds(
         amount,
         reason,
         timestamp: env.ledger().timestamp(),
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
     };
 
     env.events().publish(
@@ -441,6 +443,7 @@ pub fn set_protocol_fee(
             treasury,
             fee_bps,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -621,6 +624,7 @@ pub fn do_migrate(
             from_version: stored_version,
             to_version: binary_version,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
