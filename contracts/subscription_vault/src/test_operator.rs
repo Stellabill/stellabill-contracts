@@ -43,14 +43,14 @@ fn set_operator_by_admin_stores_address_and_emits_event() {
     te.env.ledger().with_mut(|li| li.timestamp = 1_000);
     te.client.set_operator(&te.admin, &operator);
 
-    assert_eq!(te.client.get_operator(), Some(operator.clone()));
-
     let events = te.env.events().all();
     let last = events.last().expect("no events");
     let payload: OperatorSetEvent = last.2.into_val(&te.env);
     assert_eq!(payload.admin, te.admin);
-    assert_eq!(payload.operator, operator);
+    assert_eq!(payload.operator, operator.clone());
     assert_eq!(payload.timestamp, 1_000);
+
+    assert_eq!(te.client.get_operator(), Some(operator));
 }
 
 #[test]
@@ -110,13 +110,13 @@ fn remove_operator_clears_address_and_emits_event() {
     te.client.set_operator(&te.admin, &operator);
     te.client.remove_operator(&te.admin);
 
-    assert_eq!(te.client.get_operator(), None);
-
     let events = te.env.events().all();
     let last = events.last().expect("no events");
     let payload: OperatorRemovedEvent = last.2.into_val(&te.env);
     assert_eq!(payload.admin, te.admin);
     assert_eq!(payload.timestamp, 2_000);
+
+    assert_eq!(te.client.get_operator(), None);
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn operator_charge_usage_succeeds() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 
@@ -374,7 +374,7 @@ fn operator_charge_usage_wrong_operator_rejected() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 
@@ -649,7 +649,7 @@ fn get_operator_nonce_increments_per_call() {
 
         // Re-fund so the next charge can succeed.
         te.stellar_token_client().mint(&subscriber, &AMOUNT);
-        te.client.deposit_funds(&sub_id, &subscriber, &AMOUNT);
+        te.client.deposit_funds(&sub_id, &subscriber, &AMOUNT, &None::<soroban_sdk::BytesN<32>>);
     }
     assert_eq!(te.client.get_operator_nonce(&operator), 3u64);
 }
@@ -673,7 +673,7 @@ fn operator_charge_usage_with_reference_succeeds() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 
