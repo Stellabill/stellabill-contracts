@@ -197,23 +197,52 @@ mod nonce;
 ///
 /// See `docs/admin_authorization_matrix.md` for the full privilege matrix.
 pub mod operator {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{BatchChargeResult, ChargeExecutionResult, Error, UsageChargeResult};
+    use crate::types::{BatchChargeResult, ChargeExecutionResult, DataKey, Error, UsageChargeResult};
     use soroban_sdk::{Address, Env, String, Vec};
 
-    fn require_operator_auth(_env: &Env, _op: &Address) -> Result<Address, Error> {
-        Ok(_op.clone())
+    fn require_operator_auth(env: &Env, op: &Address) -> Result<Address, Error> {
+        op.require_auth();
+        let stored_op = get_operator(env).ok_or(Error::Unauthorized)?;
+        if op != &stored_op {
+            return Err(Error::Unauthorized);
+        }
+        Ok(stored_op)
     }
 
-    pub fn do_set_operator(_env: &Env, _admin: Address, _operator: Address) -> Result<(), Error> {
+    pub fn do_set_operator(env: &Env, admin: Address, operator: Address) -> Result<(), Error> {
+        crate::admin::require_admin_auth(env, &admin)?;
+        if operator == env.current_contract_address() {
+            return Err(Error::InvalidInput);
+        }
+        crate::admin::write_config(env, &DataKey::Operator, &operator);
+        env.events().publish(
+            (soroban_sdk::Symbol::new(env, "operator_set"),),
+            crate::types::OperatorSetEvent {
+                admin,
+                operator,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
-    pub fn do_remove_operator(_env: &Env, _admin: Address) -> Result<(), Error> {
+
+    pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
+        crate::admin::require_admin_auth(env, &admin)?;
+        crate::admin::remove_config(env, &DataKey::Operator);
+        env.events().publish(
+            (soroban_sdk::Symbol::new(env, "operator_removed"),),
+            crate::types::OperatorRemovedEvent {
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
-    pub fn get_operator(_env: &Env) -> Option<Address> {
-        None
+
+    pub fn get_operator(env: &Env) -> Option<Address> {
+        crate::admin::read_config(env, &DataKey::Operator)
     }
+
     pub fn do_operator_batch_charge(
         env: &Env,
         operator: Address,
@@ -229,7 +258,9 @@ pub mod operator {
         op: Address,
         subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
-        Ok(ChargeExecutionResult::Charged)
+        require_operator_auth(env, &op)?;
+        let now = env.ledger().timestamp();
+        crate::charge_core::charge_one(env, subscription_id, now, None)
     }
 
     /// Metered usage charge driven by the operator (no reference).
@@ -239,7 +270,8 @@ pub mod operator {
         subscription_id: u32,
         usage_amount: i128,
     ) -> Result<UsageChargeResult, Error> {
-        Ok(UsageChargeResult::Charged)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, String::from_str(env, ""))
     }
 
     /// Metered usage charge driven by the operator, with a reference string.
@@ -250,7 +282,8 @@ pub mod operator {
         usage_amount: i128,
         reference: String,
     ) -> Result<UsageChargeResult, Error> {
-        Ok(UsageChargeResult::Charged)
+        require_operator_auth(env, &op)?;
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, reference)
     }
 }
 
@@ -274,14 +307,13 @@ pub use types::{
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
     ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
-    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    ScheduledPayoutEvent, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
-    SubscriptionArchivedEvent, SubscriptionExpiredEvent,
-    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
+    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
+    TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
@@ -304,7 +336,7 @@ pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 ///
 /// Bump this constant (and add a migration path in [`migration`]) whenever
 /// storage key shapes or type layouts change in an incompatible way.
-const STORAGE_VERSION: u32 = 2;
+const STORAGE_VERSION: u32 = 3;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a
 /// single [`SubscriptionVault::export_subscription_summaries`] call.
@@ -325,9 +357,7 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
 ///
 /// Returns `false` when the key has never been written (safe default: not stopped).
 fn get_emergency_stop(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .get(&DataKey::EmergencyStop)
+    admin::read_config(env, &DataKey::EmergencyStop)
         .unwrap_or(false)
 }
 
@@ -741,12 +771,13 @@ impl SubscriptionVault {
         if get_emergency_stop(&env) {
             return Ok(());
         }
-        env.storage().instance().set(&DataKey::EmergencyStop, &true);
+        admin::write_config(&env, &DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
             EmergencyStopEnabledEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -780,14 +811,13 @@ impl SubscriptionVault {
         if !get_emergency_stop(&env) {
             return Ok(());
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::EmergencyStop, &false);
+        admin::write_config(&env, &DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
             EmergencyStopDisabledEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -832,6 +862,10 @@ impl SubscriptionVault {
         admin::do_migrate(&env, admin, STORAGE_VERSION)
     }
 
+    pub fn migrate_config_to_persistent(env: Env, admin: Address) -> Result<(), Error> {
+        admin::migrate_config_to_persistent(&env, admin)
+    }
+
     /// Export contract-level configuration as a [`ContractSnapshot`] for migration tooling.
     ///
     /// Captures the admin, primary token, minimum top-up, next subscription ID, storage
@@ -857,13 +891,10 @@ impl SubscriptionVault {
     pub fn export_contract_snapshot(env: Env, admin: Address) -> Result<ContractSnapshot, Error> {
         require_admin_auth(&env, &admin)?;
 
-        let token: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
+        let token: Address = admin::read_config(&env, &DataKey::Token)
             .ok_or(Error::NotFound)?;
         let min_topup: i128 = admin::get_min_topup(&env)?;
-        let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        let next_id: u32 = admin::read_config(&env, &DataKey::NextId).unwrap_or(0);
 
         env.events().publish(
             (Symbol::new(&env, "migration_contract_snapshot"),),
@@ -919,6 +950,7 @@ impl SubscriptionVault {
                 limit: 1,
                 exported: 1,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -982,7 +1014,7 @@ impl SubscriptionVault {
             return Ok(Vec::new(&env));
         }
 
-        let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        let next_id: u32 = admin::read_config(&env, &DataKey::NextId).unwrap_or(0);
         if start_id >= next_id {
             return Ok(Vec::new(&env));
         }
@@ -1026,6 +1058,7 @@ impl SubscriptionVault {
                 limit,
                 exported,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -1075,10 +1108,7 @@ impl SubscriptionVault {
         )?;
 
         let timestamp = env.ledger().timestamp();
-        let token: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
+        let token: Address = admin::read_config(&env, &DataKey::Token)
             .ok_or(Error::NotFound)?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1092,6 +1122,7 @@ impl SubscriptionVault {
                 lifetime_cap,
                 expires_at,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1150,6 +1181,7 @@ impl SubscriptionVault {
                 lifetime_cap,
                 expires_at,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1218,6 +1250,7 @@ impl SubscriptionVault {
                 amount,
                 new_balance: sub.prepaid_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1514,6 +1547,7 @@ impl SubscriptionVault {
                 authorizer,
                 refund_amount: sub.prepaid_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1616,6 +1650,7 @@ impl SubscriptionVault {
                 merchant: sub.merchant,
                 authorizer,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1666,6 +1701,7 @@ impl SubscriptionVault {
                 authorizer,
                 previous_status: sub.status,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1763,6 +1799,7 @@ impl SubscriptionVault {
                 timestamp,
                 period_start: old_sub.last_payment_timestamp,
                 period_end: timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(result)
@@ -1894,10 +1931,7 @@ impl SubscriptionVault {
 
         let new_balance = merchant::get_merchant_balance(&env, &merchant);
         let timestamp = env.ledger().timestamp();
-        let token: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
+        let token: Address = admin::read_config(&env, &DataKey::Token)
             .ok_or(Error::NotFound)?;
         env.events().publish(
             (
@@ -1911,6 +1945,7 @@ impl SubscriptionVault {
                 amount,
                 remaining_balance: new_balance,
                 timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2043,6 +2078,65 @@ impl SubscriptionVault {
         merchant: Address,
     ) -> Vec<(Address, crate::types::TokenEarnings)> {
         merchant::get_merchant_total_earnings(&env, &merchant)
+    }
+
+    // ── Payout Schedule ────────────────────────────────────────────────────────
+
+    /// Configure automated payouts for a merchant.
+    ///
+    /// Sets a cadence and minimum-payout threshold.  When `cadence_seconds` and
+    /// `min_payout` are both 0 the schedule is cleared (no auto-payout).
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must authorize.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::InvalidAmount`] — `min_payout` is negative.
+    /// * [`Error::Unauthorized`] — `merchant` did not authorize.
+    pub fn set_payout_schedule(
+        env: Env,
+        merchant: Address,
+        cadence_seconds: u64,
+        min_payout: i128,
+    ) -> Result<PayoutSchedule, Error> {
+        merchant::do_set_payout_schedule(&env, merchant, cadence_seconds, min_payout)
+    }
+
+    /// Execute scheduled payouts for a merchant on-demand.
+    ///
+    /// Anyone may call this function.  For each token the merchant holds a
+    /// balance in, the full balance is transferred to the merchant's payout
+    /// address if it meets the configured `min_payout` threshold.
+    ///
+    /// The cadence guard (`cadence_seconds`) must have elapsed since the
+    /// last successful flush; otherwise the call fails with
+    /// `IntervalNotElapsed`.
+    ///
+    /// # Reentrancy Protection
+    ///
+    /// Acquires a reentrancy guard because this function performs token
+    /// transfers.
+    ///
+    /// # Returns
+    ///
+    /// The number of token payouts that were actually executed.
+    pub fn flush_payouts(
+        env: Env,
+        merchant: Address,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "flush_payouts")?;
+
+        let caller = env.current_contract_address(); // the contract itself is the caller
+        merchant::do_flush_payouts(&env, merchant, caller)
+    }
+
+    /// Read the current payout schedule for a merchant.
+    pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule {
+        merchant::get_payout_schedule(&env, &merchant)
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────
@@ -2527,6 +2621,7 @@ impl SubscriptionVault {
                 aggregate_total_amount: aggregate.total_amount,
                 aggregate_oldest_period_start: aggregate.oldest_period_start,
                 aggregate_newest_period_end: aggregate.newest_period_end,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(summary)
@@ -2924,6 +3019,9 @@ mod test_utils;
 
 #[cfg(test)]
 mod test_charge_invariants;
+
+#[cfg(test)]
+mod test_payout_schedule;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
