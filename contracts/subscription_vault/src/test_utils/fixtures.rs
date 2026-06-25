@@ -113,8 +113,6 @@ pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balanc
 /// Seed the `next_id` counter to an arbitrary value.
 pub fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
     env.as_contract(contract_id, || {
-        env.storage()
-            .instance()
-            .set(&DataKey::NextId, &value);
+        crate::admin::write_config(env, &DataKey::NextId, &value);
     });
 }

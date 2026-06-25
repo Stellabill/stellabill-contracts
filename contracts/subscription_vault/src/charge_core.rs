@@ -93,6 +93,7 @@ pub fn charge_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -114,10 +115,47 @@ pub fn charge_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }
             return Ok(ChargeExecutionResult::LifetimeCapReached);
+        }
+    }
+
+    // Scheduled cancellation: fire when cancel_at has arrived.
+    if let Some(cancel_at) = sub.cancel_at {
+        if now >= cancel_at {
+            if sub.status != SubscriptionStatus::Cancelled {
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+                let refund_amount = sub.prepaid_balance;
+                sub.prepaid_balance = 0;
+                sub.cancel_at = None;
+                let token_addr = sub.token.clone();
+                write_subscription(env, subscription_id, &sub);
+                if refund_amount > 0 {
+                    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+                    token_client.transfer(
+                        &env.current_contract_address(),
+                        &sub.subscriber,
+                        &refund_amount,
+                    );
+                    crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
+                }
+                env.events().publish(
+                    (soroban_sdk::Symbol::new(env, "subscription_cancelled"), subscription_id),
+                    SubscriptionCancelledEvent {
+                        subscription_id,
+                        subscriber: sub.subscriber.clone(),
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        authorizer: sub.subscriber.clone(),
+                        refund_amount,
+                        timestamp: now,
+                    },
+                );
+            }
+            return Ok(ChargeExecutionResult::ScheduledCancellation);
         }
     }
 
@@ -134,22 +172,22 @@ pub fn charge_one(
 
     let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
     let period_start = sub.start_time
-        .checked_add(period_index.checked_mul(sub.interval_seconds).ok_or(Error::Overflow)?)
-        .ok_or(Error::Overflow)?;
+        .checked_add(period_index.saturating_mul(sub.interval_seconds))
+        .unwrap_or(u64::MAX);
     let period_end = period_start
         .checked_add(sub.interval_seconds)
-        .ok_or(Error::Overflow)?;
+        .unwrap_or(u64::MAX);
 
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
-        if let Some(stored) = env
-            .storage()
-            .instance()
-            .get::<_, soroban_sdk::BytesN<32>>(&DataKey::IdemKey(subscription_id))
-        {
-            if stored == *k {
-                return Ok(ChargeExecutionResult::Charged);
-            }
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_CHARGE_INTERVAL,
+            subscription_id,
+            k,
+        );
+        if crate::idempotency::check_key(env, subscription_id, &hashed) {
+            return Ok(ChargeExecutionResult::Charged);
         }
     }
 
@@ -190,6 +228,7 @@ pub fn charge_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -240,11 +279,12 @@ pub fn charge_one(
                             fee_amount,
                             treasury: treasury.clone(),
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
             }
-            sub.last_payment_timestamp = period_start;
+            sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
 
@@ -293,7 +333,13 @@ pub fn charge_one(
             // Record charged period and optional idempotency key
             storage.set(&DataKey::ChargedPeriod(subscription_id), &period_index);
             if let Some(k) = idempotency_key {
-                storage.set(&DataKey::IdemKey(subscription_id), &k);
+                let hashed = crate::idempotency::hash_idem_key(
+                    env,
+                    crate::types::DOMAIN_CHARGE_INTERVAL,
+                    subscription_id,
+                    &k,
+                );
+                crate::idempotency::push_key(env, subscription_id, &hashed);
             }
 
             env.events().publish(
@@ -308,6 +354,7 @@ pub fn charge_one(
                     timestamp: now,
                     period_start,
                     period_end,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -320,6 +367,7 @@ pub fn charge_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -361,6 +409,7 @@ pub fn charge_one(
                         previous_status,
                         grace_expires_at,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             } else {
@@ -382,6 +431,7 @@ pub fn charge_one(
                     shortfall,
                     resulting_status: sub.status,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -421,6 +471,7 @@ pub fn charge_usage_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -439,6 +490,7 @@ pub fn charge_usage_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }
@@ -482,6 +534,7 @@ pub fn charge_usage_one(
                 timestamp: now,
                 reference,
                 result: UsageChargeResult::Replay,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         return Ok(UsageChargeResult::Replay);
@@ -520,6 +573,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::BurstLimitExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::BurstLimitExceeded);
@@ -547,6 +601,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::RateLimitExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::RateLimitExceeded);
@@ -575,6 +630,7 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::UsageCapExceeded,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
                 return Ok(UsageChargeResult::UsageCapExceeded);
@@ -604,6 +660,7 @@ pub fn charge_usage_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
             return Ok(UsageChargeResult::Charged);
@@ -650,6 +707,7 @@ pub fn charge_usage_one(
                             fee_amount,
                             treasury: treasury.clone(),
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -709,6 +767,7 @@ pub fn charge_usage_one(
                     token: sub.token.clone(),
                     timestamp: now,
                     reference,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
 
@@ -721,6 +780,7 @@ pub fn charge_usage_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },
                     );
                 }
@@ -741,6 +801,7 @@ pub fn charge_usage_one(
                     shortfall: usage_amount.saturating_sub(sub.prepaid_balance),
                     resulting_status: SubscriptionStatus::InsufficientBalance,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
             Ok(UsageChargeResult::Charged)
