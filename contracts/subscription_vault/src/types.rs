@@ -38,11 +38,17 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// ## Storage Layout — Discriminant Registry
 ///
 /// The Soroban `#[contracttype]` macro serialises enum variants by their
-/// **declaration order** (0-indexed). The discriminant numbers in the doc
-/// comments below are the canonical, frozen identifiers for each key.
-/// **Never reorder or remove a variant** — doing so shifts all subsequent
-/// discriminants and silently corrupts live storage. Only append new variants
-/// at the end.
+/// **declaration order** (0-indexed). The discriminant numbers below are the
+/// canonical, frozen identifiers for each key and match
+/// [`DataKey::canonical_discriminant`]. **Never reorder or remove a variant** —
+/// doing so shifts all subsequent discriminants and silently corrupts live
+/// storage. Only append new variants at the end.
+///
+/// The **Storage tier** column is authoritative: every instance-tier key below
+/// is also listed in [`KNOWN_INSTANCE_KEY_DISCRIMINANTS`], the allowlist that
+/// [`assert_known_data_key`] checks at instance read/write sites. When you add a
+/// variant, append a row here, add its arm to `canonical_discriminant`, and —
+/// if it is instance-tier — add its discriminant to the allowlist.
 ///
 /// | Discriminant | Variant | Storage tier |
 /// |:---:|:---|:---|
@@ -72,11 +78,25 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// | 23 | `Treasury` | instance |
 /// | 24 | `AcceptedTokens` | instance |
 /// | 25 | `TokenDecimals(Address)` | instance |
-/// | 37 | `AdminNonce(Address, u32)` | persistent |
-/// | 38 | `Operator` | instance |
-/// | 39 | `BillingRetentionConfig` | instance |
-/// | 40 | `BillingStatementSequence(u32)` | persistent |
-/// | 41 | `BillingStatementAggregate(u32)` | persistent |
+/// | 26 | `NextPlanId` | instance |
+/// | 27 | `Plan(u32)` | instance |
+/// | 28 | `SubPlan(u32)` | instance |
+/// | 29 | `PlanMaxActive(u32)` | instance |
+/// | 30 | `CreditLimit(Address, Address)` | instance |
+/// | 31 | `TokenSubs(Address)` | instance |
+/// | 32 | `SubscriberSubs(Address)` | instance |
+/// | 33 | `MerchantBalance(Address, Address)` | instance |
+/// | 34 | `Blocklist(Address)` | persistent |
+/// | 35 | `Oracle` | instance |
+/// | 36 | `BillingPeriodSnapshot(u32, u64)` | persistent |
+/// | 37 | `BillingPeriodSnapshotIndex(u32)` | persistent |
+/// | 38 | `AdminNonce(Address, u32)` | persistent |
+/// | 39 | `Metadata(u32, String)` | persistent |
+/// | 40 | `MetadataKeys(u32)` | persistent |
+/// | 41 | `Operator` | instance |
+/// | 42 | `BillingRetentionConfig` | instance |
+/// | 43 | `BillingStatementSequence(u32)` | persistent |
+/// | 44 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -171,6 +191,154 @@ pub enum DataKey {
     BillingStatementSequence(u32),
     /// Aggregated totals from compacted billing statements.
     BillingStatementAggregate(u32),
+}
+
+impl DataKey {
+    /// Canonical, declaration-order discriminant for this key.
+    ///
+    /// These numbers are the frozen identifiers documented in the registry table
+    /// on [`DataKey`]. The match is intentionally **exhaustive with no wildcard
+    /// arm**: adding a new variant to `DataKey` without assigning it a number
+    /// here is a *compile error*. That is the first line of defence against the
+    /// drift this module guards — a new key cannot ship until it has been
+    /// consciously classified.
+    pub const fn canonical_discriminant(&self) -> u32 {
+        match self {
+            DataKey::MerchantSubs(_) => 0,
+            DataKey::Token => 1,
+            DataKey::Admin => 2,
+            DataKey::MinTopup => 3,
+            DataKey::NextId => 4,
+            DataKey::SchemaVersion => 5,
+            DataKey::Sub(_) => 6,
+            DataKey::ChargedPeriod(_) => 7,
+            DataKey::IdemKey(_) => 8,
+            DataKey::EmergencyStop => 9,
+            DataKey::MerchantPaused(_) => 10,
+            DataKey::BillingStatement(_, _) => 11,
+            DataKey::BillingStatementsBySubscription(_) => 12,
+            DataKey::BillingStatementsByMerchant(_) => 13,
+            DataKey::TotalAccounted(_) => 14,
+            DataKey::Recovery(_) => 15,
+            DataKey::MerchantConfig(_) => 16,
+            DataKey::MerchantEarnings(_, _) => 17,
+            DataKey::MerchantTokens(_) => 18,
+            DataKey::UsageLimits(_) => 19,
+            DataKey::UsageState(_) => 20,
+            DataKey::GracePeriod => 21,
+            DataKey::FeeBps => 22,
+            DataKey::Treasury => 23,
+            DataKey::AcceptedTokens => 24,
+            DataKey::TokenDecimals(_) => 25,
+            DataKey::NextPlanId => 26,
+            DataKey::Plan(_) => 27,
+            DataKey::SubPlan(_) => 28,
+            DataKey::PlanMaxActive(_) => 29,
+            DataKey::CreditLimit(_, _) => 30,
+            DataKey::TokenSubs(_) => 31,
+            DataKey::SubscriberSubs(_) => 32,
+            DataKey::MerchantBalance(_, _) => 33,
+            DataKey::Blocklist(_) => 34,
+            DataKey::Oracle => 35,
+            DataKey::BillingPeriodSnapshot(_, _) => 36,
+            DataKey::BillingPeriodSnapshotIndex(_) => 37,
+            DataKey::AdminNonce(_, _) => 38,
+            DataKey::Metadata(_, _) => 39,
+            DataKey::MetadataKeys(_) => 40,
+            DataKey::Operator => 41,
+            DataKey::BillingRetentionConfig => 42,
+            DataKey::BillingStatementSequence(_) => 43,
+            DataKey::BillingStatementAggregate(_) => 44,
+        }
+    }
+
+    /// Returns `true` if this key belongs to the canonical **instance**-storage
+    /// allowlist ([`KNOWN_INSTANCE_KEY_DISCRIMINANTS`]).
+    pub fn is_known_instance_key(&self) -> bool {
+        is_known_instance_discriminant(self.canonical_discriminant())
+    }
+}
+
+/// Canonical set of [`DataKey`] discriminants that legitimately live in
+/// **instance** storage. Frozen identifiers — see the registry table on
+/// [`DataKey`]. Kept sorted ascending so it reads as a registry and supports a
+/// fast membership check.
+///
+/// Every instance read/write must use a key whose
+/// [`DataKey::canonical_discriminant`] appears here. Persistent-tier
+/// discriminants are deliberately *excluded* so that an accidental instance
+/// write of a persistent key — or a brand-new variant routed to instance
+/// storage without review — is caught by [`assert_known_data_key`] in tests.
+pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
+    0,  // MerchantSubs(Address)
+    1,  // Token
+    2,  // Admin
+    3,  // MinTopup
+    4,  // NextId
+    5,  // SchemaVersion
+    9,  // EmergencyStop
+    10, // MerchantPaused(Address)
+    14, // TotalAccounted(Address)
+    16, // MerchantConfig(Address)
+    17, // MerchantEarnings(Address, Address)
+    18, // MerchantTokens(Address)
+    19, // UsageLimits(u32)
+    20, // UsageState(u32)
+    21, // GracePeriod
+    22, // FeeBps
+    23, // Treasury
+    24, // AcceptedTokens
+    25, // TokenDecimals(Address)
+    26, // NextPlanId
+    27, // Plan(u32)
+    28, // SubPlan(u32)
+    29, // PlanMaxActive(u32)
+    30, // CreditLimit(Address, Address)
+    31, // TokenSubs(Address)
+    32, // SubscriberSubs(Address)
+    33, // MerchantBalance(Address, Address)
+    35, // Oracle
+    41, // Operator
+    42, // BillingRetentionConfig
+];
+
+/// Returns `true` if `discriminant` is a recognised instance-storage key.
+///
+/// Operates on the raw discriminant so it can also reject a *synthetic* unknown
+/// key (e.g. a legacy `Symbol`-keyed instance write that never went through the
+/// typed [`DataKey`] enum) without needing to construct one.
+pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
+}
+
+/// Debug-only guard asserting that `key` belongs to the canonical instance-key
+/// allowlist before it is used for an instance read or write.
+///
+/// Compiled out entirely in release builds (`debug_assert!` is a no-op when
+/// `debug-assertions = false`, i.e. the on-chain wasm has **zero overhead**),
+/// but active under `cfg(test)` and debug builds so CI trips the moment an
+/// unknown or mis-tiered key reaches instance storage.
+#[inline]
+pub fn assert_known_data_key(key: &DataKey) {
+    debug_assert!(
+        key.is_known_instance_key(),
+        "DataKey discriminant {} is not in KNOWN_INSTANCE_KEY_DISCRIMINANTS: an \
+         unknown or persistent-tier key reached instance storage. Add the variant \
+         to the allowlist if it is genuinely instance-tier, or route it to \
+         persistent storage. See docs/storage_layout.md.",
+        key.canonical_discriminant()
+    );
+}
+
+/// Convenience wrapper over [`assert_known_data_key`] for instance storage
+/// helpers. A no-op in release builds; trips in `cfg(test)` so CI catches drift.
+#[macro_export]
+macro_rules! debug_assert_known_key {
+    ($key:expr) => {
+        $crate::types::assert_known_data_key($key)
+    };
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -1562,5 +1730,169 @@ pub struct PrepaidQueryResult {
     pub next_start_id: Option<u32>,
     /// Whether more subscriptions may exist beyond this scan window.
     pub has_more: bool,
+}
+
+#[cfg(test)]
+mod known_keys_tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env, String};
+
+    /// Builds one value of **every** `DataKey` variant, paired with whether it
+    /// is expected to be an instance-storage key. Adding a variant without
+    /// extending this list fails `every_variant_is_classified_exactly_once`,
+    /// keeping the test the canonical mirror of the enum.
+    fn all_variants(env: &Env) -> alloc::vec::Vec<(DataKey, bool)> {
+        let a = Address::generate(env);
+        let b = Address::generate(env);
+        let s = String::from_str(env, "k");
+        alloc::vec![
+            (DataKey::MerchantSubs(a.clone()), true),
+            (DataKey::Token, true),
+            (DataKey::Admin, true),
+            (DataKey::MinTopup, true),
+            (DataKey::NextId, true),
+            (DataKey::SchemaVersion, true),
+            (DataKey::Sub(1), false),
+            (DataKey::ChargedPeriod(1), false),
+            (DataKey::IdemKey(1), false),
+            (DataKey::EmergencyStop, true),
+            (DataKey::MerchantPaused(a.clone()), true),
+            (DataKey::BillingStatement(1, 2), false),
+            (DataKey::BillingStatementsBySubscription(1), false),
+            (DataKey::BillingStatementsByMerchant(a.clone()), false),
+            (DataKey::TotalAccounted(a.clone()), true),
+            (DataKey::Recovery(s.clone()), false),
+            (DataKey::MerchantConfig(a.clone()), true),
+            (DataKey::MerchantEarnings(a.clone(), b.clone()), true),
+            (DataKey::MerchantTokens(a.clone()), true),
+            (DataKey::UsageLimits(1), true),
+            (DataKey::UsageState(1), true),
+            (DataKey::GracePeriod, true),
+            (DataKey::FeeBps, true),
+            (DataKey::Treasury, true),
+            (DataKey::AcceptedTokens, true),
+            (DataKey::TokenDecimals(a.clone()), true),
+            (DataKey::NextPlanId, true),
+            (DataKey::Plan(1), true),
+            (DataKey::SubPlan(1), true),
+            (DataKey::PlanMaxActive(1), true),
+            (DataKey::CreditLimit(a.clone(), b.clone()), true),
+            (DataKey::TokenSubs(a.clone()), true),
+            (DataKey::SubscriberSubs(a.clone()), true),
+            (DataKey::MerchantBalance(a.clone(), b.clone()), true),
+            (DataKey::Blocklist(a.clone()), false),
+            (DataKey::Oracle, true),
+            (DataKey::BillingPeriodSnapshot(1, 2), false),
+            (DataKey::BillingPeriodSnapshotIndex(1), false),
+            (DataKey::AdminNonce(a.clone(), 1), false),
+            (DataKey::Metadata(1, s.clone()), false),
+            (DataKey::MetadataKeys(1), false),
+            (DataKey::Operator, true),
+            (DataKey::BillingRetentionConfig, true),
+            (DataKey::BillingStatementSequence(1), false),
+            (DataKey::BillingStatementAggregate(1), false),
+        ]
+    }
+
+    /// Positive path: every instance-tier variant is accepted by the allowlist.
+    #[test]
+    fn every_instance_variant_is_accepted() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if is_instance {
+                assert!(
+                    key.is_known_instance_key(),
+                    "instance variant disc {} rejected by allowlist",
+                    key.canonical_discriminant()
+                );
+                // The runtime guard must not trip for a known key.
+                assert_known_data_key(&key);
+            }
+        }
+    }
+
+    /// Negative path: persistent-tier variants are NOT in the instance allowlist.
+    #[test]
+    fn persistent_variants_are_rejected() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if !is_instance {
+                assert!(
+                    !key.is_known_instance_key(),
+                    "persistent variant disc {} wrongly allowlisted",
+                    key.canonical_discriminant()
+                );
+            }
+        }
+    }
+
+    /// Negative path: a synthetic unknown key (one whose discriminant was never
+    /// registered — e.g. a legacy `Symbol`-keyed write or a future variant added
+    /// without updating the allowlist) is rejected.
+    #[test]
+    fn synthetic_unknown_key_is_rejected() {
+        // Discriminants beyond the highest registered variant (44) can never be
+        // produced by a real `DataKey`, modelling an unknown/legacy key.
+        assert!(!is_known_instance_discriminant(45));
+        assert!(!is_known_instance_discriminant(9_999));
+        assert!(!is_known_instance_discriminant(u32::MAX));
+    }
+
+    /// The debug guard must panic for an unknown key in test/debug builds.
+    #[test]
+    #[should_panic(expected = "KNOWN_INSTANCE_KEY_DISCRIMINANTS")]
+    fn assert_panics_on_persistent_key() {
+        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
+        // instance storage; the guard catches it.
+        let env = Env::default();
+        let _ = &env;
+        assert_known_data_key(&DataKey::Sub(1));
+    }
+
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=44`
+    /// range, so the registry can never silently skip or duplicate a number.
+    #[test]
+    fn discriminants_are_unique_and_contiguous() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let mut seen = [false; 45];
+        for (key, _) in &variants {
+            let d = key.canonical_discriminant() as usize;
+            assert!(d < seen.len(), "discriminant {d} out of expected range");
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=44");
+        assert_eq!(variants.len(), 45, "variant count drifted from 45");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let expected_instance: alloc::vec::Vec<u32> = all_variants(&env)
+            .into_iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+    }
 }
 
