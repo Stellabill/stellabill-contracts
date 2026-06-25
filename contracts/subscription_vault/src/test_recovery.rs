@@ -174,7 +174,7 @@ fn test_state_consistency() {
     
     let sub_id = client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
     
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     
     // Total accounted should be 50M. Contract balance is 50M.
     // Try to recover 1 from accounted funds - should fail
@@ -244,6 +244,11 @@ fn test_get_token_reconciliation_empty_contract() {
     assert_eq!(reconciliation.contract_balance, 0);
     assert_eq!(reconciliation.computed_total, 0);
     assert!(reconciliation.is_balanced);
+    assert_eq!(reconciliation.normalized_prepaid, 0);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_contract_balance, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 0);
 }
 
 #[test]
@@ -257,7 +262,7 @@ fn test_get_token_reconciliation_with_prepaid() {
     token_client.mint(&subscriber, &50_000_000);
     let sub_id =
         client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Get reconciliation
     let reconciliation = client.get_token_reconciliation(&token_addr);
@@ -270,6 +275,12 @@ fn test_get_token_reconciliation_with_prepaid() {
     assert_eq!(reconciliation.recoverable_amount, 0);
     assert_eq!(reconciliation.computed_total, 50_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 50_000_000_000);
 }
 
 #[test]
@@ -283,11 +294,11 @@ fn test_get_token_reconciliation_after_charge() {
     token_client.mint(&subscriber, &50_000_000);
     let sub_id =
         client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Charge the subscription
     env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1001);
-    client.charge_subscription(&sub_id);
+    client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
 
     // Get reconciliation
     let reconciliation = client.get_token_reconciliation(&token_addr);
@@ -298,6 +309,12 @@ fn test_get_token_reconciliation_after_charge() {
     assert_eq!(reconciliation.recoverable_amount, 0);
     assert_eq!(reconciliation.computed_total, 50_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 40_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 10_000_000_000);
+    assert_eq!(reconciliation.normalized_recoverable, 0);
+    assert_eq!(reconciliation.normalized_computed_total, 50_000_000_000);
 }
 
 #[test]
@@ -311,7 +328,7 @@ fn test_get_token_reconciliation_with_recoverable() {
     token_client.mint(&subscriber, &50_000_000);
     let sub_id =
         client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Mint directly to contract (stranded funds)
     token_client.mint(&client.address, &25_000_000);
@@ -325,6 +342,12 @@ fn test_get_token_reconciliation_with_recoverable() {
     assert_eq!(reconciliation.recoverable_amount, 25_000_000);
     assert_eq!(reconciliation.computed_total, 75_000_000);
     assert!(reconciliation.is_balanced);
+    // 6 decimals to 9 decimals scales by 1000
+    assert_eq!(reconciliation.normalized_prepaid, 50_000_000_000);
+    assert_eq!(reconciliation.normalized_contract_balance, 75_000_000_000);
+    assert_eq!(reconciliation.normalized_merchant_liab, 0);
+    assert_eq!(reconciliation.normalized_recoverable, 25_000_000_000);
+    assert_eq!(reconciliation.normalized_computed_total, 75_000_000_000);
 }
 
 #[test]
@@ -339,6 +362,8 @@ fn test_get_contract_reconciliation_summary() {
 
     let token_summary = summary.token_summaries.get(0).unwrap();
     assert_eq!(token_summary.token, token_addr);
+    assert_eq!(token_summary.normalized_prepaid, 0);
+    assert_eq!(token_summary.normalized_merchant_liab, 0);
 }
 
 #[test]
@@ -374,7 +399,7 @@ fn test_generate_reconciliation_proof() {
     token_client.mint(&subscriber, &50_000_000);
     let sub_id =
         client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Mint stranded funds
     token_client.mint(&client.address, &10_000_000);
@@ -425,8 +450,8 @@ fn test_query_prepaid_balances_paginated() {
     let sub2 =
         client.create_subscription(&subscriber2, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
 
-    client.deposit_funds(&sub1, &subscriber1, &30_000_000i128);
-    client.deposit_funds(&sub2, &subscriber2, &20_000_000i128);
+    client.deposit_funds(&sub1, &subscriber1, &30_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    client.deposit_funds(&sub2, &subscriber2, &20_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Query first page
     let request = PrepaidQueryRequest {
@@ -486,7 +511,7 @@ fn test_query_prepaid_balances_paginated_wrong_token() {
     token_client.mint(&subscriber, &50_000_000);
     let sub_id =
         client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Query with a different token
     let token2 = env
@@ -544,15 +569,15 @@ fn test_full_reconciliation_workflow() {
     let sub2 =
         client.create_subscription(&subscriber2, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
 
-    client.deposit_funds(&sub1, &subscriber1, &100_000_000i128);
-    client.deposit_funds(&sub2, &subscriber2, &50_000_000i128);
+    client.deposit_funds(&sub1, &subscriber1, &100_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    client.deposit_funds(&sub2, &subscriber2, &50_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // 2. Add stranded funds
     token_client.mint(&client.address, &25_000_000);
 
     // 3. Charge one subscription
     env.ledger().with_mut(|l| l.timestamp = INTERVAL + 1001);
-    client.charge_subscription(&sub1);
+    client.charge_subscription(&sub1, &None::<soroban_sdk::BytesN<32>>);
 
     // 4. Verify reconciliation
     let reconciliation = client.get_token_reconciliation(&token_addr);

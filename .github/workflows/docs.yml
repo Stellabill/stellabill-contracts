@@ -1,0 +1,75 @@
+name: Docs
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  error-table-freshness:
+    name: Error table up to date
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.1
+        with:
+          # Check out the PR head so we can push a fixup commit back.
+          ref: ${{ github.head_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate error cross-reference table
+        run: python scripts/generate_error_table.py
+
+      - name: Commit regenerated table if changed
+        # Only auto-commit on PRs (push to a branch), not on merge to main.
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet docs/errors.md; then
+            git add docs/errors.md
+            git commit -m "docs: regenerate error cross-reference table [skip ci]"
+            git push
+          else
+            echo "docs/errors.md is already up to date."
+          fi
+
+      - name: Fail if table still differs on main push
+        # On direct pushes to main the table must already be committed.
+        if: github.event_name == 'push'
+        run: |
+          if ! git diff --exit-code docs/errors.md; then
+            echo "FAIL: docs/errors.md is stale. Run 'python scripts/generate_error_table.py' and commit."
+            exit 1
+          fi
+
+  error-table-tests:
+    name: generate_error_table.py tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest and coverage
+        run: pip install pytest pytest-cov
+
+      - name: Run script tests with coverage
+        run: |
+          pytest scripts/test_generate_error_table.py -v --tb=short \
+            --cov=scripts/generate_error_table \
+            --cov-report=term-missing \
+            --cov-fail-under=95
