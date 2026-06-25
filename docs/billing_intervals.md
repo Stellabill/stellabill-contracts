@@ -96,17 +96,48 @@ subscription creation, so the first charge cannot occur until
 
 ## Ledger time monotonicity
 
-Soroban ledger timestamps are set by Stellar validators and are expected to
-be **non-decreasing** across ledger closes (~5-6 s on mainnet).  The contract
-does **not** assume strict monotonicity — it only checks
+Soroban ledger timestamps are set by Stellar validators and are expected to be
+**non-decreasing** across ledger closes (~5-6 s on mainnet).  The contract does
+**not** assume strict monotonicity — it only checks
 `now >= last_payment_timestamp + interval_seconds`.  Consequences:
 
 - If two consecutive ledgers share the same timestamp, a charge that just
   succeeded will simply be rejected on the next call because `0 < interval_seconds`.
 - The contract never compares the current timestamp to a "previous ledger
   timestamp"; it only compares against its own stored `last_payment_timestamp`.
-- Validators producing timestamps that move backward would violate the Stellar
-  protocol; the contract does not defend against that scenario.
+
+---
+
+## Timestamp regression safety
+
+Ledger timestamps may move **backward** in practice during:
+- Network reorgs / ledger rewinds in test harnesses.
+- Soroban host upgrades that reset validator time.
+- Deliberate fuzz/chaos testing.
+
+All timestamp subtraction in this contract uses **saturating arithmetic** to
+guarantee safety:
+
+| Expression | Location | Regression behaviour |
+|---|---|---|
+| `now.saturating_sub(sub.start_time)` | `charge_core.rs` | Saturates to 0 → period 0 |
+| `now.saturating_sub(state.last_usage_timestamp)` | `charge_core.rs` | elapsed = 0 → burst limit enforced |
+| `now.saturating_sub(sub.start_time) / interval` | `charge_core.rs` | period_index = 0 |
+| `grace_start.saturating_add(grace_duration)` | `charge_core.rs`, `queries.rs` | No overflow |
+| `last_payment.checked_add(interval)` | `subscription.rs` | Returns `Err(Overflow)` on wrap |
+
+### Backward-jump semantics
+
+A **backward jump** (now < last_payment_timestamp) is treated as *"no time has
+passed"*:
+
+- `next_charge_time(last_payment, interval) = last_payment + interval`
+- Since `now < last_payment <= last_payment + interval`, the guard `now >= next`
+  evaluates to `false` → `Error::IntervalNotElapsed` is returned.
+- No storage is mutated; `last_payment_timestamp` is unchanged.
+- This is the **correct conservative** behaviour: missing a charge window is
+  recoverable (retry later); a spurious charge caused by wrap-around would be
+  a funds-loss bug.
 
 ---
 
@@ -127,8 +158,8 @@ furthest future timestamp that can be stored is
 `u64::MAX_REALISTIC_TIMESTAMP + 365 days`, which is far below `u64::MAX`
 for any foreseeable ledger.
 
-The query path (`compute_next_charge_info`) calls the same helper and clamps
-to `u64::MAX` on the (unreachable) overflow path so that display code always
+The query path (`compute_next_charge_info`) calls the same helper and uses
+`saturating_add` on the (unreachable) overflow path so that display code always
 receives a valid timestamp without panicking.
 
 ---
@@ -154,3 +185,15 @@ receives a valid timestamp without panicking.
 | `test_compute_next_charge_info_max_interval_no_overflow` | MAX interval query: no overflow, correct value |
 | `test_next_charge_info_matches_charge_enforcement` | Query timestamp == charge enforcement threshold |
 | `test_consecutive_interval_charges_no_drift` | 6 consecutive charges at exact boundaries + trailing rejection |
+| **Timestamp chaos tests** (`tests/timestamp_chaos.rs`) | |
+| `test_backward_jump_by_one_second` | `now = last_payment - 1` → IntervalNotElapsed, no wrap |
+| `test_timestamp_jump_to_u64_max` | `now = u64::MAX` → charge succeeds, last_payment = u64::MAX |
+| `test_repeated_identical_timestamps_no_double_charge` | Same ts twice → second call rejected, balance unchanged |
+| `test_backward_jump_across_grace_boundary_no_panic` | Backward jump while in GracePeriod → no expiry, no panic |
+| `test_chaos_200_random_timestamp_jumps` | 200 random forward/backward jumps → all invariants hold |
+| `test_monotonic_forward_sequence_all_charges_succeed` | 6 strictly forward charges → all succeed (no false IntervalNotElapsed) |
+| `test_backward_jump_then_forward_recovery` | Backward rejects charge → forward past interval → succeeds |
+| `test_u64_max_then_backward_to_zero` | Charge at u64::MAX, jump to 0 → rejected, last_payment unchanged |
+| `test_get_next_charge_info_stable_on_chaos_timestamps` | 100 random timestamps → query path never panics |
+| `test_period_index_saturates_to_zero_when_now_before_start` | `now < start_time` → period_index = 0, no wrap |
+

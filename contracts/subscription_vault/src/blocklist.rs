@@ -13,12 +13,16 @@ pub struct BlocklistEntry {
 pub struct BlocklistAddedEvent {
     pub subscriber: Address,
     pub reason: String,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub struct BlocklistRemovedEvent {
     pub subscriber: Address,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 pub fn is_blocklisted(env: &Env, addr: &Address) -> bool {
@@ -56,14 +60,16 @@ pub fn do_add_to_blocklist(
     let entry = BlocklistEntry {
         reason: reason_str.clone(),
     };
-    
-    env.storage().persistent().set(&DataKey::Blocklist(subscriber.clone()), &entry);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Blocklist(subscriber.clone()), &entry);
 
     env.events().publish(
         (Symbol::new(env, "blocklist_added"), subscriber.clone()),
         BlocklistAddedEvent {
             subscriber,
             reason: reason_str,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -85,7 +91,10 @@ pub fn do_remove_from_blocklist(
 
     env.events().publish(
         (Symbol::new(env, "blocklist_removed"), subscriber.clone()),
-        BlocklistRemovedEvent { subscriber },
+        BlocklistRemovedEvent {
+            subscriber,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
     );
 
     Ok(())
