@@ -36,16 +36,32 @@ use crate::state_machine::transition_to;
 use crate::subscription::{next_charge_time, write_subscription};
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
-    GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
+    Error, GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
     UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
+
+/// Emits a [`ChargeFailureEvent`] and returns `err` unchanged.
+///
+/// Call as `return Err(charge_fail(env, id, err, attempted, now))` on every
+/// error path inside charge entry-points so that all failures are observable
+/// by off-chain indexers regardless of error type.
+#[inline(always)]
+fn charge_fail(env: &Env, subscription_id: u32, err: Error, attempted_amount: i128, ledger: u64) -> Error {
+    env.events().publish(
+        (Symbol::new(env, "charge_failed_v2"), subscription_id),
+        ChargeFailureEvent {
+            subscription_id,
+            error_code: err.to_code(),
+            attempted_amount,
+            ledger,
+        },
+    );
+    err
+}
 
 /// Performs a single interval-based charge with optional replay protection.
 pub fn charge_one(
@@ -54,15 +70,18 @@ pub fn charge_one(
     now: u64,
     idempotency_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<ChargeExecutionResult, Error> {
-    let mut sub = get_subscription(env, subscription_id)?;
+    let mut sub = get_subscription(env, subscription_id)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
     // Merchant pause guard — mirrors charge_usage_one enforcement
     if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
-        return Err(Error::MerchantPaused);
+        return Err(charge_fail(env, subscription_id, Error::MerchantPaused, 0, now));
     }
 
-    crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
-    crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
+    crate::blocklist::require_not_blocklisted(env, &sub.subscriber)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
+    crate::blocklist::require_not_blocklisted(env, &sub.merchant)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
     // Expiration guard
     if sub.is_expired(now) {
@@ -77,10 +96,11 @@ pub fn charge_one(
                 },
             );
         }
-        return Err(Error::SubscriptionExpired);
+        return Err(charge_fail(env, subscription_id, Error::SubscriptionExpired, 0, now));
     }
 
-    let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)?;
+    let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
@@ -105,10 +125,10 @@ pub fn charge_one(
         if sub.status == SubscriptionStatus::InsufficientBalance {
             let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
             if now < next_allowed {
-                return Err(Error::NotActive);
+                return Err(charge_fail(env, subscription_id, Error::NotActive, charge_amount, now));
             }
         } else {
-            return Err(Error::NotActive);
+            return Err(charge_fail(env, subscription_id, Error::NotActive, charge_amount, now));
         }
     }
 
@@ -140,13 +160,13 @@ pub fn charge_one(
         .get::<_, u64>(&DataKey::ChargedPeriod(subscription_id))
     {
         if period_index <= stored_period {
-            return Err(Error::Replay);
+            return Err(charge_fail(env, subscription_id, Error::Replay, charge_amount, now));
         }
     }
 
     let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
     if now < next_allowed {
-        return Err(Error::IntervalNotElapsed);
+        return Err(charge_fail(env, subscription_id, Error::IntervalNotElapsed, charge_amount, now));
     }
 
     // -- Lifetime cap pre-check -----------------------------------------------
@@ -377,15 +397,18 @@ pub fn charge_usage_one(
     usage_amount: i128,
     reference: String,
 ) -> Result<UsageChargeResult, Error> {
-    let mut sub = get_subscription(env, subscription_id)?;
+    let mut sub = get_subscription(env, subscription_id)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
     let merchant = sub.merchant.clone();
 
     if crate::merchant::get_merchant_paused(env, merchant.clone()) {
-        return Err(Error::MerchantPaused);
+        return Err(charge_fail(env, subscription_id, Error::MerchantPaused, 0, env.ledger().timestamp()));
     }
 
-    crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
-    crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
+    crate::blocklist::require_not_blocklisted(env, &sub.subscriber)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
+    crate::blocklist::require_not_blocklisted(env, &sub.merchant)
+        .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
 
     let now = env.ledger().timestamp();
     // Expiration guard
@@ -401,7 +424,7 @@ pub fn charge_usage_one(
                 },
             );
         }
-        return Err(Error::SubscriptionExpired);
+        return Err(charge_fail(env, subscription_id, Error::SubscriptionExpired, 0, now));
     }
 
     if let Some(cap) = sub.lifetime_cap {
@@ -419,24 +442,24 @@ pub fn charge_usage_one(
                     },
                 );
             }
-            return Err(Error::LifetimeCapReached);
+            return Err(charge_fail(env, subscription_id, Error::LifetimeCapReached, usage_amount, now));
         }
     }
 
     if sub.status != SubscriptionStatus::Active {
-        return Err(Error::NotActive);
+        return Err(charge_fail(env, subscription_id, Error::NotActive, usage_amount, now));
     }
 
     if !sub.usage_enabled {
-        return Err(Error::UsageNotEnabled);
+        return Err(charge_fail(env, subscription_id, Error::UsageNotEnabled, usage_amount, now));
     }
 
     if usage_amount <= 0 {
-        return Err(Error::InvalidAmount);
+        return Err(charge_fail(env, subscription_id, Error::InvalidAmount, usage_amount, now));
     }
 
     if sub.prepaid_balance < usage_amount {
-        return Err(Error::InsufficientPrepaidBalance);
+        return Err(charge_fail(env, subscription_id, Error::InsufficientPrepaidBalance, usage_amount, now));
     }
 
     // -- Replay protection (Reference-based) ----------------------------------

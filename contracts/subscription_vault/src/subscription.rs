@@ -42,7 +42,7 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    BillingChargeKind, ChargeFailureEvent, DataKey, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,

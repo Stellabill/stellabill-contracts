@@ -1564,3 +1564,28 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+
+/// Event emitted on **every** failed charge attempt, regardless of error type.
+///
+/// Unlike [`SubscriptionChargeFailedEvent`] (which fires only on balance-shortfall
+/// paths), this event is emitted for all `Err(_)` returns from charge entry-points —
+/// including `IntervalNotElapsed`, `MerchantPaused`, `EmergencyStopActive`,
+/// `OraclePriceStale`, `SubscriptionExpired`, and others.
+///
+/// The `error_code` field maps directly to the numeric value of [`Error`]
+/// (see `docs/errors.md`) so indexers can group failure rates by error range
+/// without decoding enum variants.
+///
+/// **Topic:** `("charge_failed_v2", subscription_id)`
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ChargeFailureEvent {
+    /// Subscription that failed to be charged.
+    pub subscription_id: u32,
+    /// Numeric error code (see [`Error::to_code`] and `docs/errors.md`).
+    pub error_code: u32,
+    /// Amount that would have been charged (0 when not yet determined).
+    pub attempted_amount: i128,
+    /// Ledger timestamp at the time of the failure.
+    pub ledger: u64,
+}
