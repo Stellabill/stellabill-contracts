@@ -324,6 +324,74 @@ fn test_update_deactivate_merchant() {
     assert_eq!(updated.is_active, false);
 }
 
+#[test]
+fn test_withdraw_uninitialized_merchant_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let merchant = Address::generate(&env);
+    let amount = 1_000_000i128;
+
+    // Call try_withdraw_merchant_funds for an uninitialized merchant config
+    let res = client.try_withdraw_merchant_funds(&merchant, &amount);
+    assert_eq!(res, Err(Ok(crate::types::Error::NotFound)));
+}
+
+#[test]
+fn test_withdraw_token_uninitialized_merchant_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let merchant = Address::generate(&env);
+    let amount = 1_000_000i128;
+
+    let res = client.try_withdraw_merchant_token_funds(&merchant, &token, &amount);
+    assert_eq!(res, Err(Ok(crate::types::Error::NotFound)));
+}
+
+#[test]
+fn test_merchant_refund_uninitialized_merchant_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let amount = 1_000_000i128;
+
+    let res = client.try_merchant_refund(&merchant, &subscriber, &token, &amount);
+    assert_eq!(res, Err(Ok(crate::types::Error::NotFound)));
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Admin rotation invariant tests
 //
