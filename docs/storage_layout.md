@@ -91,6 +91,48 @@ This behavior is pinned by `contracts/subscription_vault/tests/ttl_exhaustion.rs
 
 ---
 
+## Known-Instance-Key Allowlist (defensive write guard)
+
+Instance storage holds the contract's global invariant-bearing config (admin,
+token, fees, balances, merchant state). A future PR that adds a new `DataKey`
+variant — or revives a legacy `Symbol`-keyed code path — could accidentally
+write an *unknown* key into instance storage and bypass these invariants. To
+catch that drift before it ships, the contract pins a canonical allowlist of the
+instance-tier keys.
+
+### Components (`contracts/subscription_vault/src/types.rs`)
+
+| Item | Role |
+|------|------|
+| `DataKey::canonical_discriminant(&self) -> u32` | Exhaustive, wildcard-free match mapping each variant to its frozen declaration-order discriminant. Adding a variant without an arm is a **compile error**. |
+| `KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32]` | The canonical, sorted set of instance-tier discriminants (mirrors the registry table). |
+| `is_known_instance_discriminant(u32) -> bool` / `DataKey::is_known_instance_key(&self) -> bool` | Membership checks. The raw-`u32` form can reject a *synthetic* unknown key without constructing one. |
+| `assert_known_data_key(&DataKey)` | `debug_assert!`-based guard. **No-op in release/wasm** (zero overhead); trips under `cfg(test)`/debug so CI catches drift. |
+| `debug_assert_known_key!(key)` | Macro wrapper for instance storage helpers. Expands to nothing in release builds. |
+
+### Two layers of protection
+
+1. **Compile time** — `canonical_discriminant` is exhaustive. A new `DataKey`
+   variant cannot compile until it is explicitly numbered, forcing a conscious
+   instance-vs-persistent classification.
+2. **Test/CI time** — `assert_known_data_key` (via `debug_assert_known_key!`)
+   trips if an unknown or persistent-tier key reaches instance storage, while
+   remaining a no-op in the deployed wasm.
+
+### Adding a new `DataKey` variant
+
+1. Append the variant to `DataKey` (never reorder existing variants).
+2. Append a row to the registry table on `DataKey` with its storage tier.
+3. Add a match arm to `canonical_discriminant` with the next number.
+4. If it is **instance**-tier, add its discriminant to
+   `KNOWN_INSTANCE_KEY_DISCRIMINANTS` and to the positive test enumeration.
+
+The allowlist tests (`types::known_keys_tests`) assert the registry stays
+contiguous (`0..=44`), duplicate-free, and exactly consistent with the
+classification table, so any of the steps above being skipped fails CI.
+
+---
+
 ## Storage Access Patterns
 
 ### Read Operations

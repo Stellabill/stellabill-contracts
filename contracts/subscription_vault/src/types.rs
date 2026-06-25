@@ -1741,11 +1741,11 @@ mod known_keys_tests {
     /// is expected to be an instance-storage key. Adding a variant without
     /// extending this list fails `every_variant_is_classified_exactly_once`,
     /// keeping the test the canonical mirror of the enum.
-    fn all_variants(env: &Env) -> alloc::vec::Vec<(DataKey, bool)> {
+    fn all_variants(env: &Env) -> std::vec::Vec<(DataKey, bool)> {
         let a = Address::generate(env);
         let b = Address::generate(env);
         let s = String::from_str(env, "k");
-        alloc::vec![
+        std::vec![
             (DataKey::MerchantSubs(a.clone()), true),
             (DataKey::Token, true),
             (DataKey::Admin, true),
@@ -1871,7 +1871,7 @@ mod known_keys_tests {
     #[test]
     fn allowlist_matches_instance_classification() {
         let env = Env::default();
-        let expected_instance: alloc::vec::Vec<u32> = all_variants(&env)
+        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
             .into_iter()
             .filter(|(_, is_instance)| *is_instance)
             .map(|(key, _)| key.canonical_discriminant())
