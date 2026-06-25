@@ -61,7 +61,7 @@ fn test_reentrancy_lock_prevents_recursive_calls() {
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &1_000_000);
 
-    client.deposit_funds(&id, &subscriber, &1_000_000);
+    client.deposit_funds(&id, &subscriber, &1_000_000, &None::<soroban_sdk::BytesN<32>>);
 
     // If it didn't crash, the guard worked (it locked and unlocked correctly).
     assert!(true);
@@ -75,7 +75,7 @@ fn test_deposit_funds_state_committed_before_transfer() {
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &PREPAID);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.prepaid_balance, PREPAID);
@@ -128,10 +128,10 @@ fn test_replay_protection_same_timestamp_rejected() {
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     // First charge succeeds
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     // Immediate second charge at same timestamp should fail with Replay (1006)
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_err());
     // Error code 1006 is Replay
 }
@@ -185,7 +185,7 @@ fn test_charge_amount_greater_than_balance_fails() {
     // insufficient — the contract handles underfunding as a recoverable outcome, not a panic.
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(
         result,
         Ok(Ok(crate::ChargeExecutionResult::InsufficientBalance))
@@ -197,7 +197,7 @@ fn test_deposit_negative_amount_fails() {
     let (env, client, _, _) = setup_security_env();
     let (id, subscriber, _) = create_security_subscription(&env, &client);
 
-    let result = client.try_deposit_funds(&id, &subscriber, &-1);
+    let result = client.try_deposit_funds(&id, &subscriber, &-1, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_err());
     // Error code 5004 is Underflow (used for negative amount check)
 }
@@ -227,7 +227,7 @@ fn test_chained_charge_and_cancel_preserves_balance() {
 
     // 2. Charge
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     // 3. Cancel
     client.cancel_subscription(&id, &subscriber);

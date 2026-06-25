@@ -99,7 +99,7 @@ fn test_active_to_paused_to_active() {
     // Fund the subscription so the balance check in resume is satisfied.
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &PREPAID);
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
 
     let initial_balance = client.get_subscription(&id).prepaid_balance;
 
@@ -130,7 +130,7 @@ fn test_active_to_cancelled() {
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &PREPAID);
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
 
     let balance_before = client.get_subscription(&id).prepaid_balance;
     assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Active);
@@ -176,7 +176,7 @@ fn test_active_to_insufficient_balance_via_underfunded_charge() {
     assert_eq!(sub_before.status, SubscriptionStatus::Active);
     assert_eq!(sub_before.lifetime_charged, 0);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     // charge_subscription returns Ok(InsufficientBalance) — not a hard error —
     // because the insufficient-balance path is a recoverable lifecycle event.
@@ -202,7 +202,7 @@ fn test_charge_cancelled_subscription_rejected() {
     client.cancel_subscription(&id, &subscriber);
     assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Cancelled);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::NotActive)));
 
     // Status did not change.
@@ -224,7 +224,7 @@ fn test_charge_paused_subscription_rejected() {
     // Fund the subscription so balance isn't the limiting factor.
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &PREPAID);
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
 
     client.pause_subscription(&id, &subscriber);
     assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Paused);
@@ -232,7 +232,7 @@ fn test_charge_paused_subscription_rejected() {
     // Advance past the billing interval — the charge would succeed if Active.
     env.ledger().with_mut(|l| l.timestamp = T0 + INTERVAL + 1);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::NotActive)));
 
     // Status and balance must be unchanged after the rejected charge.
