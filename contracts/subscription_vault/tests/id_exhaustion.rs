@@ -51,7 +51,7 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address) {
 /// Seed `DataKey::NextId` to `value` directly in contract storage.
 fn seed_next_id(env: &Env, contract: &Address, value: u32) {
     env.as_contract(contract, || {
-        env.storage().instance().set(&DataKey::NextId, &value);
+        env.storage().persistent().set(&DataKey::NextId, &value);
     });
 }
 
@@ -59,7 +59,7 @@ fn seed_next_id(env: &Env, contract: &Address, value: u32) {
 fn read_next_id(env: &Env, contract: &Address) -> u32 {
     env.as_contract(contract, || {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::NextId)
             .unwrap_or(0u32)
     })

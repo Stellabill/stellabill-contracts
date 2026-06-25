@@ -119,10 +119,9 @@ pub(crate) const MAX_WRITE_PATH_SCAN_DEPTH: u32 = 5_000;
 
 #[allow(dead_code)]
 pub fn next_id(env: &Env) -> u32 {
-    let storage = env.storage().instance();
-    let id: u32 = storage.get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     let next = id.checked_add(1).unwrap_or(id);
-    storage.set(&DataKey::NextId, &next);
+    crate::admin::write_config(env, &DataKey::NextId, &next);
     id
 }
 
@@ -182,7 +181,7 @@ fn count_active_subscriptions_for_plan(
     subscriber: &Address,
     plan_template_id: u32,
 ) -> Result<u32, Error> {
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs to prevent
     // excessive storage reads in high-volume contracts.
@@ -264,7 +263,7 @@ fn compute_subscriber_exposure(
     subscriber: &Address,
     token: &Address,
 ) -> Result<i128, Error> {
-    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs.
     if next_id > MAX_WRITE_PATH_SCAN_DEPTH {
@@ -410,13 +409,13 @@ pub fn do_create_subscription_with_token(
     };
 
     // Allocate ID with overflow / limit guard.
-    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
     let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
 
-    env.storage().instance().set(&DataKey::NextId, &next_id);
+    crate::admin::write_config(env, &DataKey::NextId, &next_id);
     write_subscription(env, id, &sub);
 
     // Maintain merchant -> subscription-ID index
@@ -451,6 +450,7 @@ pub fn do_create_subscription_with_token(
             lifetime_cap,
             expires_at,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -462,6 +462,7 @@ pub fn do_deposit_funds(
     subscription_id: u32,
     subscriber: Address,
     amount: i128,
+    idem_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<(), Error> {
     subscriber.require_auth();
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
@@ -499,12 +500,25 @@ pub fn do_deposit_funds(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
         return Err(Error::SubscriptionExpired);
     }
 
+    // Idempotent return: same idempotency key already processed
+    if let Some(ref k) = idem_key {
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_DEPOSIT_FUNDS,
+            subscription_id,
+            k,
+        );
+        if crate::idempotency::check_key(env, subscription_id, &hashed) {
+            return Ok(());
+        }
+    }
 
     let token_addr = sub.token.clone();
 
@@ -533,6 +547,7 @@ pub fn do_deposit_funds(
             amount,
             new_balance: sub.prepaid_balance,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -552,6 +567,7 @@ pub fn do_deposit_funds(
                 prepaid_balance: sub.prepaid_balance,
                 required_amount: sub.amount,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -564,8 +580,20 @@ pub fn do_deposit_funds(
                 authorizer: sub.subscriber.clone(),
                 previous_status: SubscriptionStatus::Paused,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
+    }
+
+    // Record idempotency key after successful deposit
+    if let Some(k) = idem_key {
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_DEPOSIT_FUNDS,
+            subscription_id,
+            &k,
+        );
+        crate::idempotency::push_key(env, subscription_id, &hashed);
     }
 
     Ok(())
@@ -651,6 +679,7 @@ pub fn do_cancel_subscription(
             authorizer,
             refund_amount,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -703,6 +732,7 @@ pub fn do_pause_subscription(
             merchant: sub.merchant.clone(),
             authorizer,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -765,6 +795,7 @@ pub fn do_resume_subscription(
             authorizer,
             previous_status,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -779,6 +810,7 @@ pub fn do_charge_one_off(
     subscription_id: u32,
     merchant: Address,
     amount: i128,
+    idem_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<(), Error> {
     merchant.require_auth();
 
@@ -798,10 +830,24 @@ pub fn do_charge_one_off(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
         return Err(Error::SubscriptionExpired);
+    }
+
+    // Idempotent return: same idempotency key already processed
+    if let Some(ref k) = idem_key {
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_CHARGE_ONEOFF,
+            subscription_id,
+            k,
+        );
+        if crate::idempotency::check_key(env, subscription_id, &hashed) {
+            return Ok(());
+        }
     }
 
     if sub.merchant != merchant {
@@ -819,6 +865,7 @@ pub fn do_charge_one_off(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }
@@ -848,6 +895,7 @@ pub fn do_charge_one_off(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
             return Err(Error::LifetimeCapReached);
@@ -898,6 +946,7 @@ pub fn do_charge_one_off(
                     fee_amount,
                     treasury: treasury.clone(),
                     timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -914,6 +963,7 @@ pub fn do_charge_one_off(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: env.ledger().timestamp(),
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -940,8 +990,20 @@ pub fn do_charge_one_off(
             amount,
             remaining_balance: sub.prepaid_balance,
             timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
+
+    // Record idempotency key after successful one-off charge
+    if let Some(k) = idem_key {
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::types::DOMAIN_CHARGE_ONEOFF,
+            subscription_id,
+            &k,
+        );
+        crate::idempotency::push_key(env, subscription_id, &hashed);
+    }
 
     Ok(())
 }
@@ -980,6 +1042,7 @@ pub fn do_cleanup_subscription(
             crate::types::SubscriptionArchivedEvent {
                 subscription_id,
                 timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -1040,6 +1103,7 @@ pub fn do_withdraw_subscriber_funds(
             token: token_addr,
             amount: amount_to_refund,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1102,6 +1166,7 @@ pub fn do_partial_refund(
             token: sub.token.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1172,6 +1237,7 @@ pub fn do_set_global_cap_default(
             admin,
             cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1203,6 +1269,7 @@ pub fn do_set_merchant_cap_default(
             admin: merchant,
             cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1236,7 +1303,7 @@ pub fn do_update_subscription_cap(
     write_subscription(env, subscription_id, &sub);
 
     // Get admin address for event, fallback to a zero-address if not set
-    let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
+    let admin_addr = crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
     
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
@@ -1244,6 +1311,7 @@ pub fn do_update_subscription_cap(
             admin: admin_addr,
             cap: new_cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1298,6 +1366,7 @@ pub fn do_create_plan_template(
             amount,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1349,6 +1418,7 @@ pub fn do_create_plan_template_with_token(
             amount,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1375,9 +1445,9 @@ pub fn do_create_subscription_from_plan(
     // Enforce per-plan concurrency limit for this subscriber/plan pair.
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
-    let id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+    let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
     let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
-    env.storage().instance().set(&DataKey::NextId, &next_id);
+    crate::admin::write_config(env, &DataKey::NextId, &next_id);
 
     let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
     let sub = Subscription {
@@ -1437,6 +1507,7 @@ pub fn do_create_subscription_from_plan(
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1506,6 +1577,7 @@ pub fn do_update_plan_template(
             version: new_version,
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1538,6 +1610,7 @@ pub fn do_disable_plan_template(
             plan_template_id,
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1623,6 +1696,7 @@ pub fn do_migrate_subscription_to_plan(
             merchant: new_plan.merchant,
             subscriber,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1653,6 +1727,7 @@ pub fn do_set_plan_max_active_subs(
             merchant,
             max_active,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1745,6 +1820,7 @@ pub fn do_configure_usage_limits(
             burst_min_interval_secs,
             usage_cap_units,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 

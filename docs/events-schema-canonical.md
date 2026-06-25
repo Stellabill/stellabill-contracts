@@ -18,9 +18,24 @@ env.events().publish(
 **Key Principles:**
 - Topic tuple format: `(Symbol, optional_id)` — enables filtering by event type and resource
 - Data struct: always a named type (never raw tuples) — provides stable schema for indexers
+- Data struct field order is append-only: canonical positional fields stay in place and new fields are appended
+- Every event data struct includes a trailing `schema_version: u32` field after the canonical fields
 - Timestamp: included when useful for ordering/metrics
 - No sensitive data: all event fields are customer-visible
 - One per action: ensures deterministic batch operation ordering
+
+## Schema Versioning Policy
+
+`EVENT_SCHEMA_VERSION` is currently `2`. Version `1` is the historical event payload layout
+without an explicit schema version field. Version `2` appends `schema_version: u32` to every event
+data struct.
+
+Indexers should treat the fields listed for each event below as the canonical positional prefix.
+The trailing `schema_version` field is present on every event and is intentionally not repeated in
+each individual field list. Future schema changes must be additive-only: append new fields after
+all existing canonical fields and after the current trailing schema metadata. Removing a field,
+renaming a field, reordering a field, or changing a field type is a breaking schema change that
+requires a new migration plan rather than a silent event update.
 
 ## Lifecycle Events
 

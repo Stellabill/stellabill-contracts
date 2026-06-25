@@ -115,6 +115,7 @@ pub fn check_and_advance(
             domain,
             nonce: stored,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
