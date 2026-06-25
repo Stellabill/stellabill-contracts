@@ -45,7 +45,7 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
         &None::<i128>,
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     let plan_id = client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
 
@@ -81,15 +81,15 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(client.try_create_subscription_from_plan(&subscriber, &plan_id), Err(Ok(Error::EmergencyStopActive)));
-    assert_eq!(client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
 
-    assert_eq!(client.try_charge_subscription(&sub_id), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
     assert_eq!(client.try_charge_usage(&sub_id, &100_000i128), Err(Ok(Error::EmergencyStopActive)));
     assert_eq!(
         client.try_charge_usage_with_reference(&sub_id, &100_000i128, &String::from_str(&env, "usage-ref")),
         Err(Ok(Error::EmergencyStopActive))
     );
-    assert_eq!(client.try_charge_one_off(&sub_id, &merchant, &100_000i128), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_one_off(&sub_id, &merchant, &100_000i128, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
 
     let ids_vec = Vec::from_array(&env, [sub_id]);
     assert_eq!(client.try_operator_batch_charge(&operator, &ids_vec, &0u64), Err(Ok(Error::EmergencyStopActive)));
