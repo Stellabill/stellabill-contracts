@@ -59,6 +59,7 @@ pub fn pause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantPausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -79,6 +80,7 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantUnpausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -137,6 +139,7 @@ pub fn initialize_merchant_config(
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
             timestamp: config.last_updated,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -165,6 +168,7 @@ pub fn set_merchant_config(
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
             timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -401,6 +405,7 @@ pub fn withdraw_merchant_funds_for_token(
             amount,
             remaining_balance: new_balance,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -458,6 +463,7 @@ pub fn merchant_refund(
             token: token_addr.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -530,6 +536,7 @@ pub fn update_merchant_config(
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
             timestamp: config.last_updated,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
