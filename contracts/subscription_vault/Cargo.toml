@@ -18,3 +18,7 @@ soroban-sdk = "22.0.0"
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
 proptest = "1"
 hex = "0.4"
+
+[[test]]
+name = "export_cursor"
+path = "tests/export_cursor.rs"
