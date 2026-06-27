@@ -1111,6 +1111,24 @@ pub struct OracleChargeResolvedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when oracle liveness is checked via `emit_oracle_liveness`.
+///
+/// Provides monitoring systems with the latest oracle sample timestamp and
+/// a computed health status based on the configured maximum age threshold.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleLivenessEvent {
+    /// Timestamp of the latest oracle price sample.
+    pub last_sample_ts: u64,
+    /// Age of the sample in seconds (current_time - last_sample_ts).
+    pub age: u64,
+    /// `true` if `age <= max_age_seconds / 2`, indicating healthy oracle.
+    /// `false` if the sample is approaching or exceeding the staleness threshold.
+    pub healthy: bool,
+    /// Ledger timestamp when this liveness check was performed.
+    pub timestamp: u64,
+}
+
 /// Token registry entry.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
