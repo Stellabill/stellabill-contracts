@@ -35,6 +35,9 @@ pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
 /// Domain constant for operator batch charge operations.
 pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 
+/// Domain constant for merchant address rotation operations.
+pub const DOMAIN_MERCHANT_ROTATION: u32 = 3;
+
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///
@@ -121,16 +124,6 @@ pub fn check_and_advance(
     Ok(())
 }
 
-/// Alias for [`consume_nonce`] — used by admin.rs.
-pub fn check_and_advance(
-    env: &Env,
-    signer: &Address,
-    domain: u32,
-    expected: u64,
-) -> Result<(), Error> {
-    consume_nonce(env, signer, domain, expected)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +134,6 @@ mod tests {
         assert_eq!(DOMAIN_BATCH_CHARGE, 0);
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
+        assert_eq!(DOMAIN_MERCHANT_ROTATION, 3);
     }
 }

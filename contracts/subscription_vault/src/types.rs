@@ -1403,6 +1403,26 @@ pub struct MerchantConfigUpdatedEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when admin rotates a merchant's address.
+///
+/// Emitted by [`SubscriptionVault::rotate_merchant_address`] after all per-merchant
+/// storage keys have been migrated from `old_merchant` to `new_merchant` and every
+/// `Subscription.merchant` field referencing the old address has been rewritten.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    /// Admin address that authorised the rotation.
+    pub admin: Address,
+    /// The compromised / old merchant address.
+    pub old_merchant: Address,
+    /// The new merchant address that now owns all balances and subscriptions.
+    pub new_merchant: Address,
+    /// Number of active subscription records whose `.merchant` field was rewritten.
+    pub subscriptions_updated: u32,
+    /// Ledger timestamp when the rotation was executed.
+    pub timestamp: u64,
+}
+
 /// Event emitted when a protocol fee is charged.
 #[contracttype]
 #[derive(Clone, Debug)]

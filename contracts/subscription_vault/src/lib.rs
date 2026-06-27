@@ -663,6 +663,28 @@ impl SubscriptionVault {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
     }
 
+    /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
+    ///
+    /// Migrates every per-merchant storage key (balances, earnings, config, pause
+    /// state, subscription index) and rewrites `Subscription.merchant` for all
+    /// subscriptions previously indexed under the old address.
+    ///
+    /// Admin only. `nonce` is consumed in `DOMAIN_MERCHANT_ROTATION` to prevent replay.
+    ///
+    /// # Errors
+    /// - `Unauthorized`     if caller is not the stored admin
+    /// - `NonceAlreadyUsed` if the nonce has already been used
+    /// - `SelfRotation`     if `old_merchant == new_merchant`
+    pub fn rotate_merchant_address(
+        env: Env,
+        admin: Address,
+        old_merchant: Address,
+        new_merchant: Address,
+        nonce: u64,
+    ) -> Result<(), Error> {
+        merchant::do_rotate_merchant_address(&env, admin, old_merchant, new_merchant, nonce)
+    }
+
     /// Configure oracle pricing parameters. Admin only.
     ///
     /// Enables/disables oracle, sets the oracle address, and defines staleness bounds.
