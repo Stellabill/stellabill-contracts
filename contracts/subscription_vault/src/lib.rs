@@ -19,6 +19,7 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
+pub mod invariants;
 mod queries; pub pub mod nonce;
 pub pub mod nonce;
 pub pub mod nonce;
