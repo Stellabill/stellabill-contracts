@@ -15,6 +15,7 @@ oracle-pricing = []
 soroban-sdk = "22.0.0"
 
 [dev-dependencies]
+
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
 proptest = "1"
 hex = "0.4"
@@ -28,3 +29,11 @@ rand = "0.8"
 [[test]]
 name = "export_cursor"
 path = "tests/export_cursor.rs"
+
+[[test]]
+name = "safe_math_verification"
+path = "verification/safe_math_verification.rs"
+
+[[test]]
+name = "nonce_verification"
+path = "verification/nonce_verification.rs"
