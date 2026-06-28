@@ -10,7 +10,7 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 
 mod admin;
 pub mod blocklist;
@@ -378,10 +378,10 @@ pub use types::{
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
-    MetadataSetEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
+    MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
     OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
     ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
-    ScheduledPayoutEvent, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
@@ -3061,6 +3061,86 @@ impl SubscriptionVault {
         validation::reject_empty_string(&value)?;
         metadata::set_metadata(&env, subscription_id, &authorizer, key, value)
     }
+    /// Apply an off-chain signed metadata update.
+    ///
+    /// Merchants (or any party running an off-chain batcher) can pre-sign
+    /// metadata payloads with their ed25519 secret key and submit them as
+    /// a single transaction instead of paying one `set_metadata` fee per
+    /// key. Auth is proven entirely on the recipient side via the
+    /// signature — the calling transaction does **not** need a matching
+    /// `require_auth` from the signer.
+    ///
+    /// The off-chain signer must build the canonical byte stream produced
+    /// by [`crate::metadata::build_metadata_signed_message`] (a fixed
+    /// domain tag plus `(subscription_id, key, value, nonce, chain_id,
+    /// expires_at)`, length-prefixed and big-endian) and produce an
+    /// ed25519 signature over those bytes using the secret key whose
+    /// public counterpart is `signer_pubkey`.
+    ///
+    /// # Authorization
+    ///
+    /// The pubkey must correspond to the subscription's `subscriber` or
+    /// `merchant`. Otherwise [`Error::Forbidden`] is returned once the
+    /// signature itself has been verified.
+    ///
+    /// # Replay protection
+    ///
+    /// The off-chain signer queries
+    /// [`get_metadata_signed_nonce`](Self::get_metadata_signed_nonce), signs
+    /// the payload with that nonce, and submits. The contract consumes the
+    /// nonce for `(signer, DOMAIN_METADATA_SIGNED)`. A captured payload is
+    /// rejected with [`Error::NonceAlreadyUsed`].
+    ///
+    /// # Expiry
+    ///
+    /// `expires_at` is enforced strictly: `now >= expires_at` ⇒
+    /// [`Error::InvalidInput`]. Off-chain tooling should pick `expires_at`
+    /// comfortably after the expected submission window.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::NotFound`] — `subscription_id` does not exist.
+    /// * [`Error::InvalidInput`] — expired payload or empty key/value.
+    /// * [`Error::MetadataKeyTooLong`] / [`Error::MetadataValueTooLong`].
+    /// * [`Error::MetadataKeyLimitReached`].
+    /// * [`Error::NonceAlreadyUsed`] — replay or out-of-order nonce.
+    /// * [`Error::Forbidden`].
+    /// * [`Error::Overflow`] — nonce counter would overflow `u64::MAX`.
+    ///
+    /// Panics (host crypto error) on a forged ed25519 signature. That
+    /// boundary is intentional; a forged signature must abort the
+    /// transaction rather than be silently downgraded to a typed error.
+    ///
+    /// # Events
+    ///
+    /// On success emits `metadata_set_signed` (carrying
+    /// [`MetadataSetSignedEvent`]) and `nonce_consumed` keyed on
+    /// `(signer, DOMAIN_METADATA_SIGNED)`.
+    pub fn set_metadata_signed(
+        env: Env,
+        signer_pubkey: soroban_sdk::BytesN<32>,
+        payload: SignedMetadataPayload,
+        signature: soroban_sdk::BytesN<64>,
+    ) -> Result<(), Error> {
+        // Defense-in-depth ABI guards on the signed path: a sha-bump signer
+        // who controls a matching ed25519 key still cannot drive
+        // degenerate empty/whitespace keys or values into storage.
+        validation::reject_empty_string(&payload.key)?;
+        validation::reject_empty_string(&payload.value)?;
+        metadata::do_set_metadata_signed(&env, signer_pubkey, payload, signature)
+    }
+
+    /// Return the next-expected nonce for `(signer, DOMAIN_METADATA_SIGNED)`.
+    ///
+    /// Off-chain batching tools fetch this value before signing the next
+    /// [`SignedMetadataPayload`] so the on-chain `nonce::check_and_advance`
+    /// call accepts the payload. Returns `0` for a signer's first signed
+    /// update against this contract.
+    ///
+    /// Read-only; no auth required.
+    pub fn get_metadata_signed_nonce(env: Env, signer: Address) -> u64 {
+        nonce::get_nonce(&env, &signer, nonce::DOMAIN_METADATA_SIGNED)
+    }
 
     ///
     /// No-op if the key does not exist (returns `Ok`).
@@ -3533,6 +3613,7 @@ impl SubscriptionVault {
 mod test_utils;
 
 #[cfg(test)]
+mod test_metadata_signed;
 mod test_charge_invariants;
 
 #[cfg(test)]

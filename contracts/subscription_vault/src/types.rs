@@ -1520,6 +1520,54 @@ pub struct MetadataDeletedEvent {
     pub schema_version: u32,
 }
 
+/// Off-chain signed metadata update payload.
+///
+/// Used by [`crate::metadata::do_set_metadata_signed`] to apply a single
+/// (key, value) update to a subscription without an on-chain `require_auth()`
+/// round-trip. The authoritative auth check is the ed25519 signature over
+/// the canonical encoding of these fields (see
+/// [`crate::metadata::build_metadata_signed_message`]).
+///
+/// # Fields
+///
+/// * `subscription_id` — Target subscription. Must exist on-chain.
+/// * `key` — Metadata key (≤ 32 bytes).
+/// * `value` — Metadata value (≤ 256 bytes).
+/// * `nonce` — Next-expected nonce value for
+///   `(signer, nonce::DOMAIN_METADATA_SIGNED)`. Drives replay
+///   protection through [`crate::nonce::check_and_advance`].
+/// * `expires_at` — Ledger timestamp (seconds) past which the payload is
+///   considered stale. Strict: `now < expires_at` is required for
+///   acceptance.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SignedMetadataPayload {
+    pub subscription_id: u32,
+    pub key: String,
+    pub value: String,
+    pub nonce: u64,
+    pub expires_at: u64,
+}
+
+/// Event emitted when metadata is applied through the off-chain signed path.
+///
+/// Distinguishes `MetadataSetEvent` (on-chain `require_auth`) from
+/// `MetadataSetSignedEvent` (off-chain-ed25519) so indexers and audit
+/// pipelines can attribute auth without ambiguity.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MetadataSetSignedEvent {
+    pub subscription_id: u32,
+    pub key: String,
+    /// Soroban address derived from the supplied ed25519 public key.
+    pub signer: Address,
+    pub nonce: u64,
+    /// Ledger timestamp when the signed update was applied.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 /// Event emitted when a plan template is updated.
 #[contracttype]
 #[derive(Clone, Debug)]
