@@ -88,6 +88,17 @@ pub fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
 ///
 /// Auth check **must** run before calling this function. Invalid signers are rejected
 /// before the nonce counter is touched, preventing auth bypass via nonce manipulation.
+/// Pure-logic for advancing a nonce. Extracted to allow formal verification without
+/// Soroban environment dependencies.
+#[inline(always)]
+pub fn compute_next_nonce(stored: u64, expected: u64) -> Result<u64, Error> {
+    if expected != stored {
+        return Err(Error::NonceAlreadyUsed);
+    }
+
+    stored.checked_add(1).ok_or(Error::Overflow)
+}
+
 pub fn check_and_advance(
     env: &Env,
     signer: &Address,
@@ -97,15 +108,7 @@ pub fn check_and_advance(
     let key = DataKey::AdminNonce(signer.clone(), domain);
     let stored = env.storage().persistent().get::<DataKey, u64>(&key).unwrap_or(0);
 
-    // Reject if expected does not match stored exactly.
-    if expected != stored {
-        return Err(Error::NonceAlreadyUsed);
-    }
-
-    // Increment the counter atomically. Returns Error::Overflow on overflow (u64::MAX).
-    let next = stored
-        .checked_add(1)
-        .ok_or(Error::Overflow)?;
+    let next = compute_next_nonce(stored, expected)?;
 
     // Persist the incremented nonce before emitting event (effects-before-interactions).
     env.storage().persistent().set(&key, &next);
