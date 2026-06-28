@@ -205,3 +205,28 @@ The safe math module has comprehensive test coverage (95%+) including:
 ```bash
 cargo test -p subscription_vault
 ```
+
+## Formal Verification (Kani)
+
+The safe math module is formally verified using [Kani](https://model-checking.github.io/kani/). Unlike example-based tests, formal verification proves that the code is correct for *all* possible inputs within the defined bounds.
+
+### Verification Harnesses
+
+We verify the following properties:
+- `check_safe_add`: Proves `safe_add(a, b)` returns the mathematical sum or `Error::Overflow`.
+- `check_safe_sub`: Proves `safe_sub(a, b)` returns the mathematical difference or `Error::Underflow`.
+- `check_safe_add_balance`: Proves balances only increase by non-negative amounts and cannot overflow.
+- `check_safe_sub_balance`: Proves balances only decrease by non-negative amounts and cannot go below zero.
+
+### Running Verification
+
+To run the formal verification harnesses:
+
+```bash
+cargo kani --harness check_safe_add
+cargo kani --harness check_safe_sub
+cargo kani --harness check_safe_add_balance
+cargo kani --harness check_safe_sub_balance
+```
+
+The harnesses are located in `contracts/subscription_vault/verification/safe_math_verification.rs`.
