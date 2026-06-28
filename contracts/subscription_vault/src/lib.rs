@@ -18,7 +18,9 @@ mod charge_core;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod queries;
+mod queries; pub pub mod nonce;
+pub pub mod nonce;
+pub pub mod nonce;
 mod safe_math;
 mod subscription;
 mod types;
@@ -250,7 +252,7 @@ mod reentrancy;
 /// touched.
 ///
 /// Implementation lives in [`nonce.rs`].
-mod nonce;
+pub mod nonce;
 
 /// Operator: least-privilege charge delegate.
 ///
