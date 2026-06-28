@@ -5,6 +5,9 @@
 
 use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
+/// Event schema version for backwards-compatible indexer decoding.
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
 /// Maximum length of a metadata key in bytes.
@@ -218,6 +221,12 @@ pub struct MerchantKyc {
     BillingStatementAggregate(u32),
     /// Max concurrent active subscriptions allowed for a merchant.
     MerchantMaxSubs(Address),
+    /// Guardian voting weights for governance proposals. Maps Address to u32 weight.
+    Guardians,
+    /// Auto-incrementing proposal ID counter for governance.
+    NextProposalId,
+    /// Governance proposal record keyed by proposal ID.
+    Proposal(u64),
 }
 
 impl DataKey {
@@ -276,6 +285,10 @@ impl DataKey {
             DataKey::BillingRetentionConfig => 42,
             DataKey::BillingStatementSequence(_) => 43,
             DataKey::BillingStatementAggregate(_) => 44,
+            DataKey::MerchantMaxSubs(_) => 45,
+            DataKey::Guardians => 46,
+            DataKey::NextProposalId => 47,
+            DataKey::Proposal(_) => 48,
         }
     }
 
@@ -327,6 +340,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     35, // Oracle
     41, // Operator
     42, // BillingRetentionConfig
+    45, // MerchantMaxSubs(Address)
+    47, // NextProposalId
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1800,6 +1815,96 @@ pub struct ProtocolFeeConfiguredEvent {
     pub schema_version: u32,
 }
 
+/// Proposal kind enumeration for governance.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    /// Rotate the admin address.
+    RotateAdmin = 0,
+    /// Set protocol fee and treasury.
+    SetProtocolFee = 1,
+    /// Upgrade contract (reserved for future use).
+    UpgradeContract = 2,
+}
+
+/// Governance proposal structure.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    /// Unique proposal ID (monotonically assigned).
+    pub id: u64,
+    /// Type of proposal (RotateAdmin, SetProtocolFee, etc.).
+    pub kind: ProposalKind,
+    /// Primary target address (new admin for RotateAdmin, treasury for SetProtocolFee).
+    pub target: Address,
+    /// Secondary target address (optional, for future proposal types).
+    pub target2: Option<Address>,
+    /// Tertiary parameter (e.g., fee_bps for SetProtocolFee).
+    pub target3: u32,
+    /// Quorum requirement in basis points (0-10000).
+    pub quorum_bps: u32,
+    /// Guardian votes (maps guardian address to vote: true=yes).
+    pub votes: soroban_sdk::Map<Address, bool>,
+    /// Time after which proposal can be executed (ledger seconds).
+    pub eta: u64,
+    /// Timestamp when proposal was submitted.
+    pub submitted_at: u64,
+    /// Whether the proposal has been executed.
+    pub executed: bool,
+}
+
+/// Event emitted when a governance proposal is submitted.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalSubmittedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub quorum_bps: u32,
+    pub eta: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a guardian votes on a proposal.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalVotedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub voted_yes: bool,
+    pub guardian_weight: u32,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a governance proposal is executed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub total_weight: u32,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a governance proposal is cancelled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCancelledEvent {
+    pub proposal_id: u64,
+    pub reason: String,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 /// Event emitted when merchant config is initialized.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1824,6 +1929,26 @@ pub struct MerchantConfigUpdatedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+}
+
+/// Event emitted when admin rotates a merchant's address.
+///
+/// Emitted by [`SubscriptionVault::rotate_merchant_address`] after all per-merchant
+/// storage keys have been migrated from `old_merchant` to `new_merchant` and every
+/// `Subscription.merchant` field referencing the old address has been rewritten.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    /// Admin address that authorised the rotation.
+    pub admin: Address,
+    /// The compromised / old merchant address.
+    pub old_merchant: Address,
+    /// The new merchant address that now owns all balances and subscriptions.
+    pub new_merchant: Address,
+    /// Number of active subscription records whose `.merchant` field was rewritten.
+    pub subscriptions_updated: u32,
+    /// Ledger timestamp when the rotation was executed.
+    pub timestamp: u64,
 }
 
 /// Event emitted when a protocol fee is charged.
@@ -2061,6 +2186,10 @@ mod known_keys_tests {
             (DataKey::BillingRetentionConfig, true),
             (DataKey::BillingStatementSequence(1), false),
             (DataKey::BillingStatementAggregate(1), false),
+            (DataKey::MerchantMaxSubs(a.clone()), true),
+            (DataKey::Guardians, false),
+            (DataKey::NextProposalId, true),
+            (DataKey::Proposal(1), false),
         ]
     }
 
@@ -2101,9 +2230,9 @@ mod known_keys_tests {
     /// without updating the allowlist) is rejected.
     #[test]
     fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (44) can never be
+        // Discriminants beyond the highest registered variant (48) can never be
         // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(45));
+        assert!(!is_known_instance_discriminant(49));
         assert!(!is_known_instance_discriminant(9_999));
         assert!(!is_known_instance_discriminant(u32::MAX));
     }
@@ -2119,21 +2248,21 @@ mod known_keys_tests {
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=44`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=48`
     /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
         let variants = all_variants(&env);
-        let mut seen = [false; 45];
+        let mut seen = [false; 49];
         for (key, _) in &variants {
             let d = key.canonical_discriminant() as usize;
             assert!(d < seen.len(), "discriminant {d} out of expected range");
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=44");
-        assert_eq!(variants.len(), 45, "variant count drifted from 45");
+        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=48");
+        assert_eq!(variants.len(), 49, "variant count drifted from 49");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier

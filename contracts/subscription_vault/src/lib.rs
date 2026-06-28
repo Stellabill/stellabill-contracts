@@ -15,6 +15,7 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
@@ -26,6 +27,10 @@ mod subscription;
 mod types;
 
 pub use safe_math::*;
+pub use types::{
+    EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
+    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+};
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
 
@@ -734,6 +739,28 @@ impl SubscriptionVault {
         nonce: u64,
     ) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
+    }
+
+    /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
+    ///
+    /// Migrates every per-merchant storage key (balances, earnings, config, pause
+    /// state, subscription index) and rewrites `Subscription.merchant` for all
+    /// subscriptions previously indexed under the old address.
+    ///
+    /// Admin only. `nonce` is consumed in `DOMAIN_MERCHANT_ROTATION` to prevent replay.
+    ///
+    /// # Errors
+    /// - `Unauthorized`     if caller is not the stored admin
+    /// - `NonceAlreadyUsed` if the nonce has already been used
+    /// - `SelfRotation`     if `old_merchant == new_merchant`
+    pub fn rotate_merchant_address(
+        env: Env,
+        admin: Address,
+        old_merchant: Address,
+        new_merchant: Address,
+        nonce: u64,
+    ) -> Result<(), Error> {
+        merchant::do_rotate_merchant_address(&env, admin, old_merchant, new_merchant, nonce)
     }
 
     /// Configure oracle pricing parameters. Admin only.
@@ -3114,6 +3141,131 @@ impl SubscriptionVault {
     /// Return the current protocol fee basis points (0 = disabled).
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
+    }
+
+    // ── Governance (Quorum-based proposals) ──────────────────────────────────
+
+    /// Submit a governance proposal for a privileged action.
+    ///
+    /// Creates a new proposal that must be voted on by guardians before execution.
+    /// The proposal will not execute until the ETA (execution timestamp) is reached.
+    ///
+    /// # Arguments
+    /// * `kind` — Type of proposal (RotateAdmin, SetProtocolFee).
+    /// * `target` — Primary target (new admin for RotateAdmin, treasury for SetProtocolFee).
+    /// * `target2` — Optional secondary target (e.g., treasury for SetProtocolFee).
+    /// * `target3` — Optional tertiary parameter (e.g., fee_bps for SetProtocolFee).
+    /// * `quorum_bps` — Required vote percentage in basis points (0-10000).
+    /// * `eta` — Timestamp after which proposal can be executed.
+    ///
+    /// # Returns
+    /// The newly created proposal ID (monotonically allocated).
+    pub fn submit_proposal(
+        env: Env,
+        kind: types::ProposalKind,
+        target: Address,
+        target2: Option<Address>,
+        target3: u32,
+        quorum_bps: u32,
+        eta: u64,
+    ) -> Result<u64, Error> {
+        governance::do_submit_proposal(&env, kind, target, target2, target3, quorum_bps, eta)
+    }
+
+    /// Cast a guardian vote on a proposal.
+    ///
+    /// Only addresses with assigned guardian weight can vote.
+    /// Votes are recorded per-guardian and validated during execution.
+    ///
+    /// # Arguments
+    /// * `proposal_id` — ID of the proposal to vote on.
+    /// * `voted_yes` — true to vote for, false to vote against.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not a guardian
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if proposal already executed
+    pub fn vote_proposal(env: Env, proposal_id: u64, voted_yes: bool) -> Result<(), Error> {
+        governance::do_vote_proposal(&env, proposal_id, voted_yes)
+    }
+
+    /// Execute a proposal if quorum is met and ETA has passed.
+    ///
+    /// Validates that:
+    /// 1. The proposal has not already been executed.
+    /// 2. The ETA timestamp has been reached.
+    /// 3. Quorum requirement is met (accounting for guardian removals).
+    /// 4. All votes from removed guardians are excluded.
+    ///
+    /// On success, applies the proposal's action (e.g., rotates admin or sets protocol fee).
+    ///
+    /// # Errors
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if ETA not reached or quorum not met
+    pub fn execute_proposal(env: Env, proposal_id: u64) -> Result<(), Error> {
+        governance::do_execute_proposal(&env, proposal_id)
+    }
+
+    /// Cancel a proposal (admin only).
+    ///
+    /// Only the current admin can cancel proposals. This prevents stale or unwanted
+    /// proposals from remaining on the books.
+    ///
+    /// # Arguments
+    /// * `proposal_id` — ID of the proposal to cancel.
+    /// * `reason` — Cancellation reason (emitted in event).
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if proposal already executed
+    pub fn cancel_proposal(env: Env, proposal_id: u64, reason: String) -> Result<(), Error> {
+        governance::do_cancel_proposal(&env, proposal_id, reason)
+    }
+
+    /// Add or update a guardian and their voting weight.
+    ///
+    /// Admin only. Sets a guardian's voting weight; weight of 0 is not allowed.
+    /// Call `remove_guardian` to remove a guardian entirely.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    /// - `InvalidInput` if weight is zero
+    pub fn add_guardian(env: Env, admin: Address, guardian: Address, weight: u32) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        governance::add_guardian(&env, guardian, weight)
+    }
+
+    /// Remove a guardian, immediately invalidating their future votes.
+    ///
+    /// Admin only. Once removed, a guardian cannot vote on new proposals, and their
+    /// prior votes are excluded during quorum validation.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    pub fn remove_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        governance::remove_guardian(&env, &guardian)
+    }
+
+    /// Get a guardian's current voting weight (0 if not a guardian).
+    pub fn get_guardian_weight(env: Env, guardian: Address) -> u32 {
+        governance::get_guardian_weight(&env, &guardian)
+    }
+
+    /// Get the current proposal counter (next proposal ID to be allocated).
+    pub fn get_current_proposal_id(env: Env) -> u64 {
+        governance::get_current_proposal_id(&env)
+    }
+
+    /// Get proposal by ID (if it exists).
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Option<types::Proposal> {
+        governance::get_proposal(&env, proposal_id)
+    }
+
+    /// List all guardians and their voting weights.
+    pub fn list_guardians(env: Env) -> Vec<(Address, u32)> {
+        governance::list_guardians(&env)
     }
 
     // ── Blocklist ──────────────────────────────────────────────────────────────

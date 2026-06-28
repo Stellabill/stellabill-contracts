@@ -3627,6 +3627,91 @@ fn test_withdraw_merchant_token_funds_checks_vault_balance_before_transfer() {
     );
 }
 
+// -- rotate_merchant_address tests -------------------------------------------
+
+#[test]
+fn test_rotate_merchant_address_migrates_balance_and_subscriptions() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, admin) = setup_contract(&env);
+
+    let old_merchant = Address::generate(&env);
+    let new_merchant = Address::generate(&env);
+
+    seed_merchant_balance(&env, &client.address, &old_merchant, &token, 5_000_000i128);
+
+    let subscriber = Address::generate(&env);
+    let id = client.create_subscription(
+        &subscriber,
+        &old_merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    client.rotate_merchant_address(&admin, &old_merchant, &new_merchant, &0u64);
+
+    assert_eq!(client.get_merchant_balance_by_token(&old_merchant, &token), 0);
+    assert_eq!(client.get_merchant_balance_by_token(&new_merchant, &token), 5_000_000i128);
+
+    let sub = client.get_subscription(&id);
+    assert_eq!(sub.merchant, new_merchant);
+}
+
+#[test]
+fn test_rotate_merchant_address_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin) = setup_contract(&env);
+
+    let impostor = Address::generate(&env);
+    let old_merchant = Address::generate(&env);
+    let new_merchant = Address::generate(&env);
+
+    let result = client.try_rotate_merchant_address(&impostor, &old_merchant, &new_merchant, &0u64);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_rotate_merchant_address_rejects_self_rotation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, admin) = setup_contract(&env);
+
+    let merchant = Address::generate(&env);
+    let result = client.try_rotate_merchant_address(&admin, &merchant, &merchant, &0u64);
+    assert_eq!(result, Err(Ok(Error::SelfRotation)));
+}
+
+#[test]
+fn test_rotate_merchant_address_rejects_nonce_replay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, admin) = setup_contract(&env);
+
+    let old_merchant = Address::generate(&env);
+    let new_merchant = Address::generate(&env);
+    let newer_merchant = Address::generate(&env);
+
+    client.rotate_merchant_address(&admin, &old_merchant, &new_merchant, &0u64);
+    let result = client.try_rotate_merchant_address(&admin, &new_merchant, &newer_merchant, &0u64);
+    assert_eq!(result, Err(Ok(Error::NonceAlreadyUsed)));
+}
+
+#[test]
+fn test_rotate_merchant_address_unknown_merchant_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, admin) = setup_contract(&env);
+
+    let ghost = Address::generate(&env);
+    let new_merchant = Address::generate(&env);
+    client.rotate_merchant_address(&admin, &ghost, &new_merchant, &0u64);
+    assert_eq!(client.get_merchant_balance(&new_merchant), 0);
+}
+
 // -- End-to-end billing lifecycle tests --------------------------------------
 
 #[test]

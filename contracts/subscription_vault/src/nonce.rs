@@ -35,6 +35,9 @@ pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
 /// Domain constant for operator batch charge operations.
 pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 
+/// Domain constant for merchant address rotation operations.
+pub const DOMAIN_MERCHANT_ROTATION: u32 = 3;
+
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///
@@ -136,6 +139,7 @@ mod tests {
         assert_eq!(DOMAIN_BATCH_CHARGE, 0);
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
+        assert_eq!(DOMAIN_MERCHANT_ROTATION, 3);
     }
 
     #[test]
