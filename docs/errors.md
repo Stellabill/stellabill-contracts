@@ -73,7 +73,7 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 - Errors are intentionally coarse and must not leak sensitive internal balances beyond already-public business state.
 - Charging paths avoid ambiguous reverted errors when a lifetime-cap overrun must persist a cancellation. In those cases the contract may return a semantic success/result while batch interfaces still map the condition to stable code `6002`.
 - Never auto-retry a charge after `Replay`, `LifetimeCapReached`, `NotActive`, or `SubscriptionExpired`.
-- Client payment UX should distinguish “insufficient balance” from “request rejected” to avoid duplicate funding or duplicate charge attempts.
+- Client payment UX should distinguish ï¿½insufficient balanceï¿½ from ï¿½request rejectedï¿½ to avoid duplicate funding or duplicate charge attempts.
 
 ## Source of Truth
 

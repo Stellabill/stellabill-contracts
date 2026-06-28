@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -38,11 +38,17 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// ## Storage Layout — Discriminant Registry
 ///
 /// The Soroban `#[contracttype]` macro serialises enum variants by their
-/// **declaration order** (0-indexed). The discriminant numbers in the doc
-/// comments below are the canonical, frozen identifiers for each key.
-/// **Never reorder or remove a variant** — doing so shifts all subsequent
-/// discriminants and silently corrupts live storage. Only append new variants
-/// at the end.
+/// **declaration order** (0-indexed). The discriminant numbers below are the
+/// canonical, frozen identifiers for each key and match
+/// [`DataKey::canonical_discriminant`]. **Never reorder or remove a variant** —
+/// doing so shifts all subsequent discriminants and silently corrupts live
+/// storage. Only append new variants at the end.
+///
+/// The **Storage tier** column is authoritative: every instance-tier key below
+/// is also listed in [`KNOWN_INSTANCE_KEY_DISCRIMINANTS`], the allowlist that
+/// [`assert_known_data_key`] checks at instance read/write sites. When you add a
+/// variant, append a row here, add its arm to `canonical_discriminant`, and —
+/// if it is instance-tier — add its discriminant to the allowlist.
 ///
 /// | Discriminant | Variant | Storage tier |
 /// |:---:|:---|:---|
@@ -72,16 +78,55 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// | 23 | `Treasury` | instance |
 /// | 24 | `AcceptedTokens` | instance |
 /// | 25 | `TokenDecimals(Address)` | instance |
-/// | 37 | `AdminNonce(Address, u32)` | persistent |
-/// | 38 | `Operator` | instance |
-/// | 39 | `BillingRetentionConfig` | instance |
-/// | 40 | `BillingStatementSequence(u32)` | persistent |
-/// | 41 | `BillingStatementAggregate(u32)` | persistent |
+/// | 26 | `NextPlanId` | instance |
+/// | 27 | `Plan(u32)` | instance |
+/// | 28 | `SubPlan(u32)` | instance |
+/// | 29 | `PlanMaxActive(u32)` | instance |
+/// | 30 | `CreditLimit(Address, Address)` | instance |
+/// | 31 | `TokenSubs(Address)` | instance |
+/// | 32 | `SubscriberSubs(Address)` | instance |
+/// | 33 | `MerchantBalance(Address, Address)` | instance |
+/// | 34 | `Blocklist(Address)` | persistent |
+/// | 35 | `Oracle` | instance |
+/// | 36 | `BillingPeriodSnapshot(u32, u64)` | persistent |
+/// | 37 | `BillingPeriodSnapshotIndex(u32)` | persistent |
+/// | 38 | `AdminNonce(Address, u32)` | persistent |
+/// | 39 | `Metadata(u32, String)` | persistent |
+/// | 40 | `MetadataKeys(u32)` | persistent |
+/// | 41 | `Operator` | instance |
+/// | 42 | `BillingRetentionConfig` | instance |
+/// | 43 | `BillingStatementSequence(u32)` | persistent |
+/// | 44 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
+
+    /// Global flag: when true, merchants must have an active KYC attestation
+    /// (see `MerchantKyc`) to withdraw merchant funds.
+    KycRequired,
+
+    /// Per-merchant KYC attestation record.
+    ///
+    /// Status semantics: `status == true` means active/valid KYC; `status == false`
+    /// means revoked/inactive.
+    MerchantKyc(Address),
+}
+
+/// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantKyc {
+    /// Opaque attestation hash (provider-issued).
+    pub attestation_hash: Vec<u8>,
+    /// Timestamp when the attestation was issued (ledger seconds).
+    pub issued_at: u64,
+    /// When true, KYC is active/valid. When false, it is revoked/inactive.
+    pub status: bool,
+}
+
+
 
     /// USDC token contract address. Discriminant 1.
     Token,
@@ -171,6 +216,156 @@ pub enum DataKey {
     BillingStatementSequence(u32),
     /// Aggregated totals from compacted billing statements.
     BillingStatementAggregate(u32),
+    /// Max concurrent active subscriptions allowed for a merchant.
+    MerchantMaxSubs(Address),
+}
+
+impl DataKey {
+    /// Canonical, declaration-order discriminant for this key.
+    ///
+    /// These numbers are the frozen identifiers documented in the registry table
+    /// on [`DataKey`]. The match is intentionally **exhaustive with no wildcard
+    /// arm**: adding a new variant to `DataKey` without assigning it a number
+    /// here is a *compile error*. That is the first line of defence against the
+    /// drift this module guards — a new key cannot ship until it has been
+    /// consciously classified.
+    pub const fn canonical_discriminant(&self) -> u32 {
+        match self {
+            DataKey::MerchantSubs(_) => 0,
+            DataKey::Token => 1,
+            DataKey::Admin => 2,
+            DataKey::MinTopup => 3,
+            DataKey::NextId => 4,
+            DataKey::SchemaVersion => 5,
+            DataKey::Sub(_) => 6,
+            DataKey::ChargedPeriod(_) => 7,
+            DataKey::IdemKey(_) => 8,
+            DataKey::EmergencyStop => 9,
+            DataKey::MerchantPaused(_) => 10,
+            DataKey::BillingStatement(_, _) => 11,
+            DataKey::BillingStatementsBySubscription(_) => 12,
+            DataKey::BillingStatementsByMerchant(_) => 13,
+            DataKey::TotalAccounted(_) => 14,
+            DataKey::Recovery(_) => 15,
+            DataKey::MerchantConfig(_) => 16,
+            DataKey::MerchantEarnings(_, _) => 17,
+            DataKey::MerchantTokens(_) => 18,
+            DataKey::UsageLimits(_) => 19,
+            DataKey::UsageState(_) => 20,
+            DataKey::GracePeriod => 21,
+            DataKey::FeeBps => 22,
+            DataKey::Treasury => 23,
+            DataKey::AcceptedTokens => 24,
+            DataKey::TokenDecimals(_) => 25,
+            DataKey::NextPlanId => 26,
+            DataKey::Plan(_) => 27,
+            DataKey::SubPlan(_) => 28,
+            DataKey::PlanMaxActive(_) => 29,
+            DataKey::CreditLimit(_, _) => 30,
+            DataKey::TokenSubs(_) => 31,
+            DataKey::SubscriberSubs(_) => 32,
+            DataKey::MerchantBalance(_, _) => 33,
+            DataKey::Blocklist(_) => 34,
+            DataKey::Oracle => 35,
+            DataKey::BillingPeriodSnapshot(_, _) => 36,
+            DataKey::BillingPeriodSnapshotIndex(_) => 37,
+            DataKey::AdminNonce(_, _) => 38,
+            DataKey::Metadata(_, _) => 39,
+            DataKey::MetadataKeys(_) => 40,
+            DataKey::Operator => 41,
+            DataKey::BillingRetentionConfig => 42,
+            DataKey::BillingStatementSequence(_) => 43,
+            DataKey::BillingStatementAggregate(_) => 44,
+        }
+    }
+
+    /// Returns `true` if this key belongs to the canonical **instance**-storage
+    /// allowlist ([`KNOWN_INSTANCE_KEY_DISCRIMINANTS`]).
+    pub fn is_known_instance_key(&self) -> bool {
+        is_known_instance_discriminant(self.canonical_discriminant())
+    }
+}
+
+/// Canonical set of [`DataKey`] discriminants that legitimately live in
+/// **instance** storage. Frozen identifiers — see the registry table on
+/// [`DataKey`]. Kept sorted ascending so it reads as a registry and supports a
+/// fast membership check.
+///
+/// Every instance read/write must use a key whose
+/// [`DataKey::canonical_discriminant`] appears here. Persistent-tier
+/// discriminants are deliberately *excluded* so that an accidental instance
+/// write of a persistent key — or a brand-new variant routed to instance
+/// storage without review — is caught by [`assert_known_data_key`] in tests.
+pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
+    0,  // MerchantSubs(Address)
+    1,  // Token
+    2,  // Admin
+    3,  // MinTopup
+    4,  // NextId
+    5,  // SchemaVersion
+    9,  // EmergencyStop
+    10, // MerchantPaused(Address)
+    14, // TotalAccounted(Address)
+    16, // MerchantConfig(Address)
+    17, // MerchantEarnings(Address, Address)
+    18, // MerchantTokens(Address)
+    19, // UsageLimits(u32)
+    20, // UsageState(u32)
+    21, // GracePeriod
+    22, // FeeBps
+    23, // Treasury
+    24, // AcceptedTokens
+    25, // TokenDecimals(Address)
+    26, // NextPlanId
+    27, // Plan(u32)
+    28, // SubPlan(u32)
+    29, // PlanMaxActive(u32)
+    30, // CreditLimit(Address, Address)
+    31, // TokenSubs(Address)
+    32, // SubscriberSubs(Address)
+    33, // MerchantBalance(Address, Address)
+    35, // Oracle
+    41, // Operator
+    42, // BillingRetentionConfig
+];
+
+/// Returns `true` if `discriminant` is a recognised instance-storage key.
+///
+/// Operates on the raw discriminant so it can also reject a *synthetic* unknown
+/// key (e.g. a legacy `Symbol`-keyed instance write that never went through the
+/// typed [`DataKey`] enum) without needing to construct one.
+pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
+}
+
+/// Debug-only guard asserting that `key` belongs to the canonical instance-key
+/// allowlist before it is used for an instance read or write.
+///
+/// Compiled out entirely in release builds (`debug_assert!` is a no-op when
+/// `debug-assertions = false`, i.e. the on-chain wasm has **zero overhead**),
+/// but active under `cfg(test)` and debug builds so CI trips the moment an
+/// unknown or mis-tiered key reaches instance storage.
+#[inline]
+pub fn assert_known_data_key(key: &DataKey) {
+    debug_assert!(
+        key.is_known_instance_key(),
+        "DataKey discriminant {} is not in KNOWN_INSTANCE_KEY_DISCRIMINANTS: an \
+         unknown or persistent-tier key reached instance storage. Add the variant \
+         to the allowlist if it is genuinely instance-tier, or route it to \
+         persistent storage. See docs/storage_layout.md.",
+        key.canonical_discriminant()
+    );
+}
+
+/// Convenience wrapper over [`assert_known_data_key`] for instance storage
+/// helpers. A no-op in release builds; trips in `cfg(test)` so CI catches drift.
+#[macro_export]
+macro_rules! debug_assert_known_key {
+    ($key:expr) => {
+        $crate::types::assert_known_data_key($key)
+    };
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -253,6 +448,9 @@ pub struct Subscription {
     pub expires_at: Option<u64>,
     /// Timestamp when a grace-period started. `None` means not in grace period.
     pub grace_start_timestamp: Option<u64>,
+    /// Scheduled future cancellation timestamp. When `Some(t)` and `now >= t`,
+    /// `charge_one` transitions the subscription to `Cancelled` instead of charging.
+    pub cancel_at: Option<u64>,
 }
 
 impl Subscription {
@@ -433,6 +631,8 @@ pub struct NonceConsumedEvent {
     pub nonce: u64,
     /// Ledger timestamp when the nonce was consumed.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Result of charging one subscription in a batch.
@@ -485,6 +685,45 @@ pub struct SubscriptionSummary {
     pub expires_at: Option<u64>,
 }
 
+/// Merchant balance entry returned in snapshot pages.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceEntry {
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Full snapshot page containing subscriptions and merchant balances.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FullSnapshotPage {
+    pub subscriptions: Vec<SubscriptionSummary>,
+    pub balances: Vec<MerchantBalanceEntry>,
+    /// Next start id for paging across subscription ids. `None` when complete.
+    pub next_start_id: Option<u32>,
+}
+
+/// Event emitted when a snapshot page is exported by admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SnapshotExportedEvent {
+    pub admin: Address,
+    pub start_id: u32,
+    pub exported: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a snapshot page is restored by admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SnapshotRestoredEvent {
+    pub admin: Address,
+    pub start_id: u32,
+    pub restored: u32,
+    pub timestamp: u64,
+}
+
 /// Event emitted when subscriptions are exported for migration.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -494,6 +733,8 @@ pub struct MigrationExportEvent {
     pub limit: u32,
     pub exported: u32,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when the contract schema is upgraded on-chain.
@@ -511,6 +752,8 @@ pub struct SchemaMigratedEvent {
     pub to_version: u32,
     /// Ledger timestamp when the migration was executed.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Defines a reusable subscription plan template.
@@ -711,6 +954,8 @@ pub struct BillingCompactedEvent {
     pub aggregate_total_amount: i128,
     pub aggregate_oldest_period_start: Option<u64>,
     pub aggregate_newest_period_end: Option<u64>,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 // ── Period-end billing statement types ───────────────────────────────────────
@@ -748,6 +993,8 @@ pub struct BillingStatementPersistedEvent {
     pub period_index: u32,
     pub merchant: Address,
     pub finalized_by: BillingStatementFinalization,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Grouped financial amounts for a single billing period.
@@ -846,6 +1093,8 @@ pub struct OracleConfigUpdatedEvent {
     pub oracle: Option<Address>,
     pub max_age_seconds: u64,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a cross-currency charge resolves its amount via oracle.
@@ -857,6 +1106,26 @@ pub struct OracleChargeResolvedEvent {
     pub token_amount: i128,
     pub price: i128,
     pub price_timestamp: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when oracle liveness is checked via `emit_oracle_liveness`.
+///
+/// Provides monitoring systems with the latest oracle sample timestamp and
+/// a computed health status based on the configured maximum age threshold.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleLivenessEvent {
+    /// Timestamp of the latest oracle price sample.
+    pub last_sample_ts: u64,
+    /// Age of the sample in seconds (current_time - last_sample_ts).
+    pub age: u64,
+    /// `true` if `age <= max_age_seconds / 2`, indicating healthy oracle.
+    /// `false` if the sample is approaching or exceeding the staleness threshold.
+    pub healthy: bool,
+    /// Ledger timestamp when this liveness check was performed.
     pub timestamp: u64,
 }
 
@@ -874,6 +1143,8 @@ pub struct AcceptedToken {
 pub struct EmergencyStopEnabledEvent {
     pub admin: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when admin is rotated to a new address.
@@ -883,6 +1154,8 @@ pub struct AdminRotatedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when emergency stop is disabled.
@@ -891,6 +1164,8 @@ pub struct AdminRotatedEvent {
 pub struct EmergencyStopDisabledEvent {
     pub admin: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when an admin assigns an operator address.
@@ -900,6 +1175,8 @@ pub struct OperatorSetEvent {
     pub admin: Address,
     pub operator: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when an admin removes the operator address.
@@ -908,6 +1185,8 @@ pub struct OperatorSetEvent {
 pub struct OperatorRemovedEvent {
     pub admin: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Represents the reason for stranded funds that can be recovered by admin.
@@ -936,6 +1215,8 @@ pub struct RecoveryEvent {
     pub amount: i128,
     pub reason: RecoveryReason,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription is created.
@@ -951,6 +1232,8 @@ pub struct SubscriptionCreatedEvent {
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when funds are deposited into a subscription vault.
@@ -965,6 +1248,8 @@ pub struct FundsDepositedEvent {
     /// Total prepaid balance after this deposit.
     pub new_balance: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription interval charge succeeds.
@@ -983,6 +1268,8 @@ pub struct SubscriptionChargedEvent {
     pub timestamp: u64,
     pub period_start: u64,
     pub period_end: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when an interval charge attempt cannot be completed due to
@@ -997,6 +1284,8 @@ pub struct SubscriptionChargeFailedEvent {
     pub shortfall: i128,
     pub resulting_status: SubscriptionStatus,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted after a deposit when a previously underfunded subscription is
@@ -1009,6 +1298,8 @@ pub struct SubscriptionRecoveryReadyEvent {
     pub prepaid_balance: i128,
     pub required_amount: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription is cancelled.
@@ -1023,6 +1314,27 @@ pub struct SubscriptionCancelledEvent {
     /// Remaining prepaid balance available for subscriber withdrawal.
     pub refund_amount: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a future cancellation is scheduled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelScheduledEvent {
+    pub subscription_id: u32,
+    pub cancel_at: u64,
+    pub scheduled_by: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a scheduled cancellation is cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelUnscheduledEvent {
+    pub subscription_id: u32,
+    pub unscheduled_by: Address,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is paused.
@@ -1034,6 +1346,8 @@ pub struct SubscriptionPausedEvent {
     pub merchant: Address,
     pub authorizer: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription enters grace period.
@@ -1044,6 +1358,8 @@ pub struct GracePeriodEnteredEvent {
     pub previous_status: SubscriptionStatus,
     pub grace_expires_at: u64,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription is resumed.
@@ -1056,6 +1372,8 @@ pub struct SubscriptionResumedEvent {
     pub authorizer: Address,
     pub previous_status: SubscriptionStatus,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription is automatically expired.
@@ -1064,6 +1382,8 @@ pub struct SubscriptionResumedEvent {
 pub struct SubscriptionExpiredEvent {
     pub subscription_id: u32,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscription is archived.
@@ -1071,6 +1391,34 @@ pub struct SubscriptionExpiredEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionArchivedEvent {
     pub subscription_id: u32,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Per-merchant automated payout schedule configuration.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PayoutSchedule {
+    /// Minimum interval in seconds between automatic payout flushes.
+    pub cadence_seconds: u64,
+    /// Minimum accrued balance required per token to trigger a payout.
+    pub min_payout: i128,
+    /// Timestamp of the last payout flush (0 if never flushed).
+    pub last_payout_at: u64,
+}
+
+/// Event emitted when a scheduled payout flush processes payouts for a merchant.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ScheduledPayoutEvent {
+    /// Merchant that received the payout.
+    pub merchant: Address,
+    /// Address that triggered the flush (anyone can call flush_payouts).
+    pub caller: Address,
+    /// Number of tokens for which a payout was actually executed.
+    pub tokens_paid: u32,
+    /// Ledger timestamp when the flush was processed.
     pub timestamp: u64,
 }
 
@@ -1084,6 +1432,8 @@ pub struct MerchantWithdrawalEvent {
     /// Merchant's accumulated balance remaining after withdrawal.
     pub remaining_balance: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a subscriber withdraws funds after cancellation.
@@ -1095,6 +1445,8 @@ pub struct SubscriberWithdrawalEvent {
     pub token: Address,
     pub amount: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a merchant-initiated one-off charge is applied.
@@ -1109,6 +1461,8 @@ pub struct OneOffChargedEvent {
     /// Prepaid balance remaining after this charge.
     pub remaining_balance: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when the lifetime charge cap is reached.
@@ -1125,6 +1479,8 @@ pub struct LifetimeCapReachedEvent {
     pub lifetime_charged: i128,
     /// Timestamp when the cap was reached.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when metadata is set or updated on a subscription.
@@ -1134,6 +1490,8 @@ pub struct MetadataSetEvent {
     pub subscription_id: u32,
     pub key: String,
     pub authorizer: Address,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when metadata is deleted from a subscription.
@@ -1143,6 +1501,8 @@ pub struct MetadataDeletedEvent {
     pub subscription_id: u32,
     pub key: String,
     pub authorizer: Address,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a plan template is updated.
@@ -1161,6 +1521,8 @@ pub struct PlanTemplateUpdatedEvent {
     pub merchant: Address,
     /// Timestamp when the update occurred.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a plan template is disabled.
@@ -1173,6 +1535,8 @@ pub struct PlanTemplateDisabledEvent {
     pub merchant: Address,
     /// Timestamp when disabled.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a plan's max-active-subscriptions limit is configured.
@@ -1187,6 +1551,20 @@ pub struct PlanMaxActiveUpdatedEvent {
     pub merchant: Address,
     /// New limit value (`0` = unlimited).
     pub max_active: u32,
+    /// Ledger timestamp when the change was applied.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant's max-subscriptions limit is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantMaxSubsUpdatedEvent {
+    /// Merchant whose limit was changed.
+    pub merchant: Address,
+    /// New limit value (`u32::MAX` = unlimited).
+    pub max_subs: u32,
     /// Ledger timestamp when the change was applied.
     pub timestamp: u64,
 }
@@ -1209,6 +1587,8 @@ pub struct SubscriptionMigratedEvent {
     pub subscriber: Address,
     /// Timestamp when the migration occurred.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a usage statement is logged.
@@ -1221,6 +1601,8 @@ pub struct UsageStatementEvent {
     pub token: Address,
     pub timestamp: u64,
     pub reference: String,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -1245,6 +1627,8 @@ pub struct UsageChargeRejectedEvent {
     pub timestamp: u64,
     pub reference: String,
     pub result: UsageChargeResult,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -1257,6 +1641,8 @@ pub struct UsageLimitsConfiguredEvent {
     pub burst_min_interval_secs: u64,
     pub usage_cap_units: Option<i128>,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -1265,6 +1651,7 @@ pub enum ChargeExecutionResult {
     Charged = 0,
     InsufficientBalance = 1,
     LifetimeCapReached = 2,
+    ScheduledCancellation = 3,
 }
 
 #[contracttype]
@@ -1299,6 +1686,8 @@ pub struct PartialRefundEvent {
     pub amount: i128,
     /// Ledger timestamp when the refund was processed.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Operation flags for merchant configuration.
@@ -1351,6 +1740,8 @@ pub struct MerchantConfig {
 pub struct MerchantPausedEvent {
     pub merchant: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a merchant disables their blanket pause.
@@ -1359,6 +1750,8 @@ pub struct MerchantPausedEvent {
 pub struct MerchantUnpausedEvent {
     pub merchant: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -1368,6 +1761,30 @@ pub struct MerchantRefundEvent {
     pub subscriber: Address,
     pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted as an on-chain balance snapshot for a (merchant, token) pair.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceSnapshotEvent {
+    /// Merchant address
+    pub merchant: Address,
+    /// Settlement token address
+    pub token: Address,
+    /// Stored on-chain balance for this merchant+token
+    pub balance: i128,
+    /// Total accruals (interval + usage + one_off)
+    pub accrued: i128,
+    /// Total withdrawals recorded in TokenEarnings
+    pub withdrawn: i128,
+    /// Total refunds recorded in TokenEarnings
+    pub refunded: i128,
+    /// Ledger sequence at snapshot time (temporal anchor)
+    pub ledger_sequence: u32,
+    /// Ledger timestamp in seconds
     pub timestamp: u64,
 }
 
@@ -1379,6 +1796,8 @@ pub struct ProtocolFeeConfiguredEvent {
     pub treasury: Address,
     pub fee_bps: u32,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when merchant config is initialized.
@@ -1390,6 +1809,8 @@ pub struct MerchantConfigInitializedEvent {
     pub fee_bips: i32,
     pub allowed_operations: i32,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when merchant config is updated.
@@ -1401,6 +1822,8 @@ pub struct MerchantConfigUpdatedEvent {
     pub fee_bips: i32,
     pub allowed_operations: i32,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when admin rotates a merchant's address.
@@ -1433,6 +1856,8 @@ pub struct ProtocolFeeChargedEvent {
     pub fee_amount: i128,
     pub treasury: Address,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a plan template is created.
@@ -1445,6 +1870,8 @@ pub struct PlanTemplateCreatedEvent {
     pub amount: i128,
     pub usage_enabled: bool,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when global cap default is updated.
@@ -1454,6 +1881,8 @@ pub struct GlobalCapDefaultUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when lifetime cap is updated.
@@ -1463,6 +1892,8 @@ pub struct LifetimeCapUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when merchant cap default is updated.
@@ -1472,6 +1903,8 @@ pub struct MerchantCapDefaultUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -1515,6 +1948,11 @@ pub struct TokenLiabilities {
     pub computed_total: i128,
     /// Whether the accounting equation balances (contract_balance == computed_total).
     pub is_balanced: bool,
+    pub normalized_prepaid: i128,
+    pub normalized_merchant_liab: i128,
+    pub normalized_recoverable: i128,
+    pub normalized_contract_balance: i128,
+    pub normalized_computed_total: i128,
 }
 
 /// Paginated result for reconciliation queries across all tokens.
@@ -1582,5 +2020,169 @@ pub struct PrepaidQueryResult {
     pub next_start_id: Option<u32>,
     /// Whether more subscriptions may exist beyond this scan window.
     pub has_more: bool,
+}
+
+#[cfg(test)]
+mod known_keys_tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env, String};
+
+    /// Builds one value of **every** `DataKey` variant, paired with whether it
+    /// is expected to be an instance-storage key. Adding a variant without
+    /// extending this list fails `every_variant_is_classified_exactly_once`,
+    /// keeping the test the canonical mirror of the enum.
+    fn all_variants(env: &Env) -> std::vec::Vec<(DataKey, bool)> {
+        let a = Address::generate(env);
+        let b = Address::generate(env);
+        let s = String::from_str(env, "k");
+        std::vec![
+            (DataKey::MerchantSubs(a.clone()), true),
+            (DataKey::Token, true),
+            (DataKey::Admin, true),
+            (DataKey::MinTopup, true),
+            (DataKey::NextId, true),
+            (DataKey::SchemaVersion, true),
+            (DataKey::Sub(1), false),
+            (DataKey::ChargedPeriod(1), false),
+            (DataKey::IdemKey(1), false),
+            (DataKey::EmergencyStop, true),
+            (DataKey::MerchantPaused(a.clone()), true),
+            (DataKey::BillingStatement(1, 2), false),
+            (DataKey::BillingStatementsBySubscription(1), false),
+            (DataKey::BillingStatementsByMerchant(a.clone()), false),
+            (DataKey::TotalAccounted(a.clone()), true),
+            (DataKey::Recovery(s.clone()), false),
+            (DataKey::MerchantConfig(a.clone()), true),
+            (DataKey::MerchantEarnings(a.clone(), b.clone()), true),
+            (DataKey::MerchantTokens(a.clone()), true),
+            (DataKey::UsageLimits(1), true),
+            (DataKey::UsageState(1), true),
+            (DataKey::GracePeriod, true),
+            (DataKey::FeeBps, true),
+            (DataKey::Treasury, true),
+            (DataKey::AcceptedTokens, true),
+            (DataKey::TokenDecimals(a.clone()), true),
+            (DataKey::NextPlanId, true),
+            (DataKey::Plan(1), true),
+            (DataKey::SubPlan(1), true),
+            (DataKey::PlanMaxActive(1), true),
+            (DataKey::CreditLimit(a.clone(), b.clone()), true),
+            (DataKey::TokenSubs(a.clone()), true),
+            (DataKey::SubscriberSubs(a.clone()), true),
+            (DataKey::MerchantBalance(a.clone(), b.clone()), true),
+            (DataKey::Blocklist(a.clone()), false),
+            (DataKey::Oracle, true),
+            (DataKey::BillingPeriodSnapshot(1, 2), false),
+            (DataKey::BillingPeriodSnapshotIndex(1), false),
+            (DataKey::AdminNonce(a.clone(), 1), false),
+            (DataKey::Metadata(1, s.clone()), false),
+            (DataKey::MetadataKeys(1), false),
+            (DataKey::Operator, true),
+            (DataKey::BillingRetentionConfig, true),
+            (DataKey::BillingStatementSequence(1), false),
+            (DataKey::BillingStatementAggregate(1), false),
+        ]
+    }
+
+    /// Positive path: every instance-tier variant is accepted by the allowlist.
+    #[test]
+    fn every_instance_variant_is_accepted() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if is_instance {
+                assert!(
+                    key.is_known_instance_key(),
+                    "instance variant disc {} rejected by allowlist",
+                    key.canonical_discriminant()
+                );
+                // The runtime guard must not trip for a known key.
+                assert_known_data_key(&key);
+            }
+        }
+    }
+
+    /// Negative path: persistent-tier variants are NOT in the instance allowlist.
+    #[test]
+    fn persistent_variants_are_rejected() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if !is_instance {
+                assert!(
+                    !key.is_known_instance_key(),
+                    "persistent variant disc {} wrongly allowlisted",
+                    key.canonical_discriminant()
+                );
+            }
+        }
+    }
+
+    /// Negative path: a synthetic unknown key (one whose discriminant was never
+    /// registered — e.g. a legacy `Symbol`-keyed write or a future variant added
+    /// without updating the allowlist) is rejected.
+    #[test]
+    fn synthetic_unknown_key_is_rejected() {
+        // Discriminants beyond the highest registered variant (44) can never be
+        // produced by a real `DataKey`, modelling an unknown/legacy key.
+        assert!(!is_known_instance_discriminant(45));
+        assert!(!is_known_instance_discriminant(9_999));
+        assert!(!is_known_instance_discriminant(u32::MAX));
+    }
+
+    /// The debug guard must panic for an unknown key in test/debug builds.
+    #[test]
+    #[should_panic(expected = "KNOWN_INSTANCE_KEY_DISCRIMINANTS")]
+    fn assert_panics_on_persistent_key() {
+        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
+        // instance storage; the guard catches it.
+        let env = Env::default();
+        let _ = &env;
+        assert_known_data_key(&DataKey::Sub(1));
+    }
+
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=44`
+    /// range, so the registry can never silently skip or duplicate a number.
+    #[test]
+    fn discriminants_are_unique_and_contiguous() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let mut seen = [false; 45];
+        for (key, _) in &variants {
+            let d = key.canonical_discriminant() as usize;
+            assert!(d < seen.len(), "discriminant {d} out of expected range");
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=44");
+        assert_eq!(variants.len(), 45, "variant count drifted from 45");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
+            .into_iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+    }
 }
 

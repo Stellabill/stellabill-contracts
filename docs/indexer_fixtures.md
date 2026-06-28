@@ -6,24 +6,24 @@ This repository includes a dedicated fixture pack to ensure all smart contract e
 
 The following fixtures are located in `contracts/subscription_vault/src/test_indexer_fixtures.rs`. Each test is prefixed with `fixture_` and exercises a specific lifecycle or event scenario.
 
-| Test Name | Description | Key Events |
-|-----------|-------------|------------|
-| `fixture_successful_charge_and_deposit` | Standard deposit followed by a successful recurring charge. | `funds_deposited`, `subscription_charged` |
-| `fixture_insufficient_balance_grace_period` | Charge fails due to lack of funds, entering the grace window. | `subscription_charge_failed` (GracePeriod) |
-| `fixture_insufficient_balance_terminal` | Charge fails after grace period expires, entering terminal failed state. | `subscription_charge_failed` (InsufficientBalance) |
-| `fixture_unauthorized_charge_rejected` | Attempt to perform an action (e.g., pause) by an unauthorized address. | (None, returns `Error::Unauthorized`) |
-| `fixture_refund_on_cancel_with_prepaid` | Cancellation of a subscription that still has a prepaid balance. | `subscription_cancelled` (refund_amount > 0) |
-| `fixture_subscriber_withdrawal_after_cancel` | Subscriber withdraws their remaining balance from a cancelled vault. | `subscriber_withdrawal` |
-| `fixture_merchant_withdrawal` | Merchant withdraws their earned fees from the contract. | `merchant_withdrawal` |
-| `fixture_batch_charge_all_success` | Batch operation where all charges succeed. | Multiple `subscription_charged` |
-| `fixture_batch_charge_partial_failure` | Batch operation where some charges succeed and some fail. | Mixed success/failure events |
-| `fixture_batch_charge_all_fail` | Batch operation where all charges fail. | Multiple `subscription_charge_failed` |
-| `fixture_lifetime_cap_reached` | Subscription reaches its lifetime charge cap and auto-cancels. | `lifetime_cap_reached`, `subscription_cancelled` |
-| `fixture_grace_period_to_active_recovery` | Recovery flow from GracePeriod back to Active after a deposit. | `funds_deposited`, `subscription_resumed` |
-| `fixture_pause_resume_charge_sequence` | Manual pausing and resuming of a subscription by the authorizer. | `subscription_paused`, `subscription_resumed` |
-| `fixture_replay_protection` | Attempt to charge the same subscription twice in the same billing period. | (None, returns `Error::Replay`) |
-| `fixture_emergency_stop_blocks_charge` | Admin enables emergency stop, blocking all charge operations. | `emergency_stop_enabled` |
-| `fixture_one_off_charge` | Merchant applies a manual one-off charge to a subscription. | `one_off_charged` |
+| Test Name                                    | Description                                                               | Key Events                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------- |
+| `fixture_successful_charge_and_deposit`      | Standard deposit followed by a successful recurring charge.               | `funds_deposited`, `subscription_charged`          |
+| `fixture_insufficient_balance_grace_period`  | Charge fails due to lack of funds, entering the grace window.             | `subscription_charge_failed` (GracePeriod)         |
+| `fixture_insufficient_balance_terminal`      | Charge fails after grace period expires, entering terminal failed state.  | `subscription_charge_failed` (InsufficientBalance) |
+| `fixture_unauthorized_charge_rejected`       | Attempt to perform an action (e.g., pause) by an unauthorized address.    | (None, returns `Error::Unauthorized`)              |
+| `fixture_refund_on_cancel_with_prepaid`      | Cancellation of a subscription that still has a prepaid balance.          | `subscription_cancelled` (refund_amount > 0)       |
+| `fixture_subscriber_withdrawal_after_cancel` | Subscriber withdraws their remaining balance from a cancelled vault.      | `subscriber_withdrawal`                            |
+| `fixture_merchant_withdrawal`                | Merchant withdraws their earned fees from the contract.                   | `merchant_withdrawal`                              |
+| `fixture_batch_charge_all_success`           | Batch operation where all charges succeed.                                | Multiple `subscription_charged`                    |
+| `fixture_batch_charge_partial_failure`       | Batch operation where some charges succeed and some fail.                 | Mixed success/failure events                       |
+| `fixture_batch_charge_all_fail`              | Batch operation where all charges fail.                                   | Multiple `subscription_charge_failed`              |
+| `fixture_lifetime_cap_reached`               | Subscription reaches its lifetime charge cap and auto-cancels.            | `lifetime_cap_reached`, `subscription_cancelled`   |
+| `fixture_grace_period_to_active_recovery`    | Recovery flow from GracePeriod back to Active after a deposit.            | `funds_deposited`, `subscription_resumed`          |
+| `fixture_pause_resume_charge_sequence`       | Manual pausing and resuming of a subscription by the authorizer.          | `subscription_paused`, `subscription_resumed`      |
+| `fixture_replay_protection`                  | Attempt to charge the same subscription twice in the same billing period. | (None, returns `Error::Replay`)                    |
+| `fixture_emergency_stop_blocks_charge`       | Admin enables emergency stop, blocking all charge operations.             | `emergency_stop_enabled`                           |
+| `fixture_one_off_charge`                     | Merchant applies a manual one-off charge to a subscription.               | `one_off_charged`                                  |
 
 ## Running the Fixtures
 
@@ -52,3 +52,21 @@ All events follow the `soroban-sdk` event pattern. Indexers should listen for th
 1. **Deterministic Behavior**: All fixtures use controlled environment timestamps (`test_env.jump`) to ensure stable event ordering.
 2. **Privacy**: Events include `subscription_id` and `amount` but avoid leaking sensitive metadata keys unless explicitly indexed.
 3. **Negative Cases**: Fixtures like `fixture_unauthorized_charge_rejected` ensure that no state is mutated and no valid events are emitted for failed authorization.
+
+## Indexer Fast-Forward Rules
+
+To accelerate indexer bootstrap for long-lived contracts the admin can publish
+compact balance snapshots that anchor a merchant/token pair to a single ledger.
+
+- Use the admin entrypoint `emit_merchant_balance_snapshot(admin, merchant, token)`
+  to publish a single `MerchantBalanceSnapshotEvent` for the given pair.
+- For bulk bootstrap, call `emit_all_balances_snapshot(admin, start_id, limit)` which
+  scans subscriptions in `[start_id, start_id+limit)` and emits one snapshot per
+  unique `(merchant, token)` discovered in that window. Chain pages until no
+  more snapshots are returned.
+- After applying a snapshot for `(merchant, token)` with `ledger_sequence = L`,
+  indexers can fast-forward by skipping historical events up to and including
+  ledger `L` and resume streaming from `L + 1`.
+
+Security note: only the stored admin may call these entrypoints. Snapshots are
+intended as indexing aids and do not change accounting invariants on-chain.

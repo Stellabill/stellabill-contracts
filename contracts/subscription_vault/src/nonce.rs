@@ -102,10 +102,10 @@ pub fn check_and_advance(
         return Err(Error::NonceAlreadyUsed);
     }
 
-    // Increment the counter atomically. Panics on overflow (u64::MAX).
+    // Increment the counter atomically. Returns Error::Overflow on overflow (u64::MAX).
     let next = stored
         .checked_add(1)
-        .expect("nonce overflow: u64::MAX reached");
+        .ok_or(Error::Overflow)?;
 
     // Persist the incremented nonce before emitting event (effects-before-interactions).
     env.storage().persistent().set(&key, &next);
@@ -118,6 +118,7 @@ pub fn check_and_advance(
             domain,
             nonce: stored,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -127,6 +128,7 @@ pub fn check_and_advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
 
     /// Mock test to verify constant values are correct.
     #[test]
@@ -135,5 +137,23 @@ mod tests {
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
         assert_eq!(DOMAIN_MERCHANT_ROTATION, 3);
+    }
+
+    #[test]
+    fn test_check_and_advance_overflow() {
+        let env = Env::default();
+        let signer = Address::generate(&env);
+        let domain = DOMAIN_BATCH_CHARGE;
+        let contract_id = env.register(crate::SubscriptionVault, ());
+
+        let res = env.as_contract(&contract_id, || {
+            let key = DataKey::AdminNonce(signer.clone(), domain);
+            // Seed with u64::MAX
+            env.storage().persistent().set(&key, &u64::MAX);
+
+            // Try to advance it, it should return Err(Error::Overflow)
+            check_and_advance(&env, &signer, domain, u64::MAX)
+        });
+        assert_eq!(res, Err(Error::Overflow));
     }
 }

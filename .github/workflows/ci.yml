@@ -46,9 +46,12 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Run performance budget tests
+      - name: Run query performance budget tests
         run: cargo test -p subscription_vault --test query_performance -- --nocapture
         # --nocapture prints [Perf] metrics to CI log for review
+      - name: Run gas and storage budget regression tests
+        run: cargo test -p subscription_vault --test gas_budget -- --nocapture
+        # --nocapture prints [Budget] lines for CI delta graphing (closes #489)
 
   coverage:
     runs-on: ubuntu-latest
