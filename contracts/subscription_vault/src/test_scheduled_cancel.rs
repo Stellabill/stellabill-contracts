@@ -9,6 +9,16 @@ fn setup() -> (Env, Address, SubscriptionVaultClient<'static>) {
     env.mock_all_auths();
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(
+        &token,
+        &7u32,
+        &admin,
+        &1_000_000i128,
+        &(3 * 24 * 60 * 60u64),
+    );
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&contract_id, &100_000_000_000i128);
     (env, contract_id, client)
 }
 
@@ -19,7 +29,16 @@ const PREPAID: i128 = 50_000_000;
 
 fn create_active_sub(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Address, Address) {
     use crate::test_utils::fixtures;
-    fixtures::create_active_subscription(env, client, T0, INTERVAL, AMOUNT, PREPAID)
+    let (id, sub, merch) = fixtures::create_subscription_detailed(
+        env,
+        client,
+        crate::types::SubscriptionStatus::Active,
+        AMOUNT,
+        INTERVAL,
+    );
+    fixtures::seed_balance(env, client, id, PREPAID);
+    let token = client.get_subscription(&id).token;
+    (id, sub, merch, token)
 }
 
 // --- schedule_cancel ---

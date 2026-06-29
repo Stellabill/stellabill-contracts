@@ -99,7 +99,7 @@ fn setup_env<'a>() -> (
         );
         sub_ids.push(sub_id);
         
-        vault.deposit_funds(&sub_id, &sub, &50_000);
+        vault.deposit_funds(&sub_id, &sub, &50_000, &None);
     }
 
     (env, vault, token, token_admin_client, admin, merchants, subscribers, sub_ids)
@@ -124,11 +124,11 @@ proptest! {
                 Op::Deposit { sub_idx, amount } => {
                     let sub_id = sub_ids[sub_idx];
                     let subscriber = &subscribers[sub_idx];
-                    let _ = vault.try_deposit_funds(&sub_id, subscriber, &amount);
+                    let _ = vault.try_deposit_funds(&sub_id, subscriber, &amount, &None);
                 }
                 Op::ChargeInterval { sub_idx } => {
                     let sub_id = sub_ids[sub_idx];
-                    let _ = vault.try_charge_subscription(&sub_id);
+                    let _ = vault.try_charge_subscription(&sub_id, &None);
                 }
                 Op::ChargeUsage { sub_idx, amount } => {
                     let sub_id = sub_ids[sub_idx];
@@ -137,7 +137,7 @@ proptest! {
                 Op::ChargeOneOff { sub_idx, amount } => {
                     let sub_id = sub_ids[sub_idx];
                     let merchant = &merchants[sub_idx % merchants.len()];
-                    let _ = vault.try_charge_one_off(&sub_id, merchant, &amount);
+                    let _ = vault.try_charge_one_off(&sub_id, merchant, &amount, &None);
                 }
                 Op::Withdraw { merchant_idx, amount, withdraw_all, withdraw_zero } => {
                     let merchant = &merchants[merchant_idx];

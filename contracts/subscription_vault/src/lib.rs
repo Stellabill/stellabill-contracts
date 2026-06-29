@@ -292,6 +292,7 @@ pub mod operator {
                 admin,
                 operator,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -305,6 +306,7 @@ pub mod operator {
             crate::types::OperatorRemovedEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -393,6 +395,7 @@ pub use types::{
     DEFAULT_ALLOWED_OPS,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
     OperatorRemovedEvent, OperatorSetEvent,
+    OracleLivenessEvent,
     PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
     TokenLiabilities,
     FullSnapshotPage, MerchantBalanceEntry, SnapshotExportedEvent, SnapshotRestoredEvent,
@@ -1275,7 +1278,7 @@ impl SubscriptionVault {
 
         // Write subscriptions into persistent storage.
         let mut i = 0u32;
-        while (i as usize) < subscriptions.len() {
+        while i < subscriptions.len() {
             if let Some(s) = subscriptions.get(i) {
                 let sub = Subscription {
                     subscriber: s.subscriber.clone(),
@@ -1292,6 +1295,7 @@ impl SubscriptionVault {
                     start_time: s.start_time,
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
+                    cancel_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1309,7 +1313,7 @@ impl SubscriptionVault {
 
         // Write merchant balances (instance storage)
         let mut j = 0u32;
-        while (j as usize) < balances.len() {
+        while j < balances.len() {
             if let Some(b) = balances.get(j) {
                 env.storage()
                     .instance()

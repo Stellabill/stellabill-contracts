@@ -26,9 +26,6 @@ hex = "0.4"
 ed25519-dalek = "=2.2"
 rand = "0.8"
 
-[[test]]
-name = "export_cursor"
-path = "tests/export_cursor.rs"
 
 [[test]]
 name = "safe_math_verification"

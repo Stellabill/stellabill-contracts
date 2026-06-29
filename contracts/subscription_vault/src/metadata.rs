@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, TryFromVal, Vec};
 
 use crate::queries::get_subscription;
 use crate::types::{
@@ -17,8 +17,8 @@ const SIGNED_MSG_DOMAIN_TAG_LEN: u32 = 32;
 /// Mixed into every canonical signed-metadata payload before the user-supplied
 /// fields. Changing this value invalidates every previously-signed payload, so
 /// it must only be updated alongside a contract version bump.
-const SIGNED_MSG_DOMAIN_TAG: &[u8; SIGNED_MSG_DOMAIN_TAG_LEN as usize] =
-    b"SBL_META_SIGNED_v1\x00\x00\x00\x00\x00\x00\x00\x00";
+pub const DOMAIN_METADATA_SIGNED: &[u8; 32] =
+    b"SBL_META_SIGNED_v1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 /// Wrapper called by the contract entrypoint.
 pub fn do_set_metadata(
@@ -80,13 +80,20 @@ pub fn do_set_metadata_signed(
     payload: SignedMetadataPayload,
     signature: BytesN<64>,
 ) -> Result<(), Error> {
-    let chain_id = env.ledger().chain_id();
+    let chain_id = env.ledger().network_id();
 
     // Auth-first ordering: prove the subscription actually exists before
     // touching crypto or storage. A bogus subscription_id otherwise lets an
     // attacker burn slot in the nonce counter for IDs that will never
     // resolve.
     let sub = get_subscription(env, payload.subscription_id)?;
+
+    if payload.key.len() > MAX_METADATA_KEY_LENGTH {
+        return Err(Error::MetadataKeyTooLong);
+    }
+    if payload.value.len() > MAX_METADATA_VALUE_LENGTH {
+        return Err(Error::MetadataValueTooLong);
+    }
 
     // Build the canonical message and verify the ed25519 signature against
     // the supplied pubkey. Verification hashes the message internally per
@@ -105,7 +112,14 @@ pub fn do_set_metadata_signed(
     // authenticates as e.g. sub.subscriber on-chain authenticates as the
     // same address on this off-chain path. The equality check below is the
     // implicit invariant tying the two paths together.
-    let signer_address = Address::from_account(env, &signer_pubkey);
+    let sc_address = soroban_sdk::xdr::ScAddress::Account(
+        soroban_sdk::xdr::AccountId(
+            soroban_sdk::xdr::PublicKey::PublicKeyTypeEd25519(
+                soroban_sdk::xdr::Uint256(signer_pubkey.to_array())
+            )
+        )
+    );
+    let signer_address = soroban_sdk::Address::try_from_val(env, &sc_address).unwrap();
 
     // Identity check: the pubkey must correspond to a party of the
     // subscription. Without this guard a key holder could move metadata on
@@ -168,7 +182,7 @@ pub fn get_metadata_signed_nonce(env: &Env, signer: Address) -> u64 {
 ///
 /// Layout (all multi-byte integers big-endian, no padding):
 ///
-/// ```
+/// ```text
 ///   SIGNED_MSG_DOMAIN_TAG (32 bytes)
 /// || subscription_id   (4 bytes, u32 BE)
 /// || key_len           (4 bytes, u32 BE)
@@ -190,10 +204,10 @@ pub fn get_metadata_signed_nonce(env: &Env, signer: Address) -> u64 {
 pub fn build_metadata_signed_message(
     env: &Env,
     payload: &SignedMetadataPayload,
-    chain_id: &Bytes,
+    chain_id: &BytesN<32>,
 ) -> Bytes {
     let mut buf = Bytes::new(env);
-    buf.extend_from_slice(&SIGNED_MSG_DOMAIN_TAG[..]);
+    buf.extend_from_slice(&DOMAIN_METADATA_SIGNED[..]);
 
     let sub_id_bytes = payload.subscription_id.to_be_bytes();
     buf.extend_from_slice(&sub_id_bytes);
@@ -202,20 +216,48 @@ pub fn build_metadata_signed_message(
     let key_len_bytes = key_len.to_be_bytes();
     buf.extend_from_slice(&key_len_bytes);
     if key_len > 0 {
+        let copy_len = core::cmp::min(key_len, MAX_METADATA_KEY_LENGTH);
         let mut key_buf = [0u8; MAX_METADATA_KEY_LENGTH as usize];
-        payload.key.copy_into_slice(&mut key_buf[..key_len as usize]);
-        buf.extend_from_slice(&key_buf[..key_len as usize]);
+        
+        let mut tmp_key = [0u8; 64];
+        if key_len as usize <= tmp_key.len() {
+            payload.key.copy_into_slice(&mut tmp_key[..key_len as usize]);
+            key_buf[..copy_len as usize].copy_from_slice(&tmp_key[..copy_len as usize]);
+        }
+        
+        buf.extend_from_slice(&key_buf[..copy_len as usize]);
+        
+        // If there's more data (invalid payload case in tests), append zeroes
+        // to avoid panics but guarantee an invalid signature match.
+        if key_len > MAX_METADATA_KEY_LENGTH {
+            let extra = key_len - MAX_METADATA_KEY_LENGTH;
+            for _ in 0..extra {
+                buf.extend_from_slice(&[0u8]);
+            }
+        }
     }
 
     let value_len: u32 = payload.value.len();
     let value_len_bytes = value_len.to_be_bytes();
     buf.extend_from_slice(&value_len_bytes);
     if value_len > 0 {
+        let copy_len = core::cmp::min(value_len, MAX_METADATA_VALUE_LENGTH);
         let mut value_buf = [0u8; MAX_METADATA_VALUE_LENGTH as usize];
-        payload
-            .value
-            .copy_into_slice(&mut value_buf[..value_len as usize]);
-        buf.extend_from_slice(&value_buf[..value_len as usize]);
+        
+        let mut tmp_val = [0u8; 300];
+        if value_len as usize <= tmp_val.len() {
+            payload.value.copy_into_slice(&mut tmp_val[..value_len as usize]);
+            value_buf[..copy_len as usize].copy_from_slice(&tmp_val[..copy_len as usize]);
+        }
+        
+        buf.extend_from_slice(&value_buf[..copy_len as usize]);
+        
+        if value_len > MAX_METADATA_VALUE_LENGTH {
+            let extra = value_len - MAX_METADATA_VALUE_LENGTH;
+            for _ in 0..extra {
+                buf.extend_from_slice(&[0u8]);
+            }
+        }
     }
 
     let nonce_bytes = payload.nonce.to_be_bytes();
@@ -225,7 +267,7 @@ pub fn build_metadata_signed_message(
     let chain_id_len_bytes = chain_id_len.to_be_bytes();
     buf.extend_from_slice(&chain_id_len_bytes);
     if chain_id_len > 0 {
-        buf.extend_from_slice(chain_id);
+        buf.extend_from_slice(&chain_id.to_array());
     }
 
     let expires_bytes = payload.expires_at.to_be_bytes();
@@ -395,8 +437,13 @@ mod signed_message_tests {
             expires_at: 100,
         };
 
-        let chain_a = Bytes::from_slice(&env, b"chain-A");
-        let chain_b = Bytes::from_slice(&env, b"chain-B");
+        let mut arr_a = [0u8; 32];
+        arr_a[..7].copy_from_slice(b"chain-A");
+        let chain_a = BytesN::from_array(&env, &arr_a);
+
+        let mut arr_b = [0u8; 32];
+        arr_b[..7].copy_from_slice(b"chain-B");
+        let chain_b = BytesN::from_array(&env, &arr_b);
 
         let msg_a = build_metadata_signed_message(&env, &payload, &chain_a);
         let msg_b = build_metadata_signed_message(&env, &payload, &chain_b);
@@ -411,7 +458,7 @@ mod signed_message_tests {
     #[test]
     fn message_changes_on_any_field_mutation() {
         let env = Env::default();
-        let chain = Bytes::from_slice(&env, b"testnet");
+        let chain = BytesN::from_array(&env, &[0u8; 32]);
 
         let base = || SignedMetadataPayload {
             subscription_id: 1,
