@@ -1,6 +1,267 @@
-use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE};
+#![cfg(test)]
+
+use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE, ProposalKind};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
+
+// ── Governance Proposal Tests ──────────────────────────────────────────────
+
+/// Helper to initialize contract with admin and token
+fn init_vault(env: &Env, admin: &Address) -> (Address, SubscriptionVaultClient) {
+    let token_admin = Address::generate(env);
+    let token_address = env.register_stellar_asset_contract_v2(token_admin).address();
+    
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+
+    client.init(
+        &token_address,
+        &6,  // decimals
+        admin,
+        &10_000_000,  // min_topup
+        &86400,  // grace period
+    );
+
+    (token_address, client)
+}
+
+#[test]
+fn test_add_and_remove_guardians() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Add guardians
+    client.add_guardian(&admin, &guardian1, &100);
+    client.add_guardian(&admin, &guardian2, &50);
+
+    // Verify weights
+    assert_eq!(client.get_guardian_weight(&guardian1), 100);
+    assert_eq!(client.get_guardian_weight(&guardian2), 50);
+
+    // Remove guardian1
+    client.remove_guardian(&admin, &guardian1);
+    assert_eq!(client.get_guardian_weight(&guardian1), 0);
+    assert_eq!(client.get_guardian_weight(&guardian2), 50);
+}
+
+#[test]
+fn test_submit_proposal_rotate_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;  // 1 hour from now
+
+    // Submit proposal
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000,  // 50% quorum
+        &eta,
+    ).unwrap();
+
+    assert_eq!(proposal_id, 0);
+
+    // Verify proposal exists
+    let proposal = client.get_proposal(&0).unwrap();
+    assert_eq!(proposal.kind, ProposalKind::RotateAdmin);
+    assert_eq!(proposal.target, new_admin);
+    assert_eq!(proposal.quorum_bps, 5000);
+    assert_eq!(proposal.executed, false);
+}
+
+#[test]
+fn test_submit_proposal_set_protocol_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+
+    // Submit protocol fee proposal
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::SetProtocolFee,
+        &treasury,
+        &None,
+        &250,  // 2.5% fee
+        &7500,  // 75% quorum
+        &eta,
+    ).unwrap();
+
+    assert_eq!(proposal_id, 0);
+
+    let proposal = client.get_proposal(&0).unwrap();
+    assert_eq!(proposal.kind, ProposalKind::SetProtocolFee);
+    assert_eq!(proposal.target3, 250);
+}
+
+#[test]
+fn test_invalid_quorum_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+
+    // Try to submit with invalid quorum (> 10000)
+    let result = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &10001,  // Invalid: > 10000
+        &eta,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_eta_in_past_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta_in_past = current_time - 3600;  // 1 hour ago
+
+    // Try to submit with ETA in the past
+    let result = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000,
+        &eta_in_past,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cancel_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Submit proposal
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    ).unwrap();
+
+    // Cancel it
+    let reason = String::from_str(&env, "Superseded by newer proposal");
+    client.cancel_proposal(&proposal_id, &reason).unwrap();
+
+    // Verify it's marked as executed (and thus immutable)
+    let proposal = client.get_proposal(&proposal_id).unwrap();
+    assert_eq!(proposal.executed, true);
+}
+
+#[test]
+fn test_list_guardians() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Add guardians
+    client.add_guardian(&admin, &guardian1, &100);
+    client.add_guardian(&admin, &guardian2, &50);
+
+    // List guardians
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 2);
+
+    // Verify weights are present (order may vary)
+    let has_guardian1 = guardians.iter().any(|(g, w)| g == guardian1 && *w == 100);
+    let has_guardian2 = guardians.iter().any(|(g, w)| g == guardian2 && *w == 50);
+    assert!(has_guardian1);
+    assert!(has_guardian2);
+}
+
+#[test]
+fn test_current_proposal_id_counter() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin1 = Address::generate(&env);
+    let new_admin2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Initially 0
+    assert_eq!(client.get_current_proposal_id(), 0);
+
+    // Submit first proposal
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+    let id1 = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin1,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    ).unwrap();
+
+    assert_eq!(id1, 0);
+    assert_eq!(client.get_current_proposal_id(), 1);
+
+    // Submit second proposal
+    let id2 = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin2,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    ).unwrap();
+
+    assert_eq!(id2, 1);
+    assert_eq!(client.get_current_proposal_id(), 2);
+}
+
+// ── Legacy Merchant Config Tests ────────────────────────────────────────────
 
 #[test]
 fn test_merchant_config_initialization() {

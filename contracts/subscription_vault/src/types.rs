@@ -8,6 +8,9 @@ use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec, Bytes,
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
+/// Event schema version for backwards-compatible indexer decoding.
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
 /// Maximum length of a metadata key in bytes.
