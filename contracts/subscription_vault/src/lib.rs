@@ -25,11 +25,12 @@ pub pub mod nonce;
 mod safe_math;
 mod subscription;
 mod types;
+pub mod coupon;
 
 pub use safe_math::*;
 pub use types::{
     EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
-    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent, Coupon, CouponCreatedEvent, CouponRevokedEvent, CouponAppliedEvent, DiscountAppliedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -2084,6 +2085,59 @@ impl SubscriptionVault {
         subscription::do_charge_one_off(&env, subscription_id, merchant, amount, idem_key)
     }
 
+    // ── Coupons & Discounts ───────────────────────────────────────────────────
+
+    /// Create a new merchant-managed discount coupon.
+    ///
+    /// # Arguments
+    /// - `merchant`: Address of the merchant creating the coupon.
+    /// - `code`: Unique code identifying the coupon.
+    /// - `token`: Settlement token the coupon applies to (must match subscription).
+    /// - `percent_off_bps`: Percentage discount in basis points (0-10,000).
+    /// - `fixed_off`: Fixed token-unit discount applied after percentage (>= 0).
+    /// - `max_redemptions`: Global limit on how many subscriptions can bind this coupon (0 = unlimited).
+    /// - `expires_at`: Ledger timestamp after which the coupon cannot be bound (0 = never).
+    pub fn create_coupon(
+        env: Env,
+        merchant: Address,
+        code: Symbol,
+        token: Address,
+        percent_off_bps: u32,
+        fixed_off: i128,
+        max_redemptions: u32,
+        expires_at: u64,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        coupon::create_coupon(&env, merchant, code, token, percent_off_bps, fixed_off, max_redemptions, expires_at)
+    }
+
+    /// Revoke an existing coupon, preventing future bindings.
+    ///
+    /// Already-bound coupons that are revoked will be silently skipped during
+    /// charge calculation to avoid blocking billing.
+    pub fn revoke_coupon(env: Env, merchant: Address, code: Symbol) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        coupon::revoke_coupon(&env, merchant, code)
+    }
+
+    /// Bind a coupon code to a subscription.
+    ///
+    /// Only the subscriber can call this. A subscription can hold at most one bound coupon.
+    pub fn apply_coupon(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        code: Symbol,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        coupon::apply_coupon(&env, subscriber, subscription_id, code)
+    }
+
+    /// Get details of a specific coupon.
+    pub fn get_coupon(env: Env, code: Symbol) -> Option<Coupon> {
+        coupon::get_coupon(&env, code)
+    }
+
     // ── Charging ──────────────────────────────────────────────────────────────
 
     /// Charge a subscription for one billing interval.
@@ -3632,6 +3686,8 @@ mod test_validation;
 
 #[cfg(test)]
 mod test_abi_validators_integration;
+#[cfg(test)]
+mod test_coupon;
 
 #[cfg(test)]
 mod test {
