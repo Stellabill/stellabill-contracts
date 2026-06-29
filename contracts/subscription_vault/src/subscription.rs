@@ -463,6 +463,26 @@ pub fn do_create_subscription_with_token(
         },
     );
 
+    // Issue soulbound credential
+    let credential = crate::types::CredentialBadge {
+        subscription_id: id,
+        tier: 1,
+        issued_at: env.ledger().timestamp(),
+        revoked: false,
+    };
+    env.storage().persistent().set(&DataKey::Credential(id), &credential);
+    // Extend TTL of credential just like subscription
+    env.storage().persistent().extend_ttl(&DataKey::Credential(id), SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+    
+    env.events().publish(
+        (Symbol::new(env, "credential_issued"), id),
+        crate::types::CredentialIssuedEvent {
+            subscription_id: id,
+            tier: 1,
+            issued_at: env.ledger().timestamp(),
+        },
+    );
+
     Ok(id)
 }
 
@@ -691,6 +711,23 @@ pub fn do_cancel_subscription(
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
+
+    // Revoke soulbound credential if it exists
+    if let Some(mut credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+        if !credential.revoked {
+            credential.revoked = true;
+            env.storage().persistent().set(&DataKey::Credential(subscription_id), &credential);
+            
+            env.events().publish(
+                (Symbol::new(env, "credential_revoked"), subscription_id),
+                crate::types::CredentialRevokedEvent {
+                    subscription_id,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
+    }
+
     Ok(())
 }
 

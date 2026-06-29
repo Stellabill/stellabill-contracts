@@ -227,6 +227,8 @@ pub struct MerchantKyc {
     NextProposalId,
     /// Governance proposal record keyed by proposal ID.
     Proposal(u64),
+    /// Soulbound credential badge keyed by subscription ID.
+    Credential(u32),
 }
 
 impl DataKey {
@@ -289,6 +291,7 @@ impl DataKey {
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
             DataKey::Proposal(_) => 48,
+            DataKey::Credential(_) => 49,
         }
     }
 
@@ -476,6 +479,16 @@ impl Subscription {
             false
         }
     }
+}
+
+/// A non-transferable (soulbound) credential badge linking a subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialBadge {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+    pub revoked: bool,
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -1232,6 +1245,23 @@ pub struct RecoveryEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+}
+
+/// Event emitted when a soulbound credential is issued.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialIssuedEvent {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+}
+
+/// Event emitted when a soulbound credential is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialRevokedEvent {
+    pub subscription_id: u32,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is created.

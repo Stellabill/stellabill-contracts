@@ -2488,6 +2488,63 @@ impl SubscriptionVault {
         queries::get_subscription(&env, subscription_id)
     }
 
+    /// Retrieve the soulbound credential badge for a given subscription.
+    pub fn get_credential(env: Env, subscription_id: u32) -> Result<crate::types::CredentialBadge, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Credential(subscription_id))
+            .ok_or(Error::NotFound)
+    }
+
+    /// Check if a subscription has an active (non-revoked) credential.
+    pub fn is_credential_active(env: Env, subscription_id: u32) -> bool {
+        if let Some(credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+            !credential.revoked
+        } else {
+            false
+        }
+    }
+
+    /// Manually revoke a soulbound credential.
+    ///
+    /// Requires authorization from the merchant or the contract admin.
+    /// Idempotent operation; succeeds if already revoked.
+    pub fn revoke_credential(env: Env, authorizer: Address, subscription_id: u32) -> Result<(), Error> {
+        authorizer.require_auth();
+        
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        
+        // Authorization: merchant or admin
+        let mut is_authorized = false;
+        if authorizer == sub.merchant {
+            is_authorized = true;
+        } else if admin::require_admin_auth(&env, &authorizer).is_ok() {
+            is_authorized = true;
+        }
+        
+        if !is_authorized {
+            return Err(Error::Forbidden);
+        }
+
+        if let Some(mut credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+            if !credential.revoked {
+                credential.revoked = true;
+                env.storage().persistent().set(&DataKey::Credential(subscription_id), &credential);
+                
+                env.events().publish(
+                    (Symbol::new(&env, "credential_revoked"), subscription_id),
+                    crate::types::CredentialRevokedEvent {
+                        subscription_id,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+            }
+            Ok(())
+        } else {
+            Err(Error::NotFound)
+        }
+    }
+
     /// Estimate how much to top up for future billing cycles.
     ///
     /// Calculates how much is needed to cover `num_intervals`,
