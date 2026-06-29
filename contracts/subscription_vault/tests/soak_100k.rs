@@ -98,6 +98,7 @@ fn subscription_for(
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     }
 }
 

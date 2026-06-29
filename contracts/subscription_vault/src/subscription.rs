@@ -1466,9 +1466,10 @@ pub fn do_create_plan_template(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
             plan_id,
-            admin: merchant.clone(),
-            interval: interval_seconds,
+            merchant: merchant.clone(),
+            token: token.clone(),
             amount,
+            interval: interval_seconds,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -1518,9 +1519,10 @@ pub fn do_create_plan_template_with_token(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
             plan_id,
-            admin: merchant.clone(),
-            interval: interval_seconds,
+            merchant: merchant.clone(),
+            token: token.clone(),
             amount,
+            interval: interval_seconds,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -1892,6 +1894,7 @@ pub fn do_set_merchant_max_subs(
             merchant,
             max_subs,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 

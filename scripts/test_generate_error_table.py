@@ -1,54 +1,17 @@
-"""Tests for generate_error_table.py.
-
-Run with:
-    python -m pytest scripts/test_generate_error_table.py -v
-or:
-    python scripts/test_generate_error_table.py
-
-Coverage targets (from issue #513):
-  ✓ All Error variants extracted from types.rs
-  ✓ New variant added without doc update fails --check
-  ✓ Alias/grouped variants are correctly listed
-  ✓ Deprecated variants carry strikethrough marker
-  ✓ Table includes all required columns
-  ✓ --check passes when file is already up to date
-  ✓ --check fails when file is stale
-  ✓ Entrypoint grep returns expected modules for a known variant
-  ✓ Category ranges map correctly
-  ✓ Splicing replaces existing sentinel block
-  ✓ Splicing appends when sentinels absent
-  ✓ Undocumented variants are surfaced with a warning
-  ✓ Path-traversal attempt is rejected
-  ✓ Missing types.rs returns exit code 2
-  ✓ Script returns 0 when no changes needed
-"""
+"""Tests for generate_error_table.py."""
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import textwrap
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Load the module under test without requiring it to be on sys.path
-# ---------------------------------------------------------------------------
-
-SCRIPT_PATH = Path(__file__).resolve().parent / "generate_error_table.py"
-
-
-def _load_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("generate_error_table", SCRIPT_PATH)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-MOD = _load_module()
+# Add current directory to sys.path so we can import generate_error_table
+sys.path.append(str(Path(__file__).resolve().parent))
+import generate_error_table as MOD
 
 # Re-export symbols under test
 parse_variants = MOD.parse_variants
@@ -469,6 +432,23 @@ def test_main_check_fails_when_new_variant_added(tmp_path):
     rc = main(["--check", "--repo-root", str(repo)])
     assert rc == 1
 
+def test_grep_entrypoints_oserror(tmp_path):
+    """OSError during reading a file should be skipped."""
+    src = _make_src_dir(tmp_path, {"broken.rs": "some content"})
+    # Mock read_text to raise OSError
+    with patch("pathlib.Path.read_text", side_effect=OSError):
+        hits = grep_entrypoints(src, "Unauthorized")
+        assert hits == []
+
+def test_main_no_variants_found(tmp_path):
+    """Returns 2 if no variants are found in types.rs."""
+    repo = _make_repo(tmp_path, textwrap.dedent("""\
+        pub enum Error {
+            // empty
+        }
+    """), _ERRORS_MD_WITHOUT_SENTINELS, {})
+    rc = main(["--repo-root", str(repo)])
+    assert rc == 2
 
 # ---------------------------------------------------------------------------
 # Run directly (no pytest needed)

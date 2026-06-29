@@ -17,8 +17,13 @@ mod export_cursor_stability {
     fn setup() -> (Env, Address, SubscriptionVaultClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, SubscriptionVault);
+        let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        client.init(&token, &7, &admin, &100i128, &(24 * 3600));
+
         (env, contract_id, client)
     }
 
@@ -30,16 +35,25 @@ mod export_cursor_stability {
         let mut all_ids: Vec<u32> = Vec::new();
         let mut cursor: Option<u32> = None;
         let mut pages = 0u32;
+        let admin = client.get_admin();
 
         loop {
-            let result = client.export_subscription_summaries(&cursor, &page_size);
+            let result = client.export_subscription_summaries(&admin, &cursor.unwrap_or(0), &page_size);
             pages += 1;
 
-            for summary in result.summaries.iter() {
-                all_ids.push(summary.id);
+            for summary in result.iter() {
+                all_ids.push(summary.subscription_id);
             }
 
-            match result.next_start_id {
+            let next_start_id = if result.len() < page_size {
+                None
+            } else if let Some(last) = result.last() {
+                Some(last.subscription_id + 1)
+            } else {
+                None
+            };
+
+            match next_start_id {
                 None => break,
                 Some(next) => {
                     // Cursor must always move forward (monotonic invariant).
@@ -62,9 +76,9 @@ mod export_cursor_stability {
     #[test]
     fn empty_contract_returns_empty_page() {
         let (_env, _id, client) = setup();
-        let result = client.export_subscription_summaries(&None, &10);
-        assert!(result.summaries.is_empty(), "expected no summaries on empty contract");
-        assert!(result.next_start_id.is_none(), "expected no cursor on empty contract");
+        let admin = client.get_admin();
+        let result = client.export_subscription_summaries(&admin, &0, &10);
+        assert!(result.is_empty(), "expected no summaries on empty contract");
     }
 
     // ── single-page dump ─────────────────────────────────────────────────────
@@ -78,7 +92,15 @@ mod export_cursor_stability {
         let n = 5u32;
         let mut created: Vec<u32> = Vec::new();
         for _ in 0..n {
-            let sub_id = client.create_subscription(&subscriber, &merchant, &100u64, &30u64);
+            let sub_id = client.create_subscription(
+                &subscriber,
+                &merchant,
+                &100i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            );
             created.push(sub_id);
         }
         created.sort();
@@ -101,7 +123,15 @@ mod export_cursor_stability {
         let n = 15u32;
         let mut created: Vec<u32> = Vec::new();
         for _ in 0..n {
-            let sub_id = client.create_subscription(&subscriber, &merchant, &100u64, &30u64);
+            let sub_id = client.create_subscription(
+                &subscriber,
+                &merchant,
+                &100i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            );
             created.push(sub_id);
         }
         created.sort();
@@ -124,27 +154,54 @@ mod export_cursor_stability {
         // Seed 10 subscriptions before we start paginating.
         let mut seeded: Vec<u32> = Vec::new();
         for _ in 0..10u32 {
-            seeded.push(client.create_subscription(&subscriber, &merchant, &100u64, &30u64));
+            seeded.push(client.create_subscription(
+                &subscriber,
+                &merchant,
+                &100i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            ));
         }
         seeded.sort();
 
+        let admin = client.get_admin();
+
         // Fetch page 1.
-        let page1 = client.export_subscription_summaries(&None, &5);
-        let mut collected: Vec<u32> = page1.summaries.iter().map(|s| s.id).collect();
+        let page1 = client.export_subscription_summaries(&admin, &0, &5);
+        let mut collected: Vec<u32> = page1.iter().map(|s| s.subscription_id).collect();
 
         // Interleave: create 3 more subscriptions.
         for _ in 0..3u32 {
-            client.create_subscription(&subscriber, &merchant, &200u64, &30u64);
+            client.create_subscription(
+                &subscriber,
+                &merchant,
+                &200i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            );
         }
 
         // Continue paginating from saved cursor — must not skip or repeat seeded ids.
-        let mut cursor = page1.next_start_id;
+        let mut cursor = if page1.len() == 5 {
+            Some(page1.last().unwrap().subscription_id + 1)
+        } else {
+            None
+        };
+
         while let Some(next_cursor) = cursor {
-            let page = client.export_subscription_summaries(&Some(next_cursor), &5);
-            for s in page.summaries.iter() {
-                collected.push(s.id);
+            let page = client.export_subscription_summaries(&admin, &next_cursor, &5);
+            for s in page.iter() {
+                collected.push(s.subscription_id);
             }
-            cursor = page.next_start_id;
+            cursor = if page.len() == 5 {
+                Some(page.last().unwrap().subscription_id + 1)
+            } else {
+                None
+            };
         }
 
         collected.sort();
@@ -175,27 +232,46 @@ mod export_cursor_stability {
         // Seed 10 subscriptions.
         let mut all_ids: Vec<u32> = Vec::new();
         for _ in 0..10u32 {
-            all_ids.push(client.create_subscription(&subscriber, &merchant, &100u64, &30u64));
+            all_ids.push(client.create_subscription(
+                &subscriber,
+                &merchant,
+                &100i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            ));
         }
         let cancel_target = all_ids[3]; // pick one in the middle
 
+        let admin = client.get_admin();
+
         // Fetch page 1 (doesn't include cancel_target yet).
-        let page1 = client.export_subscription_summaries(&None, &3);
-        let ids_in_page1: Vec<u32> = page1.summaries.iter().map(|s| s.id).collect();
+        let page1 = client.export_subscription_summaries(&admin, &0, &3);
+        let ids_in_page1: Vec<u32> = page1.iter().map(|s| s.subscription_id).collect();
         assert!(!ids_in_page1.contains(&cancel_target));
 
         // Cancel the subscription before fetching the next page.
-        client.cancel_subscription(&cancel_target);
+        client.cancel_subscription(&cancel_target, &subscriber);
 
         // Drain remaining pages.
         let mut remaining: Vec<u32> = Vec::new();
-        let mut cursor = page1.next_start_id;
+        let mut cursor = if page1.len() == 3 {
+            Some(page1.last().unwrap().subscription_id + 1)
+        } else {
+            None
+        };
+
         while let Some(c) = cursor {
-            let page = client.export_subscription_summaries(&Some(c), &3);
-            for s in page.summaries.iter() {
-                remaining.push(s.id);
+            let page = client.export_subscription_summaries(&admin, &c, &3);
+            for s in page.iter() {
+                remaining.push(s.subscription_id);
             }
-            cursor = page.next_start_id;
+            cursor = if page.len() == 3 {
+                Some(page.last().unwrap().subscription_id + 1)
+            } else {
+                None
+            };
         }
 
         assert!(
@@ -215,7 +291,15 @@ mod export_cursor_stability {
         // 7 subscriptions with page_size=3 → pages of 3, 3, 1.
         let mut created: Vec<u32> = Vec::new();
         for _ in 0..7u32 {
-            created.push(client.create_subscription(&subscriber, &merchant, &100u64, &30u64));
+            created.push(client.create_subscription(
+                &subscriber,
+                &merchant,
+                &100i128,
+                &60u64,
+                &false,
+                &None,
+                &None,
+            ));
         }
         created.sort();
 

@@ -22,10 +22,11 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
-    TokenEarnings, TokenReconciliationSnapshot, MerchantBalanceSnapshotEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE, Subscription,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent,
+    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
+    OP_CHARGE, Subscription,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -581,6 +582,7 @@ fn flush_merchant_token(
             amount: balance,
             remaining_balance: 0,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -647,6 +649,7 @@ pub fn do_flush_payouts(
             caller,
             tokens_paid,
             timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -758,9 +761,20 @@ pub fn do_rotate_merchant_address(
         nonce,
     )?;
 
-    if old_merchant == new_merchant {
-        return Err(crate::types::Error::SelfRotation);
-    }
+    env.events().publish(
+        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        MerchantBalanceSnapshotEvent {
+            merchant: merchant.clone(),
+            token: token.clone(),
+            balance,
+            accrued,
+            withdrawn,
+            refunded,
+            ledger_sequence,
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
 
     let storage = env.storage().instance();
 
@@ -841,17 +855,40 @@ pub fn do_rotate_merchant_address(
                 env.storage().persistent().set(&sub_key, &sub);
                 subscriptions_updated += 1;
             }
-        }
-    }
+            if !already {
+                seen.push_back(pair.clone());
 
-    if !sub_ids.is_empty() {
-        let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
-        let mut new_sub_ids: soroban_sdk::Vec<u32> = storage
-            .get(&subs_key_new)
-            .unwrap_or(soroban_sdk::Vec::new(env));
-        for id in sub_ids.iter() {
-            if !new_sub_ids.contains(&id) {
-                new_sub_ids.push_back(id);
+                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let accrued = earnings
+                    .accruals
+                    .interval
+                    .checked_add(earnings.accruals.usage)
+                    .unwrap_or(0)
+                    .checked_add(earnings.accruals.one_off)
+                    .unwrap_or(0);
+                let withdrawn = earnings.withdrawals;
+                let refunded = earnings.refunds;
+                let ledger_sequence = env.ledger().sequence();
+                let timestamp = env.ledger().timestamp();
+
+                let ev = MerchantBalanceSnapshotEvent {
+                    merchant: pair.0.clone(),
+                    token: pair.1.clone(),
+                    balance,
+                    accrued,
+                    withdrawn,
+                    refunded,
+                    ledger_sequence,
+                    timestamp,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                };
+
+                env.events().publish(
+                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    ev.clone(),
+                );
+                out.push_back(ev);
             }
         }
         storage.set(&subs_key_new, &new_sub_ids);
