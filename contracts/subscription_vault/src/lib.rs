@@ -19,9 +19,10 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod queries; pub pub mod nonce;
-pub pub mod nonce;
-pub pub mod nonce;
+mod queries;
+mod validation;
+pub mod period_snapshots;
+pub mod nonce;
 mod safe_math;
 mod subscription;
 mod types;
@@ -154,7 +155,7 @@ pub mod accounting {
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
     use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn resolve_charge_amount(
         _env: &Env,
@@ -257,8 +258,6 @@ mod reentrancy;
 /// touched.
 ///
 /// Implementation lives in [`nonce.rs`].
-pub mod nonce;
-
 /// Operator: least-privilege charge delegate.
 ///
 /// The operator is a second privileged role, distinct from admin, that may only
@@ -371,7 +370,7 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -380,7 +379,7 @@ pub use types::{
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
     OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
-    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    ProtocolFeeChargedEvent, RecoveryEvent, RecoveryReason,
     ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -3614,6 +3613,7 @@ mod test_utils;
 
 #[cfg(test)]
 mod test_metadata_signed;
+#[cfg(test)]
 mod test_charge_invariants;
 
 #[cfg(test)]

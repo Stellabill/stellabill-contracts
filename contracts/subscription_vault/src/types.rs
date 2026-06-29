@@ -101,20 +101,10 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// | 43 | `BillingStatementSequence(u32)` | persistent |
 /// | 44 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
-#[derive(Clone)]
-pub enum DataKey {
-    /// Maps a merchant address to its list of subscription IDs.
-    MerchantSubs(Address),
-
-    /// Global flag: when true, merchants must have an active KYC attestation
-    /// (see `MerchantKyc`) to withdraw merchant funds.
-    KycRequired,
-
-    /// Per-merchant KYC attestation record.
-    ///
-    /// Status semantics: `status == true` means active/valid KYC; `status == false`
-    /// means revoked/inactive.
-    MerchantKyc(Address),
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
 }
 
 /// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
@@ -122,14 +112,21 @@ pub enum DataKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerchantKyc {
     /// Opaque attestation hash (provider-issued).
-    pub attestation_hash: Vec<u8>,
+    pub attestation_hash: BytesN<32>,
     /// Timestamp when the attestation was issued (ledger seconds).
     pub issued_at: u64,
     /// When true, KYC is active/valid. When false, it is revoked/inactive.
     pub status: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// Maps a merchant address to its list of subscription IDs.
+    MerchantSubs(Address),
 
+    /// KYC configuration and attestations.
+    Kyc(KycKey),
 
     /// USDC token contract address. Discriminant 1.
     Token,
@@ -241,6 +238,8 @@ impl DataKey {
     pub const fn canonical_discriminant(&self) -> u32 {
         match self {
             DataKey::MerchantSubs(_) => 0,
+            DataKey::Kyc(KycKey::Required) => 49,
+            DataKey::Kyc(KycKey::Merchant(_)) => 50,
             DataKey::Token => 1,
             DataKey::Admin => 2,
             DataKey::MinTopup => 3,
@@ -2176,6 +2175,38 @@ pub struct PrepaidQueryResult {
 }
 
 #[cfg(test)]
+
+// ── Idempotency Key Ring Buffer ─────────────────────────────────────────────
+
+/// Maximum number of idempotency keys retained per subscription.
+pub const IDEM_HISTORY: u32 = 32;
+
+/// Entrypoint domains for idempotency key scoping.
+///
+/// Each entrypoint type uses a unique domain so that the same raw key supplied
+/// to `charge_subscription` vs `deposit_funds` produces a different on-chain
+/// fingerprint and cannot accidentally replay across operations.
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 0;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
+
+/// Ring buffer of recently-seen idempotency key hashes for one subscription.
+///
+/// `DataKey::IdemKey(subscription_id)` stores this structure so that the same
+/// caller-supplied key is recognised within `IDEM_HISTORY` consecutive charges
+/// and rejected with `Error::Replay`.
+///
+/// # Eviction
+/// When the buffer is full the next push overwrites the oldest entry (cursor
+/// wraps around). The caller must therefore ensure their retry window does not
+/// exceed `IDEM_HISTORY` operations for a single subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdemRingBuffer {
+    pub entries: Vec<BytesN<32>>,
+    pub cursor: u32,
+}
+
 mod known_keys_tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Env, String};

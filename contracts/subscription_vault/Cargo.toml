@@ -37,3 +37,7 @@ path = "verification/safe_math_verification.rs"
 [[test]]
 name = "nonce_verification"
 path = "verification/nonce_verification.rs"
+
+[[test]]
+name = "channel_account_auth"
+path = "tests/channel_account_auth.rs"
