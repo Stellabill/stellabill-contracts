@@ -9,6 +9,11 @@ fn setup() -> (Env, Address, SubscriptionVaultClient<'static>) {
     env.mock_all_auths();
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &7, &admin, &100i128, &(24 * 3600));
+
     (env, contract_id, client)
 }
 
@@ -19,7 +24,25 @@ const PREPAID: i128 = 50_000_000;
 
 fn create_active_sub(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Address, Address) {
     use crate::test_utils::fixtures;
-    fixtures::create_active_subscription(env, client, T0, INTERVAL, AMOUNT, PREPAID)
+    let (id, subscriber, merchant, token) = fixtures::create_active_subscription(env, client, T0, INTERVAL, AMOUNT, PREPAID);
+
+    // Setup merchant config so they are not paused
+    let redirect_url = soroban_sdk::String::from_str(env, "https://example.com");
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &crate::types::DEFAULT_ALLOWED_OPS,
+        &None,
+        &redirect_url,
+    );
+
+    // Also need to mint some tokens to the contract so it can refund the subscriber on cancel
+    let admin = client.get_admin();
+    let sac = soroban_sdk::token::StellarAssetClient::new(env, &token);
+    sac.mint(&client.address, &PREPAID);
+
+    (id, subscriber, merchant, token)
 }
 
 // --- schedule_cancel ---

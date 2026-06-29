@@ -46,13 +46,7 @@ fn test_multi_actor_e2e_flow() {
     let grace_period = 3 * 24 * 60 * 60; // 3 days
 
     // Initialize the vault contract
-    vault.init(
-        &token.address,
-        &7,
-        &admin,
-        &min_topup,
-        &grace_period,
-    );
+    vault.init(&token.address, &7, &admin, &min_topup, &grace_period); //
 
     // Initialize merchant config
     let redirect_url = soroban_sdk::String::from_str(&env, "https://example.com");
@@ -90,7 +84,7 @@ fn test_multi_actor_e2e_flow() {
 
     // Step 2: `deposit` funds
     let deposit_amount = 15_000_000; // Covers 3 intervals
-    vault.deposit_funds(&sub_id, &subscriber, &deposit_amount);
+    vault.deposit_funds(&sub_id, &subscriber, &deposit_amount, &None);
 
     assert_eq!(token.balance(&subscriber), initial_mint - deposit_amount);
     assert_eq!(token.balance(&vault_id), deposit_amount);
@@ -102,7 +96,7 @@ fn test_multi_actor_e2e_flow() {
     // Step 3: `charge` (Simulating Time Passing)
     // First charge
     env.ledger().set_timestamp(env.ledger().timestamp() + interval_seconds + 1);
-    vault.charge_subscription(&sub_id);
+    vault.charge_subscription(&sub_id, &None);
 
     let sub_state = vault.get_subscription(&sub_id);
     assert_eq!(sub_state.prepaid_balance, deposit_amount - amount);
@@ -111,7 +105,7 @@ fn test_multi_actor_e2e_flow() {
 
     // Second charge
     env.ledger().set_timestamp(env.ledger().timestamp() + interval_seconds + 1);
-    vault.charge_subscription(&sub_id);
+    vault.charge_subscription(&sub_id, &None);
 
     let sub_state = vault.get_subscription(&sub_id);
     assert_eq!(sub_state.prepaid_balance, deposit_amount - 2 * amount);

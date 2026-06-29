@@ -1,4 +1,5 @@
 use crate::{SubscriptionStatus, SubscriptionVaultClient, types::DataKey};
+use soroban_sdk::testutils::Ledger;
 use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
@@ -75,6 +76,38 @@ pub fn create_test_subscription(
     status: SubscriptionStatus,
 ) -> (u32, Address, Address) {
     create_subscription_detailed(env, client, status, DEFAULT_AMOUNT, DEFAULT_INTERVAL)
+}
+
+/// Create an active subscription with explicit timing and funding.
+pub fn create_active_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    start_time: u64,
+    interval: u64,
+    amount: i128,
+    prepaid: i128,
+) -> (u32, Address, Address, Address) {
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+
+    env.ledger().set_timestamp(start_time);
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    if prepaid > 0 {
+        seed_balance(env, client, id, prepaid);
+    }
+
+    let sub = client.get_subscription(&id);
+    (id, subscriber, merchant, sub.token)
 }
 
 /// Test subscription helper with specific merchant (4 args).

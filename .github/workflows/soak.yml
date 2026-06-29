@@ -13,11 +13,11 @@ jobs:
     name: MAX_SUBSCRIPTIONS soak
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/

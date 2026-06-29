@@ -13,11 +13,11 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -33,11 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit-tests
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -57,11 +57,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit-tests, performance-budgets]
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -75,7 +75,7 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.txt
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5.3.1
         with:
           files: lcov.txt
           fail_ci_if_error: false

@@ -13,7 +13,7 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, Env, String,
+    Address, Env, IntoVal,
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 use std::fs;
@@ -43,9 +43,11 @@ fn golden_path(fixture_name: &str) -> PathBuf {
 
 /// Load a golden fixture from disk. Returns `None` if the file does not exist
 /// (first run or fixture not yet generated).
-fn load_golden(fixture_name: &str) -> Option<String> {
+fn load_golden(env: &Env, fixture_name: &str) -> Option<soroban_sdk::String> {
     let path = golden_path(fixture_name);
-    fs::read_to_string(path).ok()
+    fs::read_to_string(path)
+        .ok()
+        .map(|s| soroban_sdk::String::from_str(env, &s))
 }
 
 /// Write a golden fixture to disk (used by `--ignored update_goldens`).
@@ -60,26 +62,34 @@ fn write_golden(fixture_name: &str, content: &str) {
 // Helper: Deterministic Serialization
 // ═════════════════════════════════════════════════════════════════════════════
 
+fn stable_debug_repr(repr: String) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = repr.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if i + 4 < chars.len() && &chars[i..i+4] == &['o', 'b', 'j', '#'] {
+            out.push_str("obj#SENTINEL");
+            i += 4;
+            while i < chars.len() && chars[i].is_digit(10) {
+                i += 1;
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Serialize a Soroban contract object to a deterministic hex-encoded ScVal string.
-///
-/// This uses the soroban-sdk's internal serialization to produce a byte-perfect
-/// representation that is stable across contract versions and builds.
-/// 
-/// Note: We use the contract type's native serialization by converting through
-/// the contract environment, ensuring deterministic output.
 fn serialize_to_hex<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
     env: &Env,
     value: T,
-) -> String {
-    // Convert value to Val using the environment's serialization.
+) -> soroban_sdk::String {
     let val: soroban_sdk::Val = value.into_val(env);
-    
-    // The Val's debug representation is deterministic for testing purposes.
-    // For production, this should use explicit XDR serialization.
-    // For now, we create a deterministic representation by using the Val's
-    // stable string representation (which includes type info).
     let repr = format!("{:?}", val);
-    hex::encode(repr.as_bytes())
+    let stable_repr = stable_debug_repr(repr);
+    soroban_sdk::String::from_str(env, &hex::encode(stable_repr.as_bytes()))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -90,6 +100,7 @@ fn serialize_to_hex<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
 fn setup_vault() -> (Env, SubscriptionVaultClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
+    env.ledger().set_timestamp(1_000_000);
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
@@ -123,7 +134,7 @@ fn test_golden_contract_snapshot_determinism() {
     assert_eq!(hex1, hex2, "Contract snapshot serialization must be deterministic");
 
     // Compare against golden fixture (if it exists).
-    if let Some(expected) = load_golden("contract_snapshot_v2") {
+    if let Some(expected) = load_golden(&env, "contract_snapshot_v2") {
         assert_eq!(
             hex1, expected,
             "Contract snapshot must match golden fixture (version mismatch?)"
@@ -186,7 +197,7 @@ fn test_golden_subscription_summary_determinism() {
     );
 
     // Compare against golden fixture if available.
-    if let Some(expected) = load_golden("subscription_summary_v2") {
+    if let Some(expected) = load_golden(&env, "subscription_summary_v2") {
         assert_eq!(
             hex1, expected,
             "Subscription summary must match golden fixture"
@@ -204,7 +215,7 @@ fn test_golden_paginated_export_determinism() {
     let (env, client, admin) = setup_vault();
 
     // Create a few subscriptions.
-    let mut ids = Vec::new();
+    let mut ids = std::vec::Vec::new();
     for i in 0..3 {
         let subscriber = Address::generate(&env);
         let merchant = Address::generate(&env);
@@ -233,7 +244,7 @@ fn test_golden_paginated_export_determinism() {
     );
 
     // Compare against golden.
-    if let Some(expected) = load_golden("paginated_export_v2") {
+    if let Some(expected) = load_golden(&env, "paginated_export_v2") {
         assert_eq!(
             hex1, expected,
             "Paginated export must match golden fixture"
@@ -245,6 +256,20 @@ fn test_golden_paginated_export_determinism() {
 // Golden Update Tests (marked `#[ignore]`)
 // ═════════════════════════════════════════════════════════════════════════════
 
+fn clean_hex(hex_std: String) -> String {
+    let prefix = "String(";
+    let suffix = ")";
+    if hex_std.starts_with(prefix) && hex_std.ends_with(suffix) {
+        let mut inner = hex_std[prefix.len()..hex_std.len() - suffix.len()].to_string();
+        if inner.starts_with('"') && inner.ends_with('"') {
+            inner = inner[1..inner.len()-1].to_string();
+        }
+        inner
+    } else {
+        panic!("Unexpected hex_std format: {}", hex_std);
+    }
+}
+
 /// Update golden fixture: contract snapshot (run with `cargo test -- --ignored update_goldens`).
 #[test]
 #[ignore]
@@ -252,8 +277,9 @@ fn update_goldens_contract_snapshot() {
     let (env, client, admin) = setup_vault();
     let snapshot = client.export_contract_snapshot(&admin);
     let hex = serialize_to_hex(&env, snapshot);
-    write_golden("contract_snapshot_v2", &hex);
-    println!("Updated: contract_snapshot_v2.scval.hex ({} bytes)", hex.len());
+    let hex_clean = clean_hex(format!("{:?}", hex));
+    write_golden("contract_snapshot_v2", &hex_clean);
+    println!("Updated: contract_snapshot_v2.scval.hex ({} bytes)", hex_clean.len());
 }
 
 /// Update golden fixture: subscription summary (run with `cargo test -- --ignored update_goldens`).
@@ -276,8 +302,9 @@ fn update_goldens_subscription_summary() {
 
     let summary = client.export_subscription_summary(&admin, &sub_id);
     let hex = serialize_to_hex(&env, summary);
-    write_golden("subscription_summary_v2", &hex);
-    println!("Updated: subscription_summary_v2.scval.hex ({} bytes)", hex.len());
+    let hex_clean = clean_hex(format!("{:?}", hex));
+    write_golden("subscription_summary_v2", &hex_clean);
+    println!("Updated: subscription_summary_v2.scval.hex ({} bytes)", hex_clean.len());
 }
 
 /// Update golden fixture: paginated export (run with `cargo test -- --ignored update_goldens`).
@@ -302,6 +329,7 @@ fn update_goldens_paginated_export() {
 
     let page = client.export_subscription_summaries(&admin, &0, &100);
     let hex = serialize_to_hex(&env, page);
-    write_golden("paginated_export_v2", &hex);
-    println!("Updated: paginated_export_v2.scval.hex ({} bytes)", hex.len());
+    let hex_clean = clean_hex(format!("{:?}", hex));
+    write_golden("paginated_export_v2", &hex_clean);
+    println!("Updated: paginated_export_v2.scval.hex ({} bytes)", hex_clean.len());
 }

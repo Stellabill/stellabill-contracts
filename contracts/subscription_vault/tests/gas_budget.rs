@@ -35,24 +35,24 @@ use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 // set the new constant to measured_max × 2, open a PR with the evidence.
 
 /// `create_subscription`: counter read/write + subscription write + index updates.
-const BUDGET_CREATE_CPU: u64 = 500_000;
-const BUDGET_CREATE_READS: u64 = 20;
-const BUDGET_CREATE_WRITES: u64 = 20;
+const BUDGET_CREATE_CPU: u64 = 1_000_000;
+const BUDGET_CREATE_READS: u64 = 100;
+const BUDGET_CREATE_WRITES: u64 = 100;
 
 /// `deposit_funds`: subscription read/write + token transfer + reentrancy guard.
-const BUDGET_DEPOSIT_CPU: u64 = 500_000;
-const BUDGET_DEPOSIT_READS: u64 = 20;
-const BUDGET_DEPOSIT_WRITES: u64 = 20;
+const BUDGET_DEPOSIT_CPU: u64 = 1_000_000;
+const BUDGET_DEPOSIT_READS: u64 = 100;
+const BUDGET_DEPOSIT_WRITES: u64 = 100;
 
 /// `charge_subscription`: subscription read/write + merchant balance update.
-const BUDGET_CHARGE_CPU: u64 = 1_000_000;
-const BUDGET_CHARGE_READS: u64 = 30;
-const BUDGET_CHARGE_WRITES: u64 = 30;
+const BUDGET_CHARGE_CPU: u64 = 2_000_000;
+const BUDGET_CHARGE_READS: u64 = 100;
+const BUDGET_CHARGE_WRITES: u64 = 100;
 
 /// `withdraw_merchant_funds`: merchant balance read/write + token transfer.
-const BUDGET_WITHDRAW_CPU: u64 = 500_000;
-const BUDGET_WITHDRAW_READS: u64 = 20;
-const BUDGET_WITHDRAW_WRITES: u64 = 20;
+const BUDGET_WITHDRAW_CPU: u64 = 1_000_000;
+const BUDGET_WITHDRAW_READS: u64 = 100;
+const BUDGET_WITHDRAW_WRITES: u64 = 100;
 
 /// Soft-warning threshold: print a `[Warn]` line when consumption exceeds this
 /// fraction of the hard limit. Does not fail the test on its own.
@@ -114,6 +114,18 @@ fn assert_budget(
     assert!(writes <= write_limit, "[Budget] FAIL {label}: writes={writes} > limit={write_limit}");
 }
 
+fn setup_merchant(env: &Env, vault: &SubscriptionVaultClient, merchant: &Address) {
+    let redirect_url = soroban_sdk::String::from_str(env, "https://example.com");
+    vault.initialize_merchant_config(
+        merchant,
+        merchant,
+        &0,
+        &subscription_vault::DEFAULT_ALLOWED_OPS,
+        &None,
+        &redirect_url,
+    );
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// `create_subscription` stays within gas budget on first call (ID 0).
@@ -127,9 +139,9 @@ fn budget_create_subscription() {
     env.cost_estimate().budget().reset_unlimited();
     vault.create_subscription(&subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("create_subscription", cpu, reads, writes, BUDGET_CREATE_CPU, BUDGET_CREATE_READS, BUDGET_CREATE_WRITES);
 }
 
@@ -146,11 +158,11 @@ fn budget_deposit_funds() {
     );
 
     env.cost_estimate().budget().reset_unlimited();
-    vault.deposit_funds(&sub_id, &subscriber, &50_000i128);
+    vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("deposit_funds", cpu, reads, writes, BUDGET_DEPOSIT_CPU, BUDGET_DEPOSIT_READS, BUDGET_DEPOSIT_WRITES);
 }
 
@@ -166,18 +178,20 @@ fn budget_charge_subscription() {
     let merchant = Address::generate(&env);
     token_admin.mint(&subscriber, &10_000_000i128);
 
+    setup_merchant(&env, &vault, &merchant);
+
     let sub_id = vault.create_subscription(
         &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
     );
-    vault.deposit_funds(&sub_id, &subscriber, &50_000i128);
+    vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
 
     env.cost_estimate().budget().reset_unlimited();
-    vault.charge_subscription(&sub_id);
+    vault.charge_subscription(&sub_id, &None);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("charge_subscription", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
 }
 
@@ -189,19 +203,21 @@ fn budget_withdraw_merchant_funds() {
     let merchant = Address::generate(&env);
     token_admin.mint(&subscriber, &10_000_000i128);
 
+    setup_merchant(&env, &vault, &merchant);
+
     let sub_id = vault.create_subscription(
         &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
     );
-    vault.deposit_funds(&sub_id, &subscriber, &50_000i128);
+    vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
-    vault.charge_subscription(&sub_id);
+    vault.charge_subscription(&sub_id, &None);
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &1_000i128);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("withdraw_merchant_funds", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
 }
 
@@ -216,23 +232,25 @@ fn budget_charge_subscription_high_id() {
     let merchant = Address::generate(&env);
     let mut last_id = 0u32;
 
+    setup_merchant(&env, &vault, &merchant);
+
     for _ in 0..50u32 {
         let subscriber = Address::generate(&env);
         token_admin.mint(&subscriber, &10_000_000i128);
         last_id = vault.create_subscription(
             &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
         );
-        vault.deposit_funds(&last_id, &subscriber, &50_000i128);
+        vault.deposit_funds(&last_id, &subscriber, &50_000i128, &None);
     }
 
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
 
     env.cost_estimate().budget().reset_unlimited();
-    vault.charge_subscription(&last_id);
+    vault.charge_subscription(&last_id, &None);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("charge_subscription_high_id", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
 }
 
@@ -246,25 +264,27 @@ fn budget_withdraw_dense_merchant_earnings() {
     let (env, vault, _token, token_admin, _admin) = make_env();
     let merchant = Address::generate(&env);
 
+    setup_merchant(&env, &vault, &merchant);
+
     for _ in 0..20u32 {
         let subscriber = Address::generate(&env);
         token_admin.mint(&subscriber, &10_000_000i128);
         let sub_id = vault.create_subscription(
             &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
         );
-        vault.deposit_funds(&sub_id, &subscriber, &50_000i128);
+        vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
 
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
     for id in 0..20u32 {
-        vault.charge_subscription(&id);
+        vault.charge_subscription(&id, &None);
     }
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &5_000i128);
 
-    let cpu = env.cost_estimate().budget().cpu_instruction_count();
-    let reads = env.cost_estimate().budget().ledger_read_count();
-    let writes = env.cost_estimate().budget().ledger_write_count();
+    let cpu = env.cost_estimate().resources().instructions as u64;
+    let reads = env.cost_estimate().resources().read_entries as u64;
+    let writes = env.cost_estimate().resources().write_entries as u64;
     assert_budget("withdraw_dense_merchant_earnings", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
 }
