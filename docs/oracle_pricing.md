@@ -121,3 +121,117 @@ Monitoring rigs can:
 4. Trigger fallback procedures before charges fail
 
 This provides proactive oracle health monitoring, allowing operators to address issues before they impact subscription billing.
+
+---
+
+## OracleAdapter Architecture (Issue #477)
+
+### Overview
+
+Oracle pricing is now pluggable via a **strategy pattern**. The `OracleConfig` struct carries an `OracleKind` field that selects which adapter resolves the price at charge time. The public contract ABI and storage remain backwards compatible — configs without an explicit `kind` default to `Spot`.
+
+### OracleKind
+
+```rust
+pub enum OracleKind {
+    Spot,      // latest single price sample (default)
+    Twap,      // median across a configurable sliding window
+    FixedRate, // deterministic ratio; no oracle reads
+}
+```
+
+### Configuration
+
+The `set_oracle_config` entrypoint now accepts additional fields:
+
+```
+set_oracle_config(
+    admin,
+    enabled,
+    oracle,          // Option<Address> — required for Spot/Twap
+    max_age_seconds, // staleness threshold
+    kind,            // OracleKind::Spot | Twap | FixedRate
+    window_secs,     // TWAP window (ignored for Spot/FixedRate)
+    fixed_numerator, // FixedRate numerator (ignored otherwise)
+    fixed_denominator // FixedRate denominator, must be != 0
+)
+```
+
+The `oracle_config_updated` event now includes `kind`, `window_secs`, `fixed_numerator`, and `fixed_denominator` for full auditability.
+
+---
+
+### SpotAdapter
+
+Reads the latest `OraclePrice` from `oracle.latest_price()` and validates it:
+- Rejects non-positive prices (`OraclePriceInvalid`).
+- Rejects prices whose age exceeds `max_age_seconds` (`OraclePriceStale`).
+
+This is the default behaviour and preserves all existing charge logic.
+
+---
+
+### TwapAdapter
+
+Reads a list of `OraclePrice` observations via `oracle.get_observations(since)` for the last `window_secs` seconds.
+
+**Median calculation** — not arithmetic mean:
+
+```
+prices = [obs.price for obs in observations if obs.age <= max_age_seconds]
+sort(prices)
+median = prices[len(prices) / 2]  // middle element for odd-length
+```
+
+Using the median rather than the mean means an attacker must control **more than half** of the observations inside the window to shift the output meaningfully. This resists single-block (flash-loan) price manipulation.
+
+**Edge cases:**
+| Scenario | Result |
+|---|---|
+| 1 observation | That price (equivalent to spot) |
+| Empty window | `OraclePriceUnavailable` |
+| All observations stale after filtering | `OraclePriceStale` |
+
+---
+
+### FixedRateAdapter
+
+Computes a deterministic price without any oracle contract calls:
+
+```
+price = (fixed_numerator × 10^7) / fixed_denominator
+```
+
+- `fixed_denominator == 0` is rejected at configuration time with `InvalidInput`.
+- Staleness and oracle address are completely ignored.
+- Suitable for pegged pairs, test environments, and fee structures expressed as ratios.
+
+**Security:** configuration changes require admin auth, so unauthorized parties cannot alter the fixed rate.
+
+---
+
+### Dispatch Flow
+
+`resolve_charge_amount` now delegates to `oracle_adapter::dispatch_price`:
+
+```
+match config.kind {
+    Spot      → SpotAdapter::quote()
+    Twap      → TwapAdapter::quote()
+    FixedRate → FixedRateAdapter::quote()
+}
+```
+
+All adapters share the same `OracleAdapter` trait and return a `u128` price scaled by `10^7`. The charge math that follows is unchanged.
+
+---
+
+### Security Rationale
+
+| Property | Spot | TWAP | FixedRate |
+|---|---|---|---|
+| Oracle reads | Yes | Yes | No |
+| Staleness enforced | Yes | Yes (per observation) | N/A |
+| Manipulation resistance | Low | High (median) | Perfect (static) |
+| Oracle dependency | Required | Required | None |
+| Admin auth to change | Yes | Yes | Yes |

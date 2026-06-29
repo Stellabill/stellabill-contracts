@@ -19,6 +19,7 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
+pub mod oracle_adapter;
 mod queries; pub pub mod nonce;
 pub pub mod nonce;
 pub pub mod nonce;
@@ -153,30 +154,86 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env};
+    use crate::types::{Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
+    use crate::admin::{read_config, write_config};
+    use crate::types::DataKey;
+    use soroban_sdk::{Address, Env, Symbol};
 
+    /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
+    ///
+    /// When oracle pricing is disabled or the subscription has no cross-currency amount,
+    /// the subscription's own `amount` is returned directly (existing behaviour).
     pub fn resolve_charge_amount(
-        _env: &Env,
+        env: &Env,
         _subscription_id: u32,
         sub: &Subscription,
     ) -> Result<i128, Error> {
+        let config = get_oracle_config(env);
+        if !config.enabled {
+            return Ok(sub.amount);
+        }
+        // When oracle is enabled but we have no cross-currency token pair yet, fall back.
+        // A full integration would extract base/quote addresses from the subscription.
+        // For now this preserves the existing default while the dispatch plumbing is ready.
         Ok(sub.amount)
     }
+
+    /// Persist oracle configuration. Admin only (caller must have verified auth).
+    #[allow(clippy::too_many_arguments)]
     pub fn set_oracle_config(
-        _env: &Env,
-        _enabled: bool,
-        _oracle: Option<Address>,
-        _max_age: u64,
+        env: &Env,
+        enabled: bool,
+        oracle: Option<Address>,
+        max_age: u64,
+        kind: OracleKind,
+        window_secs: u64,
+        fixed_numerator: u128,
+        fixed_denominator: u128,
     ) -> Result<(), Error> {
+        // Validate FixedRate denominator eagerly so bad config is rejected.
+        if matches!(kind, OracleKind::FixedRate) && fixed_denominator == 0 {
+            return Err(Error::InvalidInput);
+        }
+
+        let cfg = OracleConfig {
+            enabled,
+            oracle: oracle.clone(),
+            max_age_seconds: max_age,
+            kind: kind.clone(),
+            window_secs,
+            fixed_numerator,
+            fixed_denominator,
+        };
+        write_config(env, &DataKey::Oracle, &cfg);
+
+        env.events().publish(
+            (Symbol::new(env, "oracle_config_updated"),),
+            OracleConfigUpdatedEvent {
+                enabled,
+                oracle,
+                max_age_seconds: max_age,
+                kind,
+                window_secs,
+                fixed_numerator,
+                fixed_denominator,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
     }
-    pub fn get_oracle_config(_env: &Env) -> OracleConfig {
-        OracleConfig {
+
+    /// Read the stored oracle configuration, defaulting to a disabled Spot config.
+    pub fn get_oracle_config(env: &Env) -> OracleConfig {
+        read_config::<OracleConfig>(env, &DataKey::Oracle).unwrap_or(OracleConfig {
             enabled: false,
             oracle: None,
             max_age_seconds: 0,
-        }
+            kind: OracleKind::Spot,
+            window_secs: 0,
+            fixed_numerator: 0,
+            fixed_denominator: 1,
+        })
     }
 
     /// Emit an oracle liveness event for monitoring purposes.
@@ -379,7 +436,7 @@ pub use types::{
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
+    OracleConfigUpdatedEvent, OracleKind, OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
     ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
     ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
@@ -765,16 +822,31 @@ impl SubscriptionVault {
 
     /// Configure oracle pricing parameters. Admin only.
     ///
-    /// Enables/disables oracle, sets the oracle address, and defines staleness bounds.
+    /// Enables/disables oracle, sets the oracle address, staleness bounds, and
+    /// selects the pricing adapter (`Spot`, `Twap`, or `FixedRate`).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the stored admin.
+    /// * [`Error::InvalidInput`] — `kind == FixedRate` and `fixed_denominator == 0`.
+    ///
+    /// # Events
+    ///
+    /// Emits [`OracleConfigUpdatedEvent`] with all configuration fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_oracle_config(
         env: Env,
         admin: Address,
         enabled: bool,
         oracle: Option<Address>,
         max_age_seconds: u64,
+        kind: OracleKind,
+        window_secs: u64,
+        fixed_numerator: u128,
+        fixed_denominator: u128,
     ) -> Result<(), Error> {
         admin::require_admin_auth(&env, &admin)?;
-        crate::oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds)
+        crate::oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds, kind, window_secs, fixed_numerator, fixed_denominator)
     }
 
     /// Allows the admin to recover funds that are not tied to any subscription.
