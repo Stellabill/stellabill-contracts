@@ -47,7 +47,7 @@ use rand::rngs::OsRng;
 use soroban_sdk::xdr::{AccountId, PublicKey, ScAddress, Uint256};
 use soroban_sdk::{
     testutils::Address as _, testutils::Events as _, Address, Bytes, BytesN, Env, String,
-    TryFromVal,
+    TryFromVal, TryIntoVal,
 };
 
 // ── Constants shared by the test suite ────────────────────────────────────────
@@ -75,8 +75,8 @@ fn create_subscription(
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
     let id = client.create_subscription(
-        subscriber.clone(),
-        merchant.clone(),
+        &subscriber,
+        &merchant,
         &amount(),
         &INTERVAL_SECONDS,
         &false,
@@ -129,7 +129,8 @@ fn sign_payload(
 ) -> (BytesN<64>, Bytes) {
     let chain = env.ledger().network_id();
     let msg = build_metadata_signed_message(env, payload, &chain);
-    let sig: Signature = key.keypair.sign(&msg.to_alloc().unwrap());
+    let msg_bytes: Vec<u8> = msg.iter().collect();
+    let sig: Signature = key.keypair.sign(&msg_bytes);
     let sig_arr = sig.to_bytes();
     let sig_bytes: [u8; 64] = sig_arr;
     (BytesN::from_array(env, &sig_bytes), msg)
@@ -495,7 +496,8 @@ fn forged_signature_panics() {
     // Sign the **wrong** message with the same key — verification must
     // panic on the host crypto boundary.
     let bogus_msg = Bytes::from_slice(&env, b"completely different bytes");
-    let wrong_sig: Signature = sub_key.keypair.sign(&bogus_msg.to_alloc().unwrap());
+    let bogus_msg_bytes: Vec<u8> = bogus_msg.iter().collect();
+    let wrong_sig: Signature = sub_key.keypair.sign(&bogus_msg_bytes);
     let wrong_sig_bytes: [u8; 64] = wrong_sig.to_bytes();
     let wrong_sig_n = BytesN::from_array(&env, &wrong_sig_bytes);
 
@@ -532,7 +534,8 @@ fn wrong_key_signature_panics() {
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
     let chain = env.ledger().network_id();
     let msg = build_metadata_signed_message(&env, &payload, &chain);
-    let sig: Signature = attacker.keypair.sign(&msg.to_alloc().unwrap());
+    let msg_bytes: Vec<u8> = msg.iter().collect();
+    let sig: Signature = attacker.keypair.sign(&msg_bytes);
     let sig_arr: [u8; 64] = sig.to_bytes();
 
     client.set_metadata_signed(
@@ -950,7 +953,7 @@ fn success_emits_signed_event() {
     let mut found_signed = false;
     for ev in events.iter() {
         let topics = ev.1;
-        let topic0: soroban_sdk::Symbol = topics.get(0).unwrap();
+        let topic0: soroban_sdk::Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
         if topic0 == soroban_sdk::Symbol::new(&env, "metadata_set_signed") {
             found_signed = true;
             break;

@@ -98,6 +98,7 @@ fn subscription_for(
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     }
 }
 
@@ -214,7 +215,14 @@ fn soak_100k_query_budget_guardrails() {
         "merchant_dense_count",
         MERCHANT_QUERY_CPU_LIMIT,
         MERCHANT_QUERY_READ_LIMIT,
-        || client.get_merchant_subscription_count(&dataset.dense_merchant),
+        || {
+            env.as_contract(&client.address, || {
+                subscription_vault::queries::get_merchant_subscription_count(
+                    &env,
+                    dataset.dense_merchant.clone(),
+                )
+            })
+        },
     );
     assert_eq!(dense_count, DENSE_MERCHANT_SUBS);
 
@@ -223,7 +231,17 @@ fn soak_100k_query_budget_guardrails() {
         "merchant_dense_page_first start=0 size=100",
         MERCHANT_QUERY_CPU_LIMIT,
         MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &0, &100),
+        || {
+            env.as_contract(&client.address, || {
+                subscription_vault::queries::get_subscriptions_by_merchant(
+                    &env,
+                    dataset.dense_merchant.clone(),
+                    0,
+                    100,
+                )
+                .unwrap()
+            })
+        },
     );
     assert_eq!(first_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
     assert_merchant_page(&first_merchant_page, &dataset.dense_merchant);
@@ -233,7 +251,17 @@ fn soak_100k_query_budget_guardrails() {
         "merchant_dense_page_middle start=500 size=100",
         MERCHANT_QUERY_CPU_LIMIT,
         MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &500, &100),
+        || {
+            env.as_contract(&client.address, || {
+                subscription_vault::queries::get_subscriptions_by_merchant(
+                    &env,
+                    dataset.dense_merchant.clone(),
+                    500,
+                    100,
+                )
+                .unwrap()
+            })
+        },
     );
     assert_eq!(middle_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
     assert_merchant_page(&middle_merchant_page, &dataset.dense_merchant);
@@ -243,7 +271,17 @@ fn soak_100k_query_budget_guardrails() {
         "merchant_dense_page_last start=900 size=100",
         MERCHANT_QUERY_CPU_LIMIT,
         MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &900, &100),
+        || {
+            env.as_contract(&client.address, || {
+                subscription_vault::queries::get_subscriptions_by_merchant(
+                    &env,
+                    dataset.dense_merchant.clone(),
+                    900,
+                    100,
+                )
+                .unwrap()
+            })
+        },
     );
     assert_eq!(last_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
     assert_merchant_page(&last_merchant_page, &dataset.dense_merchant);
@@ -253,7 +291,17 @@ fn soak_100k_query_budget_guardrails() {
         "merchant_single_subscription start=0 size=100",
         MERCHANT_QUERY_CPU_LIMIT,
         MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.single_subscription_merchant, &0, &100),
+        || {
+            env.as_contract(&client.address, || {
+                subscription_vault::queries::get_subscriptions_by_merchant(
+                    &env,
+                    dataset.single_subscription_merchant.clone(),
+                    0,
+                    100,
+                )
+                .unwrap()
+            })
+        },
     );
     assert_eq!(single_merchant_page.len(), 1);
     assert_merchant_page(&single_merchant_page, &dataset.single_subscription_merchant);

@@ -7,7 +7,7 @@ use soroban_sdk::{testutils::Address as _, Address, Env, String};
 // ── Governance Proposal Tests ──────────────────────────────────────────────
 
 /// Helper to initialize contract with admin and token
-fn init_vault(env: &Env, admin: &Address) -> (Address, SubscriptionVaultClient) {
+fn init_vault<'a>(env: &'a Env, admin: &Address) -> (Address, SubscriptionVaultClient<'a>) {
     let token_admin = Address::generate(env);
     let token_address = env.register_stellar_asset_contract_v2(token_admin).address();
     
@@ -124,7 +124,7 @@ fn test_invalid_quorum_bps() {
     let eta = current_time + 3600;
 
     // Try to submit with invalid quorum (> 10000)
-    let result = client.submit_proposal(
+    let result = client.try_submit_proposal(
         &ProposalKind::RotateAdmin,
         &new_admin,
         &None,
@@ -133,7 +133,7 @@ fn test_invalid_quorum_bps() {
         &eta,
     );
 
-    assert!(result.is_err());
+    assert!(result.unwrap().is_err());
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn test_eta_in_past_rejected() {
     let eta_in_past = current_time - 3600;  // 1 hour ago
 
     // Try to submit with ETA in the past
-    let result = client.submit_proposal(
+    let result = client.try_submit_proposal(
         &ProposalKind::RotateAdmin,
         &new_admin,
         &None,
@@ -158,7 +158,7 @@ fn test_eta_in_past_rejected() {
         &eta_in_past,
     );
 
-    assert!(result.is_err());
+    assert!(result.unwrap().is_err());
 }
 
 #[test]
@@ -212,8 +212,8 @@ fn test_list_guardians() {
     assert_eq!(guardians.len(), 2);
 
     // Verify weights are present (order may vary)
-    let has_guardian1 = guardians.iter().any(|(g, w)| g == guardian1 && *w == 100);
-    let has_guardian2 = guardians.iter().any(|(g, w)| g == guardian2 && *w == 50);
+    let has_guardian1 = guardians.iter().any(|(g, w)| g == guardian1 && w == 100);
+    let has_guardian2 = guardians.iter().any(|(g, w)| g == guardian2 && w == 50);
     assert!(has_guardian1);
     assert!(has_guardian2);
 }

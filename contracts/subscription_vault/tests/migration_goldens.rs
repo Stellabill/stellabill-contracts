@@ -13,7 +13,7 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, Env, String,
+    Address, Env,
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 use std::fs;

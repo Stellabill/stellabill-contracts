@@ -20,7 +20,7 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod queries;
+pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
