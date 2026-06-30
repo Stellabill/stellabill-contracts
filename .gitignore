@@ -41,6 +41,11 @@ Thumbs.db
 logs/
 debug/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Build and dist
 dist/
 build/

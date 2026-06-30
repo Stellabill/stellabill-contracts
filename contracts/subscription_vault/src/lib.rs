@@ -20,7 +20,6 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod nonce;
 mod queries;
 mod safe_math;
 mod subscription;
@@ -38,6 +37,9 @@ pub use types::{
 
 /// State machine: validates and applies subscription status transitions.
 pub mod state_machine;
+
+/// Period snapshots: immutable per-period billing snapshots.
+pub mod period_snapshots;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
@@ -3724,6 +3726,7 @@ mod test_utils;
 
 #[cfg(test)]
 mod test_metadata_signed;
+#[cfg(test)]
 mod test_charge_invariants;
 
 #[cfg(test)]

@@ -126,6 +126,13 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "CannotChangeUsageMode":          ("Cannot toggle usage_enabled on an existing subscription; create a new one.", "—", False),
     # Schema migration
     "SchemaMigrationDowngrade":       ("Downgrade rejected; deploy the correct binary version.", "SchemaMigratedEvent", False),
+    # Dispute / Chargeback
+    "DisputeNotFound":                ("Verify dispute ID before retrying.", "—", False),
+    "DisputeAlreadyResolved":         ("Inspect existing resolution; do not retry.", "DisputeResolvedEvent", False),
+    "DisputeNotResponded":            ("Wait for admin response or dispute window to elapse.", "DisputeRespondedEvent", False),
+    "DisputeWindowElapsed":           ("Check auto-resolution rules; dispute can now be resolved.", "—", False),
+    "DisputeAlreadyOpen":             ("A dispute is already open for this subscription; wait for resolution.", "DisputeOpenedEvent", False),
+    "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
 }
 # fmt: on
 
@@ -166,6 +173,7 @@ _CATEGORY_RANGES = [
     (8000, 8099, "Token"),
     (9000, 9099, "Subscription Update"),
     (9100, 9199, "Schema Migration"),
+    (10000, 10099, "Dispute"),
 ]
 
 
@@ -219,6 +227,7 @@ _FILE_LABEL: dict[str, str] = {
     "nonce":        "nonce.rs",
     "reentrancy":   "reentrancy.rs",
     "operator":     "lib.rs (operator)",
+    "dispute":      "dispute.rs",
 }
 
 # Entrypoints that are exposed to callers — derived from lib.rs impl block.
@@ -262,6 +271,8 @@ _ENTRYPOINTS_IN_LIB: list[str] = [
     "get_blocklist_entry", "is_blocklisted", "initialize_merchant_config",
     "set_merchant_config", "update_merchant_config", "get_merchant_config",
     "version", "get_subscription_count",
+    "open_dispute", "respond_dispute", "resolve_dispute",
+    "get_dispute", "get_subscription_dispute",
 ]
 
 
