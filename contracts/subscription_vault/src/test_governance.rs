@@ -70,7 +70,7 @@ fn test_submit_proposal_rotate_admin() {
         &0,
         &5000,  // 50% quorum
         &eta,
-    ).unwrap();
+    );
 
     assert_eq!(proposal_id, 0);
 
@@ -102,7 +102,7 @@ fn test_submit_proposal_set_protocol_fee() {
         &250,  // 2.5% fee
         &7500,  // 75% quorum
         &eta,
-    ).unwrap();
+    );
 
     assert_eq!(proposal_id, 0);
 
@@ -181,11 +181,11 @@ fn test_cancel_proposal() {
         &0,
         &5000,
         &eta,
-    ).unwrap();
+    );
 
     // Cancel it
     let reason = String::from_str(&env, "Superseded by newer proposal");
-    client.cancel_proposal(&proposal_id, &reason).unwrap();
+    client.cancel_proposal(&proposal_id, &reason);
 
     // Verify it's marked as executed (and thus immutable)
     let proposal = client.get_proposal(&proposal_id).unwrap();
@@ -242,7 +242,7 @@ fn test_current_proposal_id_counter() {
         &0,
         &5000,
         &eta,
-    ).unwrap();
+    );
 
     assert_eq!(id1, 0);
     assert_eq!(client.get_current_proposal_id(), 1);
@@ -255,7 +255,7 @@ fn test_current_proposal_id_counter() {
         &0,
         &5000,
         &eta,
-    ).unwrap();
+    );
 
     assert_eq!(id2, 1);
     assert_eq!(client.get_current_proposal_id(), 2);
