@@ -15,21 +15,23 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, 
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod dispute;
 mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod queries; pub pub mod nonce;
-pub pub mod nonce;
-pub pub mod nonce;
+mod nonce;
+mod queries;
 mod safe_math;
 mod subscription;
 mod types;
 
 pub use safe_math::*;
 pub use types::{
-    EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
-    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+    EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
+    DisputeResolvedEvent, DisputeStatus, ProtocolFeeConfiguredEvent, Proposal,
+    ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent,
+    ProposalVotedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -374,18 +376,21 @@ pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
-    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
-    MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
-    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
-    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
-    TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey, Dispute,
+    DisputeOpenedEvent, DisputeRespondedEvent, DisputeResolvedEvent, DisputeStatus,
+    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
+    LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent,
+    NextChargeInfo, OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason, SchemaMigratedEvent,
+    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent,
+    SubscriptionChargeFailedEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent,
+    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState,
+    UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
@@ -2474,6 +2479,111 @@ impl SubscriptionVault {
     /// Read the current payout schedule for a merchant.
     pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule {
         merchant::get_payout_schedule(&env, &merchant)
+    }
+
+    // ── Dispute / Chargeback ──────────────────────────────────────────────────
+
+    /// Open a dispute against a charge for a subscription.
+    ///
+    /// The subscriber initiates the dispute. The disputed `amount` is moved from
+    /// the merchant's balance into escrow, and a [`Dispute`] record is created in
+    /// `Open` status. The merchant/admin has [`DISPUTE_WINDOW_SECS`] to respond.
+    ///
+    /// # Auth
+    ///
+    /// `subscriber` must authorise and must match the subscription's registered
+    /// subscriber.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `subscriber` does not match.
+    /// * [`Error::InvalidAmount`] — `amount` is zero or negative.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute is already open for this subscription.
+    /// * [`Error::InsufficientBalance`] — Merchant balance is insufficient.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeOpenedEvent`].
+    pub fn open_dispute(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        amount: i128,
+        evidence_hash: Option<BytesN<32>>,
+    ) -> Result<u64, Error> {
+        dispute::do_open_dispute(&env, subscriber, subscription_id, amount, evidence_hash)
+    }
+
+    /// Respond to a dispute with evidence. Admin only.
+    ///
+    /// Transitions the dispute from `Open` to `Responded`, signalling that the
+    /// admin has reviewed the dispute and is prepared for resolution.
+    ///
+    /// # Auth
+    ///
+    /// `admin` must match the stored contract admin.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Not the stored admin.
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    /// * [`Error::DisputeAlreadyResponded`] — Dispute is not in `Open` status.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeRespondedEvent`].
+    pub fn respond_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: u64,
+        evidence_hash: Option<BytesN<32>>,
+    ) -> Result<(), Error> {
+        dispute::do_respond_dispute(&env, admin, dispute_id, evidence_hash)
+    }
+
+    /// Resolve a dispute, routing escrowed funds. Admin only.
+    ///
+    /// * If the dispute is `Open` and the window has elapsed, it auto-resolves
+    ///   to the subscriber.
+    /// * If the dispute is `Responded`, the admin decides via
+    ///   `resolve_to_subscriber`.
+    /// * Resolving before response (window not elapsed) is rejected.
+    ///
+    /// # Auth
+    ///
+    /// `admin` must match the stored contract admin.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Not the stored admin.
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    /// * [`Error::DisputeAlreadyResolved`] — Already resolved.
+    /// * [`Error::DisputeNotResponded`] — Unresponded and window not elapsed.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeResolvedEvent`].
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: u64,
+        resolve_to_subscriber: bool,
+    ) -> Result<(), Error> {
+        dispute::do_resolve_dispute(&env, admin, dispute_id, resolve_to_subscriber)
+    }
+
+    /// Read a dispute record by its ID.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> Result<Dispute, Error> {
+        dispute::do_get_dispute(&env, dispute_id)
+    }
+
+    /// Return the active dispute ID for a subscription, if any.
+    pub fn get_subscription_dispute(env: Env, subscription_id: u32) -> Option<u64> {
+        dispute::do_get_subscription_dispute(&env, subscription_id)
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────

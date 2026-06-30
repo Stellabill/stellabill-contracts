@@ -60,6 +60,12 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 6008 | `RateLimitExceeded` | Limits | Usage rate limit exceeded in current window. | Retry after the rate window resets. |
 | 6009 | `UsageCapExceeded` | Limits | Usage cap would be exceeded for the billing period. | Retry only after a new billing period or cap change. |
 | 6010 | `BurstLimitExceeded` | Limits | Usage call arrived too soon after prior call. | Retry after the minimum interval elapses. |
+| 10001 | `DisputeNotFound` | Not found | No dispute for the given ID. | Verify dispute ID. |
+| 10002 | `DisputeAlreadyResolved` | State transition | Dispute has already been resolved. | Do not retry; inspect resolution. |
+| 10003 | `DisputeNotResponded` | State transition | Cannot resolve an unresponded dispute before window elapses. | Retry after admin responds or window elapses. |
+| 10004 | `DisputeWindowElapsed` | State transition | Dispute window has elapsed. | Check resolution rules. |
+| 10005 | `DisputeAlreadyOpen` | State transition | A dispute is already open for this subscription. | Wait for resolution or inspect existing dispute. |
+| 10006 | `DisputeAlreadyResponded` | State transition | Dispute is not in `Open` status. | Cannot respond twice. |
 
 ## Retry Guidance
 

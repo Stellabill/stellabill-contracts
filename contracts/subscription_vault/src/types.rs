@@ -52,85 +52,11 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// [`assert_known_data_key`] checks at instance read/write sites. When you add a
 /// variant, append a row here, add its arm to `canonical_discriminant`, and —
 /// if it is instance-tier — add its discriminant to the allowlist.
-///
-/// | Discriminant | Variant | Storage tier |
-/// |:---:|:---|:---|
-/// | 0 | `MerchantSubs(Address)` | instance |
-/// | 1 | `Token` | instance |
-/// | 2 | `Admin` | instance |
-/// | 3 | `MinTopup` | instance |
-/// | 4 | `NextId` | instance |
-/// | 5 | `SchemaVersion` | instance |
-/// | 6 | `Sub(u32)` | persistent |
-/// | 7 | `ChargedPeriod(u32)` | persistent |
-/// | 8 | `IdemKey(u32)` | persistent |
-/// | 9 | `EmergencyStop` | instance |
-/// | 10 | `MerchantPaused(Address)` | instance |
-/// | 11 | `BillingStatement(u32, u32)` | persistent |
-/// | 12 | `BillingStatementsBySubscription(u32)` | persistent |
-/// | 13 | `BillingStatementsByMerchant(Address)` | persistent |
-/// | 14 | `TotalAccounted(Address)` | instance |
-/// | 15 | `Recovery(String)` | persistent |
-/// | 16 | `MerchantConfig(Address)` | instance |
-/// | 17 | `MerchantEarnings(Address, Address)` | instance |
-/// | 18 | `MerchantTokens(Address)` | instance |
-/// | 19 | `UsageLimits(u32)` | instance |
-/// | 20 | `UsageState(u32)` | instance |
-/// | 21 | `GracePeriod` | instance |
-/// | 22 | `FeeBps` | instance |
-/// | 23 | `Treasury` | instance |
-/// | 24 | `AcceptedTokens` | instance |
-/// | 25 | `TokenDecimals(Address)` | instance |
-/// | 26 | `NextPlanId` | instance |
-/// | 27 | `Plan(u32)` | instance |
-/// | 28 | `SubPlan(u32)` | instance |
-/// | 29 | `PlanMaxActive(u32)` | instance |
-/// | 30 | `CreditLimit(Address, Address)` | instance |
-/// | 31 | `TokenSubs(Address)` | instance |
-/// | 32 | `SubscriberSubs(Address)` | instance |
-/// | 33 | `MerchantBalance(Address, Address)` | instance |
-/// | 34 | `Blocklist(Address)` | persistent |
-/// | 35 | `Oracle` | instance |
-/// | 36 | `BillingPeriodSnapshot(u32, u64)` | persistent |
-/// | 37 | `BillingPeriodSnapshotIndex(u32)` | persistent |
-/// | 38 | `AdminNonce(Address, u32)` | persistent |
-/// | 39 | `Metadata(u32, String)` | persistent |
-/// | 40 | `MetadataKeys(u32)` | persistent |
-/// | 41 | `Operator` | instance |
-/// | 42 | `BillingRetentionConfig` | instance |
-/// | 43 | `BillingStatementSequence(u32)` | persistent |
-/// | 44 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// Maps a merchant address to its list of subscription IDs.
+    /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
     MerchantSubs(Address),
-
-    /// Global flag: when true, merchants must have an active KYC attestation
-    /// (see `MerchantKyc`) to withdraw merchant funds.
-    KycRequired,
-
-    /// Per-merchant KYC attestation record.
-    ///
-    /// Status semantics: `status == true` means active/valid KYC; `status == false`
-    /// means revoked/inactive.
-    MerchantKyc(Address),
-}
-
-/// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MerchantKyc {
-    /// Opaque attestation hash (provider-issued).
-    pub attestation_hash: Vec<u8>,
-    /// Timestamp when the attestation was issued (ledger seconds).
-    pub issued_at: u64,
-    /// When true, KYC is active/valid. When false, it is revoked/inactive.
-    pub status: bool,
-}
-
-
-
     /// USDC token contract address. Discriminant 1.
     Token,
     /// Authorized admin address. Discriminant 2.
@@ -147,97 +73,114 @@ pub struct MerchantKyc {
     ChargedPeriod(u32),
     /// Idempotency key stored per subscription. Discriminant 8.
     IdemKey(u32),
-    /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
+    /// Emergency stop flag — when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
-    /// Merchant-wide pause flag.
+    /// Merchant-wide pause flag. Discriminant 10.
     MerchantPaused(Address),
-    /// Detailed billing statement for a subscription charge.
+    /// Detailed billing statement for a subscription charge. Discriminant 11.
     BillingStatement(u32, u32),
-    /// Secondary index for statements by subscription.
+    /// Secondary index for statements by subscription. Discriminant 12.
     BillingStatementsBySubscription(u32),
-    /// Secondary index for statements by merchant.
+    /// Secondary index for statements by merchant. Discriminant 13.
     BillingStatementsByMerchant(Address),
-    /// Total accounted balance for recovery validation.
+    /// Total accounted balance for recovery validation. Discriminant 14.
     TotalAccounted(Address),
-    /// Replay protection key for recovery operations.
+    /// Replay protection key for recovery operations. Discriminant 15.
     Recovery(String),
-    /// Merchant configuration (pause state, fee routing, etc.).
+    /// Merchant configuration (pause state, fee routing, etc.). Discriminant 16.
     MerchantConfig(Address),
-    /// Per-merchant, per-token accrued earnings record.
+    /// Per-merchant, per-token accrued earnings record. Discriminant 17.
     MerchantEarnings(Address, Address),
-    /// List of token addresses a merchant has earned in.
+    /// List of token addresses a merchant has earned in. Discriminant 18.
     MerchantTokens(Address),
-    /// Usage rate/cap limits for a subscription.
+    /// Usage rate/cap limits for a subscription. Discriminant 19.
     UsageLimits(u32),
-    /// Running usage state for a subscription within the current window.
+    /// Running usage state for a subscription within the current window. Discriminant 20.
     UsageState(u32),
-    /// Global grace period for underfunded subscriptions.
+    /// Global grace period for underfunded subscriptions. Discriminant 21.
     GracePeriod,
-    /// Protocol fee in basis points (0-10,000).
+    /// Protocol fee in basis points (0-10,000). Discriminant 22.
     FeeBps,
-    /// Treasury address for protocol fee collection.
+    /// Treasury address for protocol fee collection. Discriminant 23.
     Treasury,
-    /// List of all token addresses accepted by the vault.
+    /// List of all token addresses accepted by the vault. Discriminant 24.
     AcceptedTokens,
-    /// Decimals for a specific accepted token.
+    /// Decimals for a specific accepted token. Discriminant 25.
     TokenDecimals(Address),
-    /// Auto-incrementing plan-template ID counter.
+    /// Auto-incrementing plan-template ID counter. Discriminant 26.
     NextPlanId,
-    /// Plan template record keyed by its plan ID.
+    /// Plan template record keyed by its plan ID. Discriminant 27.
     Plan(u32),
-    /// Maps a subscription ID to its parent plan-template ID.
+    /// Maps a subscription ID to its parent plan-template ID. Discriminant 28.
     SubPlan(u32),
-    /// Max concurrent active subscriptions allowed for a plan.
+    /// Max concurrent active subscriptions allowed for a plan. Discriminant 29.
     PlanMaxActive(u32),
-    /// Per-subscriber, per-token credit limit.
+    /// Per-subscriber, per-token credit limit. Discriminant 30.
     CreditLimit(Address, Address),
-    /// Maps a token address to its list of subscription IDs.
+    /// Maps a token address to its list of subscription IDs. Discriminant 31.
     TokenSubs(Address),
-    /// Maps a subscriber address to its list of subscription IDs.
+    /// Maps a subscriber address to its list of subscription IDs. Discriminant 32.
     SubscriberSubs(Address),
-    /// Maps (merchant, token) to their accumulated balance.
+    /// Maps (merchant, token) to their accumulated balance. Discriminant 33.
     MerchantBalance(Address, Address),
-    /// Maps a subscriber address to their blocklist status.
+    /// Maps a subscriber address to their blocklist status. Discriminant 34.
     Blocklist(Address),
-    /// Oracle configuration.
+    /// Oracle configuration. Discriminant 35.
     Oracle,
-    /// Billing period snapshot storage.
+    /// Billing period snapshot storage. Discriminant 36.
     BillingPeriodSnapshot(u32, u64),
-    /// Index for billing period snapshots.
+    /// Index for billing period snapshots. Discriminant 37.
     BillingPeriodSnapshotIndex(u32),
-    /// Admin nonce for replay protection keyed by (admin_address, domain).
+    /// Admin nonce for replay protection keyed by (admin_address, domain). Discriminant 38.
     AdminNonce(Address, u32),
-    /// Per-subscription metadata key-value pair.
+    /// Per-subscription metadata key-value pair. Discriminant 39.
     Metadata(u32, String),
-    /// Per-subscription list of metadata keys.
+    /// Per-subscription list of metadata keys. Discriminant 40.
     MetadataKeys(u32),
-    /// Operator key.
+    /// Operator key. Discriminant 41.
     Operator,
-    /// Global billing statement retention configuration.
+    /// Global billing statement retention configuration. Discriminant 42.
     BillingRetentionConfig,
-    /// Monotonic per-subscription statement sequence counter.
+    /// Monotonic per-subscription statement sequence counter. Discriminant 43.
     BillingStatementSequence(u32),
-    /// Aggregated totals from compacted billing statements.
+    /// Aggregated totals from compacted billing statements. Discriminant 44.
     BillingStatementAggregate(u32),
-    /// Max concurrent active subscriptions allowed for a merchant.
+    /// Max concurrent active subscriptions allowed for a merchant. Discriminant 45.
     MerchantMaxSubs(Address),
-    /// Guardian voting weights for governance proposals. Maps Address to u32 weight.
+    /// Guardian voting weights for governance proposals. Discriminant 46.
     Guardians,
-    /// Auto-incrementing proposal ID counter for governance.
+    /// Auto-incrementing proposal ID counter for governance. Discriminant 47.
     NextProposalId,
-    /// Governance proposal record keyed by proposal ID.
+    /// Governance proposal record keyed by proposal ID. Discriminant 48.
     Proposal(u64),
+    /// Dispute escrow amount held for a dispute (instance). Discriminant 49.
+    DisputeEscrow(u64),
+    /// Dispute record keyed by dispute ID (persistent). Discriminant 50.
+    Dispute(u64),
+    /// Auto-incrementing dispute ID counter (instance). Discriminant 51.
+    NextDisputeId,
+    /// Maps subscription ID to active dispute ID (instance). Discriminant 52.
+    SubscriptionDispute(u32),
+    /// Global flag: when true, merchants must have active KYC to withdraw. Discriminant 53.
+    KycRequired,
+    /// Per-merchant KYC attestation record. Discriminant 54.
+    MerchantKyc(Address),
+}
+
+/// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantKyc {
+    /// Opaque attestation hash (provider-issued).
+    pub attestation_hash: Vec<u8>,
+    /// Timestamp when the attestation was issued (ledger seconds).
+    pub issued_at: u64,
+    /// When true, KYC is active/valid. When false, it is revoked/inactive.
+    pub status: bool,
 }
 
 impl DataKey {
     /// Canonical, declaration-order discriminant for this key.
-    ///
-    /// These numbers are the frozen identifiers documented in the registry table
-    /// on [`DataKey`]. The match is intentionally **exhaustive with no wildcard
-    /// arm**: adding a new variant to `DataKey` without assigning it a number
-    /// here is a *compile error*. That is the first line of defence against the
-    /// drift this module guards — a new key cannot ship until it has been
-    /// consciously classified.
     pub const fn canonical_discriminant(&self) -> u32 {
         match self {
             DataKey::MerchantSubs(_) => 0,
@@ -289,6 +232,12 @@ impl DataKey {
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
             DataKey::Proposal(_) => 48,
+            DataKey::DisputeEscrow(_) => 49,
+            DataKey::Dispute(_) => 50,
+            DataKey::NextDisputeId => 51,
+            DataKey::SubscriptionDispute(_) => 52,
+            DataKey::KycRequired => 53,
+            DataKey::MerchantKyc(_) => 54,
         }
     }
 
@@ -342,6 +291,11 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     42, // BillingRetentionConfig
     45, // MerchantMaxSubs(Address)
     47, // NextProposalId
+    49, // DisputeEscrow(u64)
+    51, // NextDisputeId
+    52, // SubscriptionDispute(u32)
+    53, // KycRequired
+    54, // MerchantKyc(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -501,6 +455,93 @@ impl InsufficientBalanceError {
     }
 }
 
+/// Time window (in seconds) for the dispute/chargeback process.
+///
+/// During this window the merchant/admin may respond to a dispute. If no
+/// response is received before the window elapses, the dispute may be resolved
+/// in favour of the subscriber.
+pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
+
+/// Lifecycle status of a dispute.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    /// Dispute opened, awaiting merchant/admin response. Funds held in escrow.
+    Open = 0,
+    /// Merchant/admin has responded to the dispute. Awaiting final resolution.
+    Responded = 1,
+    /// Dispute resolved in favour of the merchant; escrow released to merchant.
+    ResolvedToMerchant = 2,
+    /// Dispute resolved in favour of the subscriber; escrow returned to subscriber.
+    ResolvedToSubscriber = 3,
+}
+
+/// Dispute / chargeback record tracking contested charges.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Dispute {
+    /// Unique dispute ID (auto-incremented).
+    pub id: u64,
+    /// Subscription the dispute is against.
+    pub subscription_id: u32,
+    /// Subscriber who opened the dispute.
+    pub subscriber: Address,
+    /// Merchant who received the original payment.
+    pub merchant: Address,
+    /// Amount held in escrow pending resolution (token base units).
+    pub amount: i128,
+    /// Ledger timestamp when the dispute was opened.
+    pub opened_at: u64,
+    /// Current status of the dispute.
+    pub status: DisputeStatus,
+    /// Optional evidence hash provided by the subscriber.
+    pub evidence_hash: Option<soroban_sdk::BytesN<32>>,
+    /// Ledger timestamp when the admin responded (None if not yet responded).
+    pub responded_at: Option<u64>,
+    /// Optional evidence hash provided by the admin (merchant side).
+    pub admin_evidence_hash: Option<soroban_sdk::BytesN<32>>,
+}
+
+/// Event emitted when a dispute is opened.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DisputeOpenedEvent {
+    pub dispute_id: u64,
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub evidence_hash: Option<soroban_sdk::BytesN<32>>,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when an admin responds to a dispute.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DisputeRespondedEvent {
+    pub dispute_id: u64,
+    pub subscription_id: u32,
+    pub admin_evidence_hash: Option<soroban_sdk::BytesN<32>>,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DisputeResolvedEvent {
+    pub dispute_id: u64,
+    pub subscription_id: u32,
+    /// Final status of the dispute after resolution.
+    pub resolution: DisputeStatus,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -622,6 +663,20 @@ pub enum Error {
     // --- Schema Migration (9100-9199) ---
     /// Stored schema version is newer than the binary's STORAGE_VERSION; downgrade rejected.
     SchemaMigrationDowngrade = 9101,
+
+    // --- Dispute / Chargeback (10000-10099) ---
+    /// The requested dispute was not found.
+    DisputeNotFound = 10001,
+    /// The dispute has already been resolved; no further actions allowed.
+    DisputeAlreadyResolved = 10002,
+    /// Cannot resolve an unresponded dispute before the dispute window elapses.
+    DisputeNotResponded = 10003,
+    /// The dispute window has elapsed. Auto-resolution conditions apply.
+    DisputeWindowElapsed = 10004,
+    /// A dispute is already open for this subscription; double-open rejected.
+    DisputeAlreadyOpen = 10005,
+    /// The dispute has already been responded to by the admin.
+    DisputeAlreadyResponded = 10006,
 }
 
 impl Error {
@@ -2238,6 +2293,12 @@ mod known_keys_tests {
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
             (DataKey::Proposal(1), false),
+            (DataKey::DisputeEscrow(1), true),
+            (DataKey::Dispute(1), false),
+            (DataKey::NextDisputeId, true),
+            (DataKey::SubscriptionDispute(1), true),
+            (DataKey::KycRequired, true),
+            (DataKey::MerchantKyc(a.clone()), true),
         ]
     }
 
@@ -2278,9 +2339,9 @@ mod known_keys_tests {
     /// without updating the allowlist) is rejected.
     #[test]
     fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (48) can never be
+        // Discriminants beyond the highest registered variant (54) can never be
         // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(49));
+        assert!(!is_known_instance_discriminant(55));
         assert!(!is_known_instance_discriminant(9_999));
         assert!(!is_known_instance_discriminant(u32::MAX));
     }
@@ -2296,21 +2357,21 @@ mod known_keys_tests {
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=48`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=54`
     /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
         let variants = all_variants(&env);
-        let mut seen = [false; 49];
+        let mut seen = [false; 55];
         for (key, _) in &variants {
             let d = key.canonical_discriminant() as usize;
             assert!(d < seen.len(), "discriminant {d} out of expected range");
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=48");
-        assert_eq!(variants.len(), 49, "variant count drifted from 49");
+        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=54");
+        assert_eq!(variants.len(), 55, "variant count drifted from 55");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier

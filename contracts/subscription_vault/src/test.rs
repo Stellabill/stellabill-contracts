@@ -1,9 +1,10 @@
 use crate::{
     can_transition, compute_next_charge_info, get_allowed_transitions,
     validate_status_transition,
-    ChargeExecutionResult, DataKey, Error, MerchantWithdrawalEvent, OraclePrice,
-    RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
-    MAX_SUBSCRIPTION_ID, MAX_SUBSCRIPTION_LIST_PAGE,
+    ChargeExecutionResult, DISPUTE_WINDOW_SECS, DataKey, Dispute, DisputeOpenedEvent,
+    DisputeRespondedEvent, DisputeResolvedEvent, DisputeStatus, Error, MerchantWithdrawalEvent,
+    OraclePrice, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
+    SubscriptionVaultClient, MAX_SUBSCRIPTION_ID, MAX_SUBSCRIPTION_LIST_PAGE,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{
@@ -9563,4 +9564,580 @@ fn test_merchant_max_subs_and_plan_max_active_interaction() {
     // Subscriber D subscribes to plan: rejected by MerchantMaxSubs limit.
     let result_d = test_env.client.try_create_subscription_from_plan(&subscriber_d, &plan_id);
     assert_eq!(result_d, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
+}
+
+// ── Dispute / Chargeback Tests ────────────────────────────────────────────────
+
+const DISPUTE_AMOUNT: i128 = 5_000_000;
+
+/// Seed merchant balance for a subscription's merchant + token, and mint tokens to the contract.
+fn seed_merchant_balance_and_mint(
+    env: &Env,
+    contract_id: &Address,
+    client: &SubscriptionVaultClient,
+    id: u32,
+    amount: i128,
+) {
+    let sub = client.get_subscription(&id);
+    seed_merchant_balance(env, contract_id, &sub.merchant, &sub.token, amount);
+    soroban_sdk::token::StellarAssetClient::new(env, &sub.token).mint(contract_id, &amount);
+}
+
+fn charge_and_seed_merchant(
+    test_env: &TestEnv,
+    id: u32,
+) {
+    let sub = test_env.client.get_subscription(&id);
+    let balance_before = test_env.client.get_merchant_balance_by_token(&sub.merchant, &sub.token);
+    if balance_before < DISPUTE_AMOUNT {
+        let topup = DISPUTE_AMOUNT - balance_before;
+        seed_merchant_balance(
+            &test_env.env,
+            &test_env.client.address,
+            &sub.merchant,
+            &sub.token,
+            DISPUTE_AMOUNT,
+        );
+        soroban_sdk::token::StellarAssetClient::new(&test_env.env, &sub.token)
+            .mint(&test_env.client.address, &topup);
+    }
+}
+
+#[test]
+fn test_open_dispute_basic() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let merchant_balance_before =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Merchant balance decreased by disputed amount
+    let merchant_balance_after =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(
+        merchant_balance_after,
+        merchant_balance_before - DISPUTE_AMOUNT
+    );
+
+    // Dispute record is correct
+    let dispute = test_env.client.get_dispute(&dispute_id);
+    assert_eq!(dispute.id, dispute_id);
+    assert_eq!(dispute.subscription_id, id);
+    assert_eq!(dispute.subscriber, subscriber);
+    assert_eq!(dispute.merchant, merchant);
+    assert_eq!(dispute.amount, DISPUTE_AMOUNT);
+    assert_eq!(dispute.status, DisputeStatus::Open);
+    assert_eq!(dispute.evidence_hash, None);
+    assert_eq!(dispute.responded_at, None);
+}
+
+#[test]
+fn test_open_dispute_rejects_double_open() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    let result = test_env.client.try_open_dispute(
+        &subscriber,
+        &id,
+        &DISPUTE_AMOUNT,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeAlreadyOpen)));
+}
+
+#[test]
+fn test_open_dispute_rejects_zero_amount() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    let result = test_env.client.try_open_dispute(
+        &subscriber,
+        &id,
+        &0i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_open_dispute_rejects_unauthorized_caller() {
+    let test_env = TestEnv::default();
+    let (id, _, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let stranger = Address::generate(&test_env.env);
+
+    // mock_all_auths allows stranger to pass require_auth, but the
+    // subscriber field check catches the mismatch.
+    let result = test_env.client.try_open_dispute(
+        &stranger,
+        &id,
+        &DISPUTE_AMOUNT,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_open_dispute_rejects_insufficient_merchant_balance() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Merchant has zero balance
+    let mb = test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(mb, 0);
+
+    let result = test_env.client.try_open_dispute(
+        &subscriber,
+        &id,
+        &DISPUTE_AMOUNT,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_open_dispute_emits_event() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    let events = test_env.env.events().all();
+    let dispute_event = events
+        .iter()
+        .find(|e| {
+            Symbol::from_val(&test_env.env, &e.1.get(0).unwrap())
+                == Symbol::new(&test_env.env, "dispute_opened")
+        })
+        .expect("missing dispute_opened event");
+
+    assert_eq!(dispute_event.0, test_env.client.address);
+
+    let data: DisputeOpenedEvent = dispute_event.2.clone().into_val(&test_env.env);
+    assert_eq!(data.subscription_id, id);
+    assert_eq!(data.subscriber, subscriber);
+    assert_eq!(data.merchant, merchant);
+    assert_eq!(data.amount, DISPUTE_AMOUNT);
+    assert_eq!(data.evidence_hash, None);
+}
+
+#[test]
+fn test_respond_dispute_basic() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    let dispute = test_env.client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::Responded);
+    assert!(dispute.responded_at.is_some());
+}
+
+#[test]
+fn test_respond_dispute_rejects_already_responded() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    let result = test_env.client.try_respond_dispute(
+        &test_env.admin,
+        &dispute_id,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeAlreadyResponded)));
+}
+
+#[test]
+fn test_respond_dispute_rejects_nonexistent() {
+    let test_env = TestEnv::default();
+    let result = test_env.client.try_respond_dispute(
+        &test_env.admin,
+        &999u64,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeNotFound)));
+}
+
+#[test]
+fn test_respond_dispute_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    // Mock auth as a non-admin address
+    let non_admin = Address::generate(&env);
+    env.set_auths(&[non_admin.clone()]);
+    let result = client.try_respond_dispute(&non_admin, &1u64, &None::<soroban_sdk::BytesN<32>>);
+    // The admin check should reject non-admin
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_respond_dispute_emits_event() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    let events = test_env.env.events().all();
+    let event = events
+        .iter()
+        .find(|e| {
+            Symbol::from_val(&test_env.env, &e.1.get(0).unwrap())
+                == Symbol::new(&test_env.env, "dispute_responded")
+        })
+        .expect("missing dispute_responded event");
+
+    let data: DisputeRespondedEvent = event.2.clone().into_val(&test_env.env);
+    assert_eq!(data.dispute_id, dispute_id);
+    assert_eq!(data.subscription_id, id);
+}
+
+#[test]
+fn test_resolve_dispute_to_merchant() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let merchant_balance_before =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Admin responds then resolves to merchant
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &false) // resolve_to_subscriber = false
+        .unwrap();
+
+    // Merchant balance restored
+    let merchant_balance_after =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(merchant_balance_after, merchant_balance_before);
+
+    // Dispute status updated
+    let dispute = test_env.client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedToMerchant);
+}
+
+#[test]
+fn test_resolve_dispute_to_subscriber() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let merchant_balance_before =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    let subscriber_balance_before =
+        soroban_sdk::token::Client::new(&test_env.env, &test_env.token).balance(&subscriber);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Admin responds then resolves to subscriber
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &true) // resolve_to_subscriber = true
+        .unwrap();
+
+    // Merchant balance remains decreased (funds went to subscriber)
+    let merchant_balance_after =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(merchant_balance_after, merchant_balance_before - DISPUTE_AMOUNT);
+
+    // Subscriber received the disputed amount (via transfer from contract)
+    let subscriber_balance_after =
+        soroban_sdk::token::Client::new(&test_env.env, &test_env.token).balance(&subscriber);
+    assert_eq!(
+        subscriber_balance_after,
+        subscriber_balance_before + DISPUTE_AMOUNT
+    );
+
+    let dispute = test_env.client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
+}
+
+#[test]
+fn test_resolve_dispute_auto_resolve_to_subscriber_after_window_elapsed() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let merchant_balance_before =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Advance time past DISPUTE_WINDOW_SECS
+    test_env.env.ledger().set_timestamp(
+        test_env.env.ledger().timestamp() + DISPUTE_WINDOW_SECS + 1,
+    );
+
+    // Resolve without responding — auto-resolve to subscriber
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &false) // ignored for auto-resolve
+        .unwrap();
+
+    let dispute = test_env.client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
+
+    // Merchant balance reduced (funds went to subscriber)
+    let merchant_balance_after =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(merchant_balance_after, merchant_balance_before - DISPUTE_AMOUNT);
+}
+
+#[test]
+fn test_resolve_dispute_rejects_before_response_and_window() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Try to resolve immediately without responding — should be rejected
+    let result = test_env.client.try_resolve_dispute(
+        &test_env.admin,
+        &dispute_id,
+        &true,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeNotResponded)));
+}
+
+#[test]
+fn test_resolve_dispute_rejects_already_resolved() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &true)
+        .unwrap();
+
+    // Second resolve should fail
+    let result = test_env.client.try_resolve_dispute(
+        &test_env.admin,
+        &dispute_id,
+        &true,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeAlreadyResolved)));
+}
+
+#[test]
+fn test_resolve_dispute_rejects_nonexistent() {
+    let test_env = TestEnv::default();
+    let result = test_env.client.try_resolve_dispute(
+        &test_env.admin,
+        &999u64,
+        &true,
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeNotFound)));
+}
+
+#[test]
+fn test_resolve_dispute_emits_event() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &true)
+        .unwrap();
+
+    let events = test_env.env.events().all();
+    let event = events
+        .iter()
+        .find(|e| {
+            Symbol::from_val(&test_env.env, &e.1.get(0).unwrap())
+                == Symbol::new(&test_env.env, "dispute_resolved")
+        })
+        .expect("missing dispute_resolved event");
+
+    let data: DisputeResolvedEvent = event.2.clone().into_val(&test_env.env);
+    assert_eq!(data.dispute_id, dispute_id);
+    assert_eq!(data.subscription_id, id);
+    assert_eq!(data.resolution, DisputeStatus::ResolvedToSubscriber);
+}
+
+#[test]
+fn test_get_subscription_dispute_returns_active_dispute() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    // No dispute initially
+    assert!(test_env.client.get_subscription_dispute(&id).is_none());
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // Dispute is now tracked
+    assert_eq!(
+        test_env.client.get_subscription_dispute(&id),
+        Some(dispute_id)
+    );
+
+    // After resolution, the tracking is cleared
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &true)
+        .unwrap();
+
+    assert!(test_env.client.get_subscription_dispute(&id).is_none());
+}
+
+#[test]
+fn test_dispute_escrow_accounting_invariant() {
+    let test_env = TestEnv::default();
+    let (id, subscriber, merchant) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    charge_and_seed_merchant(&test_env, id);
+
+    let initial_merchant_balance =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert!(initial_merchant_balance >= DISPUTE_AMOUNT);
+
+    let dispute_id = test_env
+        .client
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+
+    // After opening: merchant balance + escrow = initial (invariant holds)
+    let merchant_after_open =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+
+    // The escrow amount is not directly queryable, but we know merchant balance
+    // decreased by exactly DISPUTE_AMOUNT
+    assert_eq!(
+        merchant_after_open,
+        initial_merchant_balance - DISPUTE_AMOUNT
+    );
+
+    // Resolve to merchant — balance restored
+    test_env
+        .client
+        .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
+        .unwrap();
+    test_env
+        .client
+        .resolve_dispute(&test_env.admin, &dispute_id, &false)
+        .unwrap();
+
+    let merchant_after_resolve =
+        test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
+    assert_eq!(merchant_after_resolve, initial_merchant_balance);
 }

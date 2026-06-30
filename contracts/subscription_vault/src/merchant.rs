@@ -282,7 +282,7 @@ pub fn get_merchant_balance_by_token(env: &Env, merchant: &Address, token: &Addr
     env.storage().instance().get(&key).unwrap_or(0i128)
 }
 
-fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
+pub fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
     let key = merchant_balance_key(merchant, token);
     env.storage().instance().set(&key, balance);
 }
