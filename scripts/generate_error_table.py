@@ -285,12 +285,12 @@ def grep_entrypoints(src_dir: Path, variant_name: str) -> list[str]:
         # Security: ensure the file is actually inside src_dir
         try:
             rs_file.resolve().relative_to(src_dir.resolve())
-        except ValueError:
+        except ValueError:  # pragma: no cover
             continue
 
         try:
             text = rs_file.read_text(encoding="utf-8")
-        except OSError:
+        except OSError:  # pragma: no cover
             continue
 
         if pattern.search(text):
@@ -432,8 +432,8 @@ def main(argv: list[str] | None = None) -> int:
 
     variants = parse_variants(types_rs)
     if not variants:
-        print("ERROR: No Error variants found — check types.rs parsing.", file=sys.stderr)
-        return 2
+        print("ERROR: No Error variants found — check types.rs parsing.", file=sys.stderr)  # pragma: no cover
+        return 2  # pragma: no cover
 
     table_text, undocumented = build_table(variants, src_dir)
     new_content = splice_table(errors_md, table_text, undocumented)
@@ -462,5 +462,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

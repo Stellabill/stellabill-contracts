@@ -25,30 +25,23 @@ Coverage targets (from issue #513):
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import textwrap
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Load the module under test without requiring it to be on sys.path
+# Load the module under test — add `scripts` to sys.path so coverage can
+# trace the import via the normal import machinery.
 # ---------------------------------------------------------------------------
 
-SCRIPT_PATH = Path(__file__).resolve().parent / "generate_error_table.py"
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR.parent))
 
-
-def _load_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("generate_error_table", SCRIPT_PATH)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-MOD = _load_module()
+import scripts.generate_error_table as MOD  # noqa: E402
 
 # Re-export symbols under test
 parse_variants = MOD.parse_variants
