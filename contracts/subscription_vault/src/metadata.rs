@@ -19,7 +19,7 @@ const SIGNED_MSG_DOMAIN_TAG_LEN: u32 = 32;
 /// fields. Changing this value invalidates every previously-signed payload, so
 /// it must only be updated alongside a contract version bump.
 const SIGNED_MSG_DOMAIN_TAG: &[u8; SIGNED_MSG_DOMAIN_TAG_LEN as usize] =
-    b"SBL_META_SIGNED_v1\x00\x00\x00\x00\x00\x00\x00\x00";
+    b"SBL_META_SIGNED_v1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 /// Wrapper called by the contract entrypoint.
 pub fn do_set_metadata(

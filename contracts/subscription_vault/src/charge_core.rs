@@ -152,6 +152,7 @@ pub fn charge_one(
                         authorizer: sub.subscriber.clone(),
                         refund_amount,
                         timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
             }

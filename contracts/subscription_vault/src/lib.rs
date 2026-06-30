@@ -382,7 +382,7 @@ pub use types::{
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey,
-    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
+    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, FundsDepositedEvent,
     LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
     MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent,
@@ -1285,7 +1285,7 @@ impl SubscriptionVault {
 
         // Write subscriptions into persistent storage.
         let mut i = 0u32;
-        while (i as usize) < subscriptions.len() {
+        while i < subscriptions.len() {
             if let Some(s) = subscriptions.get(i) {
                 let sub = Subscription {
                     subscriber: s.subscriber.clone(),
@@ -1320,7 +1320,7 @@ impl SubscriptionVault {
 
         // Write merchant balances (instance storage)
         let mut j = 0u32;
-        while (j as usize) < balances.len() {
+        while j < balances.len() {
             if let Some(b) = balances.get(j) {
                 env.storage()
                     .instance()

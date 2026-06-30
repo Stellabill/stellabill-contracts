@@ -52,7 +52,7 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// [`assert_known_data_key`] checks at instance read/write sites. When you add a
 /// variant, append a row here, add its arm to `canonical_discriminant`, and —
 /// if it is instance-tier — add its discriminant to the allowlist.
-#[contracttype]
+#[contracttype(export = false)]
 #[derive(Clone)]
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
@@ -526,7 +526,7 @@ pub struct DisputeResolvedEvent {
     pub schema_version: u32,
 }
 
-#[contracterror]
+#[contracterror(export = false)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
