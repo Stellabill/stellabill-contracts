@@ -227,7 +227,7 @@ pub struct MerchantKyc {
     NextProposalId,
     /// Governance proposal record keyed by proposal ID.
     Proposal(u64),
-}
+
 
 impl DataKey {
     /// Canonical, declaration-order discriminant for this key.
