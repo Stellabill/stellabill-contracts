@@ -24,8 +24,9 @@ use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
-    TokenEarnings, TokenReconciliationSnapshot, MerchantBalanceSnapshotEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE, Subscription,
+    PayoutSchedule, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
+    MerchantBalanceSnapshotEvent, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
+    Subscription,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -581,6 +582,7 @@ fn flush_merchant_token(
             amount: balance,
             remaining_balance: 0,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -647,6 +649,7 @@ pub fn do_flush_payouts(
             caller,
             tokens_paid,
             timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 

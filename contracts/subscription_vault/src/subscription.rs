@@ -520,7 +520,7 @@ pub fn do_deposit_funds(
     if let Some(ref k) = idem_key {
         let hashed = crate::idempotency::hash_idem_key(
             env,
-            crate::types::DOMAIN_DEPOSIT_FUNDS,
+            crate::nonce::DOMAIN_DEPOSIT_FUNDS,
             subscription_id,
             k,
         );
@@ -598,7 +598,7 @@ pub fn do_deposit_funds(
     if let Some(k) = idem_key {
         let hashed = crate::idempotency::hash_idem_key(
             env,
-            crate::types::DOMAIN_DEPOSIT_FUNDS,
+            crate::nonce::DOMAIN_DEPOSIT_FUNDS,
             subscription_id,
             &k,
         );
@@ -946,7 +946,7 @@ pub fn do_charge_one_off(
     if let Some(ref k) = idem_key {
         let hashed = crate::idempotency::hash_idem_key(
             env,
-            crate::types::DOMAIN_CHARGE_ONEOFF,
+            crate::nonce::DOMAIN_CHARGE_ONEOFF,
             subscription_id,
             k,
         );
@@ -1103,7 +1103,7 @@ pub fn do_charge_one_off(
     if let Some(k) = idem_key {
         let hashed = crate::idempotency::hash_idem_key(
             env,
-            crate::types::DOMAIN_CHARGE_ONEOFF,
+            crate::nonce::DOMAIN_CHARGE_ONEOFF,
             subscription_id,
             &k,
         );

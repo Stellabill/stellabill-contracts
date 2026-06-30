@@ -24,13 +24,14 @@ mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+mod validation;
 
 pub use safe_math::*;
 pub use types::{
     EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
-    DisputeResolvedEvent, DisputeStatus, ProtocolFeeConfiguredEvent, Proposal,
-    ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent,
-    ProposalVotedEvent,
+    DisputeResolvedEvent, DisputeStatus, Error, OracleLivenessEvent, ProtocolFeeConfiguredEvent,
+    Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
+    ProposalSubmittedEvent, ProposalVotedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -158,7 +159,7 @@ pub mod accounting {
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
     use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn resolve_charge_amount(
         _env: &Env,
@@ -297,6 +298,7 @@ pub mod operator {
                 admin,
                 operator,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -310,6 +312,7 @@ pub mod operator {
             crate::types::OperatorRemovedEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -375,18 +378,17 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
-    CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey, Dispute,
-    DisputeOpenedEvent, DisputeRespondedEvent, DisputeResolvedEvent, DisputeStatus,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey,
     EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, Error, FundsDepositedEvent,
     LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
     MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent,
     NextChargeInfo, OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
-    ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason, SchemaMigratedEvent,
+    RecoveryEvent, RecoveryReason, SchemaMigratedEvent,
     ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent,
     SubscriptionChargeFailedEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent,
@@ -1300,6 +1302,7 @@ impl SubscriptionVault {
                     start_time: s.start_time,
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
+                    cancel_at: None,
                 };
                 env.storage()
                     .persistent()

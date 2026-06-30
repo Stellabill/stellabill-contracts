@@ -161,22 +161,8 @@ pub enum DataKey {
     NextDisputeId,
     /// Maps subscription ID to active dispute ID (instance). Discriminant 52.
     SubscriptionDispute(u32),
-    /// Global flag: when true, merchants must have active KYC to withdraw. Discriminant 53.
-    KycRequired,
-    /// Per-merchant KYC attestation record. Discriminant 54.
-    MerchantKyc(Address),
-}
-
-/// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MerchantKyc {
-    /// Opaque attestation hash (provider-issued).
-    pub attestation_hash: Vec<u8>,
-    /// Timestamp when the attestation was issued (ledger seconds).
-    pub issued_at: u64,
-    /// When true, KYC is active/valid. When false, it is revoked/inactive.
-    pub status: bool,
+    /// Payout schedule configuration for a merchant. Discriminant 53.
+    PayoutSchedule(Address),
 }
 
 impl DataKey {
@@ -236,8 +222,7 @@ impl DataKey {
             DataKey::Dispute(_) => 50,
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
-            DataKey::KycRequired => 53,
-            DataKey::MerchantKyc(_) => 54,
+            DataKey::PayoutSchedule(_) => 53,
         }
     }
 
@@ -294,8 +279,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     49, // DisputeEscrow(u64)
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
-    53, // KycRequired
-    54, // MerchantKyc(Address)
+    53, // PayoutSchedule(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -684,6 +668,29 @@ impl Error {
     pub const fn to_code(self) -> u32 {
         self as u32
     }
+}
+
+/// Normalize an amount to 9 decimal places based on token decimals.
+/// If token has 6 decimals, amount is scaled up by 10^(9-6) = 1000.
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .unwrap_or(7);
+    let scale = 10i128.pow(9u32.saturating_sub(decimals));
+    amount.checked_mul(scale).ok_or(Error::Overflow)
+}
+
+/// Denormalize an amount from 9 decimal places to token-specific decimals.
+pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .unwrap_or(7);
+    let scale = 10i128.pow(9u32.saturating_sub(decimals));
+    amount.checked_div(scale).ok_or(Error::Underflow)
 }
 
 /// Event emitted when an admin nonce is consumed by a privileged operation.
@@ -1372,6 +1379,19 @@ pub struct SubscriptionRecoveryReadyEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a charge fails due to an error.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ChargeFailureEvent {
+    pub subscription_id: u32,
+    /// Numeric error code from the Error enum.
+    pub error_code: u32,
+    /// Amount that was attempted to be charged.
+    pub attempted_amount: i128,
+    /// Ledger timestamp when the failure occurred.
+    pub ledger: u64,
+}
+
 /// Event emitted when a subscription is cancelled.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1490,6 +1510,8 @@ pub struct ScheduledPayoutEvent {
     pub tokens_paid: u32,
     /// Ledger timestamp when the flush was processed.
     pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Event emitted when a merchant withdraws funds.
@@ -2297,8 +2319,7 @@ mod known_keys_tests {
             (DataKey::Dispute(1), false),
             (DataKey::NextDisputeId, true),
             (DataKey::SubscriptionDispute(1), true),
-            (DataKey::KycRequired, true),
-            (DataKey::MerchantKyc(a.clone()), true),
+            (DataKey::PayoutSchedule(a.clone()), true),
         ]
     }
 
