@@ -2,7 +2,7 @@
 
 use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE, ProposalKind};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
 
 // ── Governance Proposal Tests ──────────────────────────────────────────────
 
@@ -133,7 +133,7 @@ fn test_invalid_quorum_bps() {
         &eta,
     );
 
-    assert!(result.unwrap().is_err());
+    assert!(result.is_err(), "proposal with quorum > 10000 must be rejected");
 }
 
 #[test]
@@ -145,6 +145,7 @@ fn test_eta_in_past_rejected() {
     let new_admin = Address::generate(&env);
     let (_, client) = init_vault(&env, &admin);
 
+    env.ledger().set_timestamp(1_000_000);
     let current_time = env.ledger().timestamp();
     let eta_in_past = current_time - 3600;  // 1 hour ago
 
@@ -158,7 +159,7 @@ fn test_eta_in_past_rejected() {
         &eta_in_past,
     );
 
-    assert!(result.unwrap().is_err());
+    assert!(result.is_err(), "proposal with past ETA must be rejected");
 }
 
 #[test]

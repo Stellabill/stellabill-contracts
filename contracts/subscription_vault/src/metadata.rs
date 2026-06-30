@@ -89,6 +89,11 @@ pub fn do_set_metadata_signed(
     // resolve.
     let sub = get_subscription(env, payload.subscription_id)?;
 
+    // Validate key/value lengths before building the message — avoids
+    // panicking in build_metadata_signed_message if the payload is
+    // over-length, and returns a clean error instead.
+    apply_metadata_value(env, payload.subscription_id, &payload.key, &payload.value)?;
+
     // Build the canonical message and verify the ed25519 signature against
     // the supplied pubkey. Verification hashes the message internally per
     // RFC 8032 — we feed it the raw canonical bytes.
@@ -135,8 +140,6 @@ pub fn do_set_metadata_signed(
         crate::nonce::DOMAIN_METADATA_SIGNED,
         payload.nonce,
     )?;
-
-    apply_metadata_value(env, payload.subscription_id, &payload.key, &payload.value)?;
 
     env.events().publish(
         (Symbol::new(env, "metadata_set_signed"), payload.subscription_id),
@@ -205,20 +208,18 @@ pub fn build_metadata_signed_message(
     let key_len_bytes = key_len.to_be_bytes();
     buf.extend_from_slice(&key_len_bytes);
     if key_len > 0 {
-        let mut key_buf = [0u8; MAX_METADATA_KEY_LENGTH as usize];
-        payload.key.copy_into_slice(&mut key_buf[..key_len as usize]);
-        buf.extend_from_slice(&key_buf[..key_len as usize]);
+        let mut key_buf = vec![0u8; key_len as usize];
+        payload.key.copy_into_slice(&mut key_buf);
+        buf.extend_from_slice(&key_buf);
     }
 
     let value_len: u32 = payload.value.len();
     let value_len_bytes = value_len.to_be_bytes();
     buf.extend_from_slice(&value_len_bytes);
     if value_len > 0 {
-        let mut value_buf = [0u8; MAX_METADATA_VALUE_LENGTH as usize];
-        payload
-            .value
-            .copy_into_slice(&mut value_buf[..value_len as usize]);
-        buf.extend_from_slice(&value_buf[..value_len as usize]);
+        let mut value_buf = vec![0u8; value_len as usize];
+        payload.value.copy_into_slice(&mut value_buf);
+        buf.extend_from_slice(&value_buf);
     }
 
     let nonce_bytes = payload.nonce.to_be_bytes();

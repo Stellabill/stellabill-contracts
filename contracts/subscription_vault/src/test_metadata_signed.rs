@@ -868,14 +868,12 @@ fn cross_domain_nonce_does_not_collide() {
 fn nonce_overflow_is_guarded() {
     let (env, client, _token, _admin) = setup();
     env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
     let sub_id = {
         let sub_key = KeyMaterial::fresh();
         let spk = bytes32(&env, &sub_key.pub_bytes);
         let subscriber = pubkey_to_address(&env, &spk);
         let merchant = Address::generate(&env);
-        let fresh_client = SubscriptionVaultClient::new(&env, &contract_id);
-        fresh_client.create_subscription(
+        client.create_subscription(
             &subscriber,
             &merchant,
             &amount(),
@@ -886,7 +884,7 @@ fn nonce_overflow_is_guarded() {
         )
     };
     let signer = Address::generate(&env);
-    env.as_contract(&contract_id, || {
+    env.as_contract(&client.address, || {
         // Seed the counter to u64::MAX and verify the next consume
         // overflows (returns Error::Overflow) instead of wrapping to 0.
         crate::nonce::check_and_advance(&env, &signer, crate::nonce::DOMAIN_METADATA_SIGNED, 0)
