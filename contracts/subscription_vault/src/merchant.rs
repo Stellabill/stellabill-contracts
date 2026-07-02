@@ -25,8 +25,7 @@ use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
     PayoutSchedule, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
-    MerchantBalanceSnapshotEvent, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
-    Subscription,
+    MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 

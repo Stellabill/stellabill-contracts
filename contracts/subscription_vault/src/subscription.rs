@@ -42,13 +42,13 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, ChargeFailureEvent, DataKey, Error, FundsDepositedEvent,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
     SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
+    SubscriptionRecoveryReadyEvent,
     SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
     SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
@@ -271,7 +271,7 @@ fn compute_subscriber_exposure(
         return Err(Error::InvalidInput);
     }
 
-    let storage = env.storage().instance();
+    let _storage = env.storage().instance();
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
@@ -1329,7 +1329,7 @@ pub fn do_set_global_cap_default(
         }
     }
 
-    let old_default = get_global_cap_default(env);
+    let _old_default = get_global_cap_default(env);
     let key = Symbol::new(env, "cap_default");
     match cap {
         Some(c) => env.storage().instance().set(&key, &c),
@@ -1361,7 +1361,7 @@ pub fn do_set_merchant_cap_default(
         }
     }
 
-    let old_default = get_merchant_cap_default_internal(env, &merchant);
+    let _old_default = get_merchant_cap_default_internal(env, &merchant);
     let key = (Symbol::new(env, "merch_cap"), merchant.clone());
     match cap {
         Some(c) => env.storage().instance().set(&key, &c),
@@ -1395,7 +1395,7 @@ pub fn do_update_subscription_cap(
     }
 
     let mut sub = get_subscription(env, subscription_id)?;
-    let old_cap = sub.lifetime_cap;
+    let _old_cap = sub.lifetime_cap;
 
     // Cannot set cap below what has already been charged.
     if let Some(new_c) = new_cap {
@@ -1697,6 +1697,7 @@ pub fn do_update_plan_template(
     Ok(new_plan_id)
 }
 
+#[allow(dead_code)]
 pub fn do_disable_plan_template(
     env: &Env,
     merchant: Address,

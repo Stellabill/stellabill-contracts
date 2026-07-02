@@ -14,9 +14,10 @@ use crate::types::{
     DataKey, Error, Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
     ProposalSubmittedEvent, ProposalVotedEvent, EVENT_SCHEMA_VERSION,
 };
-use soroban_sdk::{token, Address, Env, Map, String, Symbol, Vec};
+use soroban_sdk::{Address, Env, Map, String, Symbol, Vec};
 
 /// Governance domain for replay protection.
+#[allow(dead_code)]
 const DOMAIN_GOVERNANCE: u32 = 3;
 
 /// Add or update a guardian's voting weight.

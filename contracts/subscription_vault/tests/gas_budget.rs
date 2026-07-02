@@ -49,8 +49,9 @@ const BUDGET_CHARGE_CPU: u64 = 1_000_000;
 const BUDGET_CHARGE_READS: u64 = 30;
 const BUDGET_CHARGE_WRITES: u64 = 30;
 
-/// `withdraw_merchant_funds`: merchant balance read/write + token transfer.
-const BUDGET_WITHDRAW_CPU: u64 = 500_000;
+/// `withdraw_merchant_funds`: merchant balance read/write + token transfer +
+/// merchant config check.
+const BUDGET_WITHDRAW_CPU: u64 = 1_100_000;
 const BUDGET_WITHDRAW_READS: u64 = 20;
 const BUDGET_WITHDRAW_WRITES: u64 = 20;
 
@@ -87,6 +88,11 @@ fn make_env() -> (
     vault.init(&token.address, &7u32, &admin, &100i128, &(3 * 86_400u64));
 
     (env, vault, token, token_admin_client, admin)
+}
+
+fn init_merchant(vault: &SubscriptionVaultClient<'static>, merchant: &Address) {
+    let url = soroban_sdk::String::from_str(&vault.env, "https://example.com");
+    vault.initialize_merchant_config(merchant, merchant, &0, &0x1F, &None::<Address>, &url);
 }
 
 /// Print a `[Budget]` line, emit `[Warn]` if above threshold, and assert hard limits.
@@ -198,6 +204,7 @@ fn budget_withdraw_merchant_funds() {
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
     vault.charge_subscription(&sub_id, &None);
+    init_merchant(&vault, &merchant);
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &1_000i128);
@@ -264,6 +271,7 @@ fn budget_withdraw_dense_merchant_earnings() {
     for id in 0..20u32 {
         vault.charge_subscription(&id, &None);
     }
+    init_merchant(&vault, &merchant);
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &5_000i128);

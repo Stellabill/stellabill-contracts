@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE, ProposalKind};
+use crate::types::{OP_WITHDRAW, OP_REFUND, ProposalKind};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
 

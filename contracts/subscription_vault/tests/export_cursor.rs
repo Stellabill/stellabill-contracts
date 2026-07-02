@@ -8,11 +8,11 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    token::{Client as TokenClient, StellarAssetClient as TokenAdminClient},
+    token::StellarAssetClient as TokenAdminClient,
     Address, Env,
 };
 use std::vec::Vec;
-use subscription_vault::{SubscriptionStatus, SubscriptionSummary, SubscriptionVault, SubscriptionVaultClient};
+use subscription_vault::{SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
 
 const T0: u64 = 1_700_000_000;
 
@@ -61,7 +61,7 @@ fn create_subs(
 
 #[test]
 fn empty_contract_returns_empty_vec() {
-    let (env, client, admin, _token_admin) = setup();
+    let (_env, client, admin, _token_admin) = setup();
     let result = client.export_subscription_summaries(&admin, &0, &10);
     assert!(result.is_empty(), "expected no summaries on empty contract");
 }

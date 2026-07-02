@@ -12,7 +12,7 @@
 /// in deterministic hex-encoded ScVal format.
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::Address as _,
     Address, Env,
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
@@ -134,7 +134,7 @@ fn test_golden_contract_snapshot_determinism() {
 /// Golden test: contract snapshot is readonly.
 #[test]
 fn test_golden_contract_snapshot_readonly() {
-    let (env, client, admin) = setup_vault();
+    let (_env, client, admin) = setup_vault();
 
     // Read snapshot multiple times.
     let snap1 = client.export_contract_snapshot(&admin);

@@ -25,9 +25,11 @@ pub const SUB_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing statement secondary index TTL
 /// is extended.
+#[allow(dead_code)]
 pub const BILLING_STATEMENT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
 /// Target TTL for billing statement secondary index entries when extended.
+#[allow(dead_code)]
 pub const BILLING_STATEMENT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing period snapshot TTL is extended.
@@ -301,6 +303,7 @@ pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
 /// but active under `cfg(test)` and debug builds so CI trips the moment an
 /// unknown or mis-tiered key reaches instance storage.
 #[inline]
+#[allow(dead_code)]
 pub fn assert_known_data_key(key: &DataKey) {
     debug_assert!(
         key.is_known_instance_key(),
@@ -683,6 +686,7 @@ pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128
 }
 
 /// Denormalize an amount from 9 decimal places to token-specific decimals.
+#[allow(dead_code)]
 pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
     let decimals: u32 = env
         .storage()
@@ -1130,14 +1134,19 @@ pub struct PeriodBillingStatement {
 // ── status_flags bit constants (used by PeriodBillingStatement.status_flags) ─
 
 /// Period had at least one interval charge.
+#[allow(dead_code)]
 pub const STMT_FLAG_INTERVAL_CHARGED: u32 = 0b0000_0001;
 /// Period had at least one usage charge.
+#[allow(dead_code)]
 pub const STMT_FLAG_USAGE_CHARGED: u32 = 0b0000_0010;
 /// Period had at least one one-off charge.
+#[allow(dead_code)]
 pub const STMT_FLAG_ONEOFF_CHARGED: u32 = 0b0000_0100;
 /// Subscription was cancelled during this period.
+#[allow(dead_code)]
 pub const STMT_FLAG_CANCELLED: u32 = 0b0000_1000;
 /// Subscriber withdrew remaining balance; period is fully settled.
+#[allow(dead_code)]
 pub const STMT_FLAG_SETTLED: u32 = 0b0001_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────

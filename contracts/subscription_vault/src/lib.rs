@@ -324,9 +324,9 @@ pub mod operator {
 
     pub fn do_operator_batch_charge(
         env: &Env,
-        operator: Address,
-        ids: &Vec<u32>,
-        nonce: u64,
+        _operator: Address,
+        _ids: &Vec<u32>,
+        _nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
         Ok(Vec::new(env))
     }
@@ -1273,7 +1273,7 @@ impl SubscriptionVault {
         start_id: u32,
         subscriptions: Vec<SubscriptionSummary>,
         balances: Vec<MerchantBalanceEntry>,
-        next_start_id: Option<u32>,
+        _next_start_id: Option<u32>,
     ) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         if !get_emergency_stop(&env) {
@@ -1986,7 +1986,6 @@ impl SubscriptionVault {
         authorizer: Address,
     ) -> Result<(), Error> {
         subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
-        let sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
 
         let sub = queries::get_subscription(&env, subscription_id)?;
@@ -2035,7 +2034,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        let old_sub = queries::get_subscription(&env, subscription_id)?;
+        let _old_sub = queries::get_subscription(&env, subscription_id)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
         let sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
@@ -2132,8 +2131,8 @@ impl SubscriptionVault {
             charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
-        let period_start = old_sub.last_payment_timestamp;
-        let period_end = timestamp;
+        let _period_start = old_sub.last_payment_timestamp;
+        let _period_end = timestamp;
 
         env.events().publish(
             (Symbol::new(&env, "charged"),),

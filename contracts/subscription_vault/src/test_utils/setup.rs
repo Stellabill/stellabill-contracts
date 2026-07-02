@@ -5,6 +5,7 @@ pub struct TestEnv {
     pub env: Env,
     pub client: SubscriptionVaultClient<'static>,
     pub admin: Address,
+    #[allow(dead_code)]
     pub token: Address,
 }
 
@@ -27,10 +28,12 @@ impl Default for TestEnv {
 }
 
 impl TestEnv {
+    #[allow(dead_code)]
     pub fn stellar_token_client(&self) -> soroban_sdk::token::StellarAssetClient<'static> {
         soroban_sdk::token::StellarAssetClient::new(&self.env, &self.token)
     }
 
+    #[allow(dead_code)]
     pub fn jump(&self, seconds: u64) {
         self.env.ledger().set_timestamp(self.env.ledger().timestamp() + seconds);
     }
