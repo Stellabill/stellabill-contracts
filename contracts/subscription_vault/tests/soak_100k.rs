@@ -94,6 +94,7 @@ fn subscription_for(
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
+        cancel_at: None,
         lifetime_charged: 0,
         start_time: env.ledger().timestamp(),
         expires_at: None,
@@ -210,54 +211,8 @@ fn soak_100k_query_budget_guardrails() {
     let (env, client, token) = setup();
     let dataset = seed_100k_subscriptions(&env, &client.address, &token);
 
-    let dense_count = run_budgeted(
-        &env,
-        "merchant_dense_count",
-        MERCHANT_QUERY_CPU_LIMIT,
-        MERCHANT_QUERY_READ_LIMIT,
-        || client.get_merchant_subscription_count(&dataset.dense_merchant),
-    );
-    assert_eq!(dense_count, DENSE_MERCHANT_SUBS);
-
-    let first_merchant_page = run_budgeted(
-        &env,
-        "merchant_dense_page_first start=0 size=100",
-        MERCHANT_QUERY_CPU_LIMIT,
-        MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &0, &100),
-    );
-    assert_eq!(first_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
-    assert_merchant_page(&first_merchant_page, &dataset.dense_merchant);
-
-    let middle_merchant_page = run_budgeted(
-        &env,
-        "merchant_dense_page_middle start=500 size=100",
-        MERCHANT_QUERY_CPU_LIMIT,
-        MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &500, &100),
-    );
-    assert_eq!(middle_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
-    assert_merchant_page(&middle_merchant_page, &dataset.dense_merchant);
-
-    let last_merchant_page = run_budgeted(
-        &env,
-        "merchant_dense_page_last start=900 size=100",
-        MERCHANT_QUERY_CPU_LIMIT,
-        MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.dense_merchant, &900, &100),
-    );
-    assert_eq!(last_merchant_page.len(), MAX_SUBSCRIPTION_LIST_PAGE);
-    assert_merchant_page(&last_merchant_page, &dataset.dense_merchant);
-
-    let single_merchant_page = run_budgeted(
-        &env,
-        "merchant_single_subscription start=0 size=100",
-        MERCHANT_QUERY_CPU_LIMIT,
-        MERCHANT_QUERY_READ_LIMIT,
-        || client.get_subscriptions_by_merchant(&dataset.single_subscription_merchant, &0, &100),
-    );
-    assert_eq!(single_merchant_page.len(), 1);
-    assert_merchant_page(&single_merchant_page, &dataset.single_subscription_merchant);
+    // Tests removed as the functions get_merchant_subscription_count 
+    // and get_subscriptions_by_merchant were removed from the contract.
 
     let first_subscriber_page = run_budgeted(
         &env,

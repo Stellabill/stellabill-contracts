@@ -206,8 +206,8 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
         }
         ProposalKind::SetProtocolFee => {
             crate::admin::write_config(env, &DataKey::FeeBps, &proposal.target3);
-            if let Some(treasury) = proposal.target2 {
-                crate::admin::write_config(env, &DataKey::Treasury, &treasury);
+            if let Some(ref treasury) = proposal.target2 {
+                crate::admin::write_config(env, &DataKey::Treasury, treasury);
             }
         }
         ProposalKind::UpgradeContract => {

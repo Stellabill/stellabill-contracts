@@ -104,6 +104,18 @@ pub fn charge_one(
     let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
+    // ── Coupon discount (before protocol-fee split) ───────────────────────────
+    // Discount is applied to the oracle-resolved gross amount. The fee split and
+    // merchant credit then operate on `charge_amount` (the post-discount payable).
+    // This preserves: Gross = Discount + Merchant Net + Treasury Fee.
+    let (charge_amount, _discount_amount) = crate::coupon::apply_discount_at_charge(
+        env,
+        subscription_id,
+        now,
+        &sub.token,
+        charge_amount,
+    );
+
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
             if sub.status != SubscriptionStatus::Cancelled {

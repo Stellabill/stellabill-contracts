@@ -9,7 +9,7 @@ use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec, Bytes,
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Event schema version for backwards-compatible indexer decoding.
-pub const EVENT_SCHEMA_VERSION: u32 = 1;
+pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -166,12 +166,10 @@ pub enum DataKey {
     EmergencyStop,
     /// Merchant-wide pause flag.
     MerchantPaused(Address),
+    /// Payout schedule per merchant. Discriminant 11.
+    PayoutSchedule(Address),
     /// Detailed billing statement for a subscription charge.
     BillingStatement(u32, u32),
-    /// Secondary index for statements by subscription.
-    BillingStatementsBySubscription(u32),
-    /// Secondary index for statements by merchant.
-    BillingStatementsByMerchant(Address),
     /// Total accounted balance for recovery validation.
     TotalAccounted(Address),
     /// Replay protection key for recovery operations.
@@ -230,10 +228,6 @@ pub enum DataKey {
     Operator,
     /// Global billing statement retention configuration.
     BillingRetentionConfig,
-    /// Monotonic per-subscription statement sequence counter.
-    BillingStatementSequence(u32),
-    /// Aggregated totals from compacted billing statements.
-    BillingStatementAggregate(u32),
     /// Max concurrent active subscriptions allowed for a merchant.
     MerchantMaxSubs(Address),
     /// Global flag: when true, merchants must have an active KYC attestation to withdraw.
@@ -251,6 +245,8 @@ impl DataKey {
     pub const fn canonical_discriminant(&self) -> u32 {
         match self {
             DataKey::MerchantSubs(_) => 0,
+            DataKey::Kyc(KycKey::Required) => 49,
+            DataKey::Kyc(KycKey::Merchant(_)) => 50,
             DataKey::Token => 1,
             DataKey::Admin => 2,
             DataKey::MinTopup => 3,
@@ -262,8 +258,7 @@ impl DataKey {
             DataKey::EmergencyStop => 9,
             DataKey::MerchantPaused(_) => 10,
             DataKey::BillingStatement(_, _) => 11,
-            DataKey::BillingStatementsBySubscription(_) => 12,
-            DataKey::BillingStatementsByMerchant(_) => 13,
+            DataKey::PayoutSchedule(_) => 12,
             DataKey::TotalAccounted(_) => 14,
             DataKey::Recovery(_) => 15,
             DataKey::MerchantConfig(_) => 16,
@@ -293,8 +288,6 @@ impl DataKey {
             DataKey::MetadataKeys(_) => 40,
             DataKey::Operator => 41,
             DataKey::BillingRetentionConfig => 42,
-            DataKey::BillingStatementSequence(_) => 43,
-            DataKey::BillingStatementAggregate(_) => 44,
             DataKey::MerchantMaxSubs(_) => 45,
             DataKey::KycRequired => 46,
             DataKey::MerchantKyc(_) => 47,
@@ -392,6 +385,16 @@ impl Subscription {
     pub fn is_expired(&self, current_time: u64) -> bool {
         self.expires_at.map_or(false, |exp| current_time >= exp)
     }
+}
+
+/// A non-transferable (soulbound) credential badge linking a subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialBadge {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+    pub revoked: bool,
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -512,6 +515,20 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
+    /// Coupon code does not exist.
+    CouponNotFound = 6011,
+    /// Coupon has passed its expiration timestamp.
+    CouponExpired = 6012,
+    /// Coupon has reached its maximum global redemption count.
+    CouponRedemptionLimitReached = 6013,
+    /// Coupon has been explicitly revoked by the merchant.
+    CouponRevoked = 6014,
+    /// A coupon with this code already exists.
+    CouponAlreadyExists = 6015,
+    /// This subscription already has a coupon bound to it.
+    CouponAlreadyApplied = 6016,
+    /// Coupon token does not match the subscription's settlement token.
+    CouponTokenMismatch = 6017,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -788,6 +805,17 @@ pub struct OracleConfig {
     pub enabled: bool,
     pub oracle: Option<Address>,
     pub max_age_seconds: u64,
+    /// Which pricing strategy to use when resolving charge amounts.
+    pub kind: OracleKind,
+    /// TWAP: length of the sliding observation window in seconds.
+    /// Ignored when `kind != Twap`.
+    pub window_secs: u64,
+    /// FixedRate: numerator of the fixed price ratio (scaled to 10^7).
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_numerator: u128,
+    /// FixedRate: denominator of the fixed price ratio. Must be non-zero.
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_denominator: u128,
 }
 
 #[contracttype]
@@ -803,6 +831,10 @@ pub struct OracleConfigUpdatedEvent {
     pub enabled: bool,
     pub oracle: Option<Address>,
     pub max_age_seconds: u64,
+    pub kind: OracleKind,
+    pub window_secs: u64,
+    pub fixed_numerator: u128,
+    pub fixed_denominator: u128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1556,8 +1588,7 @@ mod known_keys_tests {
             (DataKey::EmergencyStop, true),
             (DataKey::MerchantPaused(a.clone()), true),
             (DataKey::BillingStatement(1, 2), false),
-            (DataKey::BillingStatementsBySubscription(1), false),
-            (DataKey::BillingStatementsByMerchant(a.clone()), false),
+            (DataKey::PayoutSchedule(a.clone()), false),
             (DataKey::TotalAccounted(a.clone()), true),
             (DataKey::Recovery(s.clone()), false),
             (DataKey::MerchantConfig(a.clone()), true),
@@ -1587,8 +1618,6 @@ mod known_keys_tests {
             (DataKey::MetadataKeys(1), false),
             (DataKey::Operator, true),
             (DataKey::BillingRetentionConfig, true),
-            (DataKey::BillingStatementSequence(1), false),
-            (DataKey::BillingStatementAggregate(1), false),
             (DataKey::MerchantMaxSubs(a.clone()), true),
             (DataKey::KycRequired, true),
             (DataKey::MerchantKyc(a.clone()), false),

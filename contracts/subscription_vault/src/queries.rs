@@ -46,7 +46,7 @@
 
 use crate::safe_math::{safe_mul, safe_sub};
 use crate::subscription::{extend_subscription_ttl, next_charge_time};
-use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
+use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus, normalize_amount, denormalize_amount};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 /// Maximum `limit` for [`get_subscriptions_by_merchant`] and [`get_subscriptions_by_token`]

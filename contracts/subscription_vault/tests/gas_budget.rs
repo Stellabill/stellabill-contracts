@@ -230,6 +230,16 @@ fn budget_withdraw_merchant_funds() {
 fn budget_charge_subscription_high_id() {
     let (env, vault, _token, token_admin, _admin) = make_env();
     let merchant = Address::generate(&env);
+
+    vault.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &0x1F,
+        &None,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
+
     let mut last_id = 0u32;
 
     setup_merchant(&env, &vault, &merchant);
