@@ -9741,3 +9741,100 @@ fn test_merchant_max_subs_and_plan_max_active_interaction() {
     let result_d = test_env.client.try_create_subscription_from_plan(&subscriber_d, &plan_id);
     assert_eq!(result_d, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
 }
+
+// ── Soulbound Credential Tests ───────────────────────────────────────────────
+
+#[test]
+fn test_credential_issued_on_creation() {
+    let (env, client, _token, _admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    let credential = client.get_credential(&id);
+    assert_eq!(credential.subscription_id, id);
+    assert_eq!(credential.tier, 1);
+    assert_eq!(credential.revoked, false);
+    assert!(client.is_credential_active(&id));
+    
+    // Check event emission
+    let events = env.events().all();
+    assert!(
+        has_event_with_symbol(&env, &events, "credential_issued"),
+        "credential_issued event must be emitted on creation"
+    );
+}
+
+#[test]
+fn test_credential_revoked_on_cancellation() {
+    let (env, client, _token, _admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    assert!(client.is_credential_active(&id));
+    
+    client.cancel_subscription(&id, &subscriber);
+    
+    assert!(!client.is_credential_active(&id));
+    
+    let credential = client.get_credential(&id);
+    assert_eq!(credential.revoked, true);
+    
+    let events = env.events().all();
+    assert!(
+        has_event_with_symbol(&env, &events, "credential_revoked"),
+        "credential_revoked event must be emitted on cancellation"
+    );
+}
+
+#[test]
+fn test_revoke_credential_authorization() {
+    let (env, client, _token, admin) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+
+    let unauthorized_user = Address::generate(&env);
+    let result = client.try_revoke_credential(&unauthorized_user, &id);
+    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    
+    assert!(client.is_credential_active(&id));
+
+    // Admin should be able to revoke
+    client.revoke_credential(&admin, &id);
+    assert!(!client.is_credential_active(&id));
+    
+    let events = env.events().all();
+    assert!(
+        has_event_with_symbol(&env, &events, "credential_revoked"),
+        "credential_revoked event must be emitted on manual revoke"
+    );
+}
