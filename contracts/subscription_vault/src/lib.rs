@@ -19,13 +19,14 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-mod queries; pub pub mod nonce;
-pub pub mod nonce;
-pub pub mod nonce;
+pub mod invariants;
+mod queries;
+pub mod nonce;
+mod period_snapshots;
 mod safe_math;
 mod subscription;
 mod types;
-
+mod validation; // <--- ADDED THIS LINE
 pub use safe_math::*;
 pub use types::{
     EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
@@ -44,7 +45,7 @@ pub mod statements {
         AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
         BillingStatementAggregate, BillingStatementsPage, Error,
     };
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn append_statement(
         env: &Env,
@@ -137,7 +138,7 @@ pub mod statements {
 pub mod accounting {
     #![allow(unused_variables, dead_code)]
     use crate::types::Error;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
         Ok(())
@@ -154,7 +155,7 @@ pub mod accounting {
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
     use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn resolve_charge_amount(
         _env: &Env,
@@ -258,6 +259,7 @@ mod reentrancy;
 ///
 /// Implementation lives in [`nonce.rs`].
 pub mod nonce;
+mod period_snapshots;
 
 /// Operator: least-privilege charge delegate.
 ///
