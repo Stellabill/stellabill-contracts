@@ -54,7 +54,7 @@ pub mod statements {
         AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
         BillingStatementAggregate, BillingStatementsPage, Error,
     };
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn append_statement(
         env: &Env,
@@ -134,7 +134,7 @@ pub mod statements {
 pub mod accounting {
     #![allow(unused_variables, dead_code)]
     use crate::types::Error;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
         Ok(())
