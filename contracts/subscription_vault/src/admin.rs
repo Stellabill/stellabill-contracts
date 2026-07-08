@@ -590,6 +590,7 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
             from_version: stored_version,
             to_version: 3,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 

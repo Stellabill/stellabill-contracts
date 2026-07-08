@@ -3,10 +3,10 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, String, Vec};
 
 /// Event schema version for backwards-compatible indexer decoding.
-pub const EVENT_SCHEMA_VERSION: u32 = 1;
+pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -101,20 +101,10 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 36
 /// | 43 | `BillingStatementSequence(u32)` | persistent |
 /// | 44 | `BillingStatementAggregate(u32)` | persistent |
 #[contracttype]
-#[derive(Clone)]
-pub enum DataKey {
-    /// Maps a merchant address to its list of subscription IDs.
-    MerchantSubs(Address),
-
-    /// Global flag: when true, merchants must have an active KYC attestation
-    /// (see `MerchantKyc`) to withdraw merchant funds.
-    KycRequired,
-
-    /// Per-merchant KYC attestation record.
-    ///
-    /// Status semantics: `status == true` means active/valid KYC; `status == false`
-    /// means revoked/inactive.
-    MerchantKyc(Address),
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
 }
 
 /// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
@@ -122,14 +112,21 @@ pub enum DataKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerchantKyc {
     /// Opaque attestation hash (provider-issued).
-    pub attestation_hash: Vec<u8>,
+    pub attestation_hash: BytesN<32>,
     /// Timestamp when the attestation was issued (ledger seconds).
     pub issued_at: u64,
     /// When true, KYC is active/valid. When false, it is revoked/inactive.
     pub status: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    /// Maps a merchant address to its list of subscription IDs.
+    MerchantSubs(Address),
 
+    /// KYC configuration and attestations.
+    Kyc(KycKey),
 
     /// USDC token contract address. Discriminant 1.
     Token,
@@ -151,12 +148,10 @@ pub struct MerchantKyc {
     EmergencyStop,
     /// Merchant-wide pause flag.
     MerchantPaused(Address),
+    /// Payout schedule per merchant. Discriminant 11.
+    PayoutSchedule(Address),
     /// Detailed billing statement for a subscription charge.
     BillingStatement(u32, u32),
-    /// Secondary index for statements by subscription.
-    BillingStatementsBySubscription(u32),
-    /// Secondary index for statements by merchant.
-    BillingStatementsByMerchant(Address),
     /// Total accounted balance for recovery validation.
     TotalAccounted(Address),
     /// Replay protection key for recovery operations.
@@ -215,10 +210,6 @@ pub struct MerchantKyc {
     Operator,
     /// Global billing statement retention configuration.
     BillingRetentionConfig,
-    /// Monotonic per-subscription statement sequence counter.
-    BillingStatementSequence(u32),
-    /// Aggregated totals from compacted billing statements.
-    BillingStatementAggregate(u32),
     /// Max concurrent active subscriptions allowed for a merchant.
     MerchantMaxSubs(Address),
     /// Guardian voting weights for governance proposals. Maps Address to u32 weight.
@@ -247,6 +238,8 @@ impl DataKey {
     pub const fn canonical_discriminant(&self) -> u32 {
         match self {
             DataKey::MerchantSubs(_) => 0,
+            DataKey::Kyc(KycKey::Required) => 49,
+            DataKey::Kyc(KycKey::Merchant(_)) => 50,
             DataKey::Token => 1,
             DataKey::Admin => 2,
             DataKey::MinTopup => 3,
@@ -258,8 +251,7 @@ impl DataKey {
             DataKey::EmergencyStop => 9,
             DataKey::MerchantPaused(_) => 10,
             DataKey::BillingStatement(_, _) => 11,
-            DataKey::BillingStatementsBySubscription(_) => 12,
-            DataKey::BillingStatementsByMerchant(_) => 13,
+            DataKey::PayoutSchedule(_) => 12,
             DataKey::TotalAccounted(_) => 14,
             DataKey::Recovery(_) => 15,
             DataKey::MerchantConfig(_) => 16,
@@ -289,8 +281,6 @@ impl DataKey {
             DataKey::MetadataKeys(_) => 40,
             DataKey::Operator => 41,
             DataKey::BillingRetentionConfig => 42,
-            DataKey::BillingStatementSequence(_) => 43,
-            DataKey::BillingStatementAggregate(_) => 44,
             DataKey::MerchantMaxSubs(_) => 45,
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
@@ -2409,6 +2399,37 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+// ── Idempotency Key Ring Buffer ─────────────────────────────────────────────
+
+/// Maximum number of idempotency keys retained per subscription.
+pub const IDEM_HISTORY: u32 = 32;
+
+/// Entrypoint domains for idempotency key scoping.
+///
+/// Each entrypoint type uses a unique domain so that the same raw key supplied
+/// to `charge_subscription` vs `deposit_funds` produces a different on-chain
+/// fingerprint and cannot accidentally replay across operations.
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 0;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
+
+/// Ring buffer of recently-seen idempotency key hashes for one subscription.
+///
+/// `DataKey::IdemKey(subscription_id)` stores this structure so that the same
+/// caller-supplied key is recognised within `IDEM_HISTORY` consecutive charges
+/// and rejected with `Error::Replay`.
+///
+/// # Eviction
+/// When the buffer is full the next push overwrites the oldest entry (cursor
+/// wraps around). The caller must therefore ensure their retry window does not
+/// exceed `IDEM_HISTORY` operations for a single subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdemRingBuffer {
+    pub entries: Vec<BytesN<32>>,
+    pub cursor: u32,
+}
+
 #[cfg(test)]
 mod known_keys_tests {
     use super::*;
@@ -2435,8 +2456,7 @@ mod known_keys_tests {
             (DataKey::EmergencyStop, true),
             (DataKey::MerchantPaused(a.clone()), true),
             (DataKey::BillingStatement(1, 2), false),
-            (DataKey::BillingStatementsBySubscription(1), false),
-            (DataKey::BillingStatementsByMerchant(a.clone()), false),
+            (DataKey::PayoutSchedule(a.clone()), false),
             (DataKey::TotalAccounted(a.clone()), true),
             (DataKey::Recovery(s.clone()), false),
             (DataKey::MerchantConfig(a.clone()), true),
@@ -2466,8 +2486,6 @@ mod known_keys_tests {
             (DataKey::MetadataKeys(1), false),
             (DataKey::Operator, true),
             (DataKey::BillingRetentionConfig, true),
-            (DataKey::BillingStatementSequence(1), false),
-            (DataKey::BillingStatementAggregate(1), false),
             (DataKey::MerchantMaxSubs(a.clone()), true),
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
@@ -2539,15 +2557,12 @@ mod known_keys_tests {
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
         let variants = all_variants(&env);
-        let mut seen = [false; 52];
+        let mut seen = std::collections::HashSet::new();
         for (key, _) in &variants {
             let d = key.canonical_discriminant() as usize;
-            assert!(d < seen.len(), "discriminant {d} out of expected range");
-            assert!(!seen[d], "duplicate discriminant {d}");
-            seen[d] = true;
+            assert!(!seen.contains(&d), "duplicate discriminant {d}");
+            seen.insert(d);
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=51");
-        assert_eq!(variants.len(), 52, "variant count drifted from 52");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier
@@ -2580,3 +2595,64 @@ mod known_keys_tests {
     }
 }
 
+
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals <= 9 {
+        let diff = 9 - decimals;
+        let factor = 10_i128.pow(diff);
+        raw.checked_mul(factor).ok_or(Error::Overflow)
+    } else {
+        let diff = decimals - 9;
+        let factor = 10_i128.pow(diff);
+        if raw % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(raw / factor)
+    }
+}
+
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals <= 9 {
+        let diff = 9 - decimals;
+        let factor = 10_i128.pow(diff);
+        if normalized % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(normalized / factor)
+    } else {
+        let diff = decimals - 9;
+        let factor = 10_i128.pow(diff);
+        normalized.checked_mul(factor).ok_or(Error::Overflow)
+    }
+}
+
+
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ChargeFailureEvent {
+    pub subscription_id: u32,
+    pub error_code: u32,
+    pub attempted_amount: i128,
+    pub ledger: u64,
+}

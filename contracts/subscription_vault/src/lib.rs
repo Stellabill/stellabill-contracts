@@ -19,10 +19,10 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-pub mod oracle_adapter;
-mod queries; pub pub mod nonce;
-pub pub mod nonce;
-pub pub mod nonce;
+mod queries;
+mod validation;
+pub mod period_snapshots;
+pub mod nonce;
 mod safe_math;
 mod subscription;
 mod types;
@@ -155,9 +155,7 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
-    use crate::admin::{read_config, write_config};
-    use crate::types::DataKey;
+    use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
     use soroban_sdk::{Address, Env, Symbol};
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
@@ -315,9 +313,6 @@ mod reentrancy;
 /// touched.
 ///
 /// Implementation lives in [`nonce.rs`].
-pub mod nonce;
-mod period_snapshots;
-
 /// Operator: least-privilege charge delegate.
 ///
 /// The operator is a second privileged role, distinct from admin, that may only
@@ -352,6 +347,7 @@ pub mod operator {
                 admin,
                 operator,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -365,6 +361,7 @@ pub mod operator {
             crate::types::OperatorRemovedEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -430,8 +427,7 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
-    BulkCancelEvent, BulkPauseEvent, BulkSubscriptionResult, BATCH_MAX_SIZE,
+    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -439,8 +435,8 @@ pub use types::{
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OracleConfigUpdatedEvent, OracleKind, OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
-    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
+    ProtocolFeeChargedEvent, RecoveryEvent, RecoveryReason,
     ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -454,6 +450,7 @@ pub use types::{
     DEFAULT_ALLOWED_OPS,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
     OperatorRemovedEvent, OperatorSetEvent,
+    OracleLivenessEvent,
     PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
     TokenLiabilities,
     FullSnapshotPage, MerchantBalanceEntry, SnapshotExportedEvent, SnapshotRestoredEvent,
@@ -1441,7 +1438,7 @@ impl SubscriptionVault {
 
         // Write subscriptions into persistent storage.
         let mut i = 0u32;
-        while (i as usize) < subscriptions.len() {
+        while i < subscriptions.len() {
             if let Some(s) = subscriptions.get(i) {
                 let sub = Subscription {
                     subscriber: s.subscriber.clone(),
@@ -1458,6 +1455,7 @@ impl SubscriptionVault {
                     start_time: s.start_time,
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
+                    cancel_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1475,7 +1473,7 @@ impl SubscriptionVault {
 
         // Write merchant balances (instance storage)
         let mut j = 0u32;
-        while (j as usize) < balances.len() {
+        while j < balances.len() {
             if let Some(b) = balances.get(j) {
                 env.storage()
                     .instance()
@@ -3889,6 +3887,7 @@ mod test_utils;
 
 #[cfg(test)]
 mod test_metadata_signed;
+#[cfg(test)]
 mod test_charge_invariants;
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ fn setup() -> (
     );
 
     // Deposit funds
-    client.deposit_funds(&sub_id, &subscriber, &30_000_000);
+    client.deposit_funds(&sub_id, &subscriber, &30_000_000, &None);
 
     (
         env, client, sub_id, subscriber, merchant, stranger,
@@ -187,7 +187,7 @@ fn test_cancel_refunds_prepaid_balance() {
         &None,
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &deposit);
+    client.deposit_funds(&sub_id, &subscriber, &deposit, &None);
 
     // Confirm vault holds the deposit
     let contract_balance_before = token_client.balance(&contract_id);

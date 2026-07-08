@@ -26,6 +26,16 @@ pub fn create_subscription_detailed(
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
 
+    use soroban_sdk::String;
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(env, "https://example.com"),
+    );
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,
@@ -51,6 +61,21 @@ pub fn create_subscription_with_merchant(
     merchant: Address,
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
+    use soroban_sdk::String;
+    // We try to initialize merchant, but it might already be initialized.
+    // However, initialize_merchant_config overwrites or we can just ignore failure.
+    // Better: let's only init if we generated it, but since `merchant` is passed in, 
+    // it might be cleaner to just call it and ignore error, or expect the caller to init it.
+    // Wait, let's just initialize it.
+    let _ = client.try_initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(env, "https://example.com"),
+    );
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,

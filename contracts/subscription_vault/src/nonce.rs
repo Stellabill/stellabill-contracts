@@ -42,6 +42,7 @@ pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 /// be replayed into a higher-privilege domain. Auth check (signer must be
 /// subscriber or merchant) runs **before** the nonce check.
 pub const DOMAIN_METADATA_SIGNED: u32 = 3;
+pub const DOMAIN_MERCHANT_ROTATION: u32 = 4;
 
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.

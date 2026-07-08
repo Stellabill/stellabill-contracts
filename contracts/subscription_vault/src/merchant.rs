@@ -24,6 +24,7 @@ use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    PayoutSchedule, ScheduledPayoutEvent,
     TokenEarnings, TokenReconciliationSnapshot, MerchantBalanceSnapshotEvent, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE, Subscription,
 };
@@ -612,6 +613,7 @@ crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
             amount: balance,
             remaining_balance: 0,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
