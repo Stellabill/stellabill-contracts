@@ -1171,6 +1171,21 @@ pub const STMT_FLAG_SETTLED: u32 = 0b0001_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Selects the pricing strategy to use when resolving a charge amount.
+///
+/// Stored inside [`OracleConfig`] and dispatched by `resolve_charge_amount`.
+/// Defaults to `Spot` for backwards compatibility when not explicitly set.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    /// Use the latest single price sample from the oracle (default behaviour).
+    Spot,
+    /// Use the median price across a sliding time window to resist manipulation.
+    Twap,
+    /// Use a fixed numerator/denominator ratio; no oracle reads are performed.
+    FixedRate,
+}
+
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1179,6 +1194,17 @@ pub struct OracleConfig {
     pub oracle: Option<Address>,
     /// Maximum acceptable price age in seconds.
     pub max_age_seconds: u64,
+    /// Which pricing strategy to use when resolving charge amounts.
+    pub kind: OracleKind,
+    /// TWAP: length of the sliding observation window in seconds.
+    /// Ignored when `kind != Twap`.
+    pub window_secs: u64,
+    /// FixedRate: numerator of the fixed price ratio (scaled to 10^7).
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_numerator: u128,
+    /// FixedRate: denominator of the fixed price ratio. Must be non-zero.
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_denominator: u128,
 }
 
 /// Price payload returned by oracle contract view methods.
@@ -1198,6 +1224,10 @@ pub struct OracleConfigUpdatedEvent {
     pub enabled: bool,
     pub oracle: Option<Address>,
     pub max_age_seconds: u64,
+    pub kind: OracleKind,
+    pub window_secs: u64,
+    pub fixed_numerator: u128,
+    pub fixed_denominator: u128,
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
