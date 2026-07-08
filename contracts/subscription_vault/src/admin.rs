@@ -139,6 +139,32 @@ pub fn require_stored_admin_auth(env: &Env) -> Result<Address, Error> {
     Ok(stored_admin)
 }
 
+/// Authorize `caller` as **either** the stored admin **or** the stored operator.
+///
+/// Used by the bulk pause/cancel operational tooling, which both privileged roles
+/// may invoke. `caller.require_auth()` runs first (so an unauthenticated caller is
+/// rejected before any identity comparison), then the address must match the
+/// stored admin or operator; anything else returns [`Error::Unauthorized`].
+///
+/// This deliberately does **not** widen any other surface: the operator still has
+/// no access to fund withdrawal, admin rotation, or governance.
+pub fn require_admin_or_operator_auth(env: &Env, caller: &Address) -> Result<(), Error> {
+    caller.require_auth();
+
+    let stored_admin = require_admin(env)?;
+    if caller == &stored_admin {
+        return Ok(());
+    }
+
+    if let Some(stored_op) = crate::operator::get_operator(env) {
+        if caller == &stored_op {
+            return Ok(());
+        }
+    }
+
+    Err(Error::Unauthorized)
+}
+
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
     if min_topup <= 0 {
