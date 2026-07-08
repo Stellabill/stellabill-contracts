@@ -71,15 +71,11 @@ fn serialize_to_hex<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
     env: &Env,
     value: T,
 ) -> String {
-    // Convert value to Val using the environment's serialization.
+    use soroban_sdk::{TryIntoVal, xdr::{ScVal, WriteXdr, Limits}};
     let val: soroban_sdk::Val = value.into_val(env);
-    
-    // The Val's debug representation is deterministic for testing purposes.
-    // For production, this should use explicit XDR serialization.
-    // For now, we create a deterministic representation by using the Val's
-    // stable string representation (which includes type info).
-    let repr = format!("{:?}", val);
-    hex::encode(repr.as_bytes())
+    let scval: ScVal = val.try_into_val(env).expect("failed to convert Val to ScVal");
+    let bytes = scval.to_xdr(Limits::none()).expect("failed to serialize ScVal to XDR");
+    hex::encode(bytes)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -90,6 +86,7 @@ fn serialize_to_hex<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
 fn setup_vault() -> (Env, SubscriptionVaultClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);

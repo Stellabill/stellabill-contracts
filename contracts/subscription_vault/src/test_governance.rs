@@ -189,8 +189,8 @@ fn test_cancel_proposal() {
     client.cancel_proposal(&proposal_id, &reason);
 
     // Verify it's marked as executed (and thus immutable)
-    let proposal = client.get_proposal(&proposal_id).unwrap();
-    assert_eq!(proposal.executed, true);
+    let proposal = client.get_proposal(&proposal_id);
+    assert_eq!(proposal.unwrap().executed, true);
 }
 
 #[test]

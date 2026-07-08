@@ -94,6 +94,7 @@ fn subscription_for(
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
+        cancel_at: None,
         lifetime_charged: 0,
         start_time: env.ledger().timestamp(),
         expires_at: None,

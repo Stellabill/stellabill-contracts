@@ -5057,6 +5057,10 @@ fn test_oracle_enabled_charge_uses_quote_conversion() {
         &true,
         &Some(oracle_id.clone()),
         &(60 * 24 * 60 * 60),
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
     );
 
     let subscriber = Address::generate(&test_env.env);
@@ -5087,7 +5091,7 @@ fn test_oracle_stale_quote_rejected() {
     let oracle_id = test_env.env.register(MockOracle, ());
     let oracle = MockOracleClient::new(&test_env.env, &oracle_id);
     oracle.set_price(&2_000_000i128, &T0); // stale vs max_age=1
-    test_env.client.set_oracle_config(&test_env.admin, &true, &Some(oracle_id.clone()), &1u64);
+    test_env.client.set_oracle_config(&test_env.admin, &true, &Some(oracle_id.clone()), &1u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
 
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
@@ -5756,7 +5760,7 @@ fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoint
     assert_eq!(
         test_env
             .client
-            .try_set_oracle_config(&stranger, &false, &None::<Address>, &0u64),
+            .try_set_oracle_config(&stranger, &false, &None::<Address>, &0u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -5866,7 +5870,7 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
     assert_eq!(
         test_env
             .client
-            .try_set_oracle_config(&test_env.admin, &false, &None::<Address>, &0u64),
+            .try_set_oracle_config(&test_env.admin, &false, &None::<Address>, &0u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -6961,7 +6965,7 @@ fn setup_oracle_env<'a>(
     let oracle_id = env.register(MockOracle, ());
     let oracle = MockOracleClient::new(env, &oracle_id);
     oracle.set_price(&price, &price_ts);
-    client.set_oracle_config(admin, &true, &Some(oracle_id), &max_age_seconds);
+    client.set_oracle_config(admin, &true, &Some(oracle_id), &max_age_seconds, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
 
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
@@ -6987,7 +6991,7 @@ fn test_set_oracle_config_enabled_without_address_fails() {
     let result =
         test_env
             .client
-            .try_set_oracle_config(&test_env.admin, &true, &None::<Address>, &60u64);
+            .try_set_oracle_config(&test_env.admin, &true, &None::<Address>, &60u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
     assert_eq!(result, Err(Ok(Error::OracleNotConfigured)));
 }
 
@@ -6998,7 +7002,7 @@ fn test_set_oracle_config_enabled_with_zero_max_age_fails() {
     let result =
         test_env
             .client
-            .try_set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &0u64);
+            .try_set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &0u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
@@ -7009,7 +7013,7 @@ fn test_set_oracle_config_disabled_with_zero_max_age_succeeds() {
     let oracle_id = test_env.env.register(MockOracle, ());
     test_env
         .client
-        .set_oracle_config(&test_env.admin, &false, &Some(oracle_id), &0u64);
+        .set_oracle_config(&test_env.admin, &false, &Some(oracle_id), &0u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
     let cfg = test_env.client.get_oracle_config();
     assert!(!cfg.enabled);
 }
@@ -7019,7 +7023,7 @@ fn test_set_oracle_config_disabled_with_no_address_succeeds() {
     let test_env = TestEnv::default();
     test_env
         .client
-        .set_oracle_config(&test_env.admin, &false, &None::<Address>, &0u64);
+        .set_oracle_config(&test_env.admin, &false, &None::<Address>, &0u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
     let cfg = test_env.client.get_oracle_config();
     assert!(!cfg.enabled);
     assert!(cfg.oracle.is_none());
@@ -7140,7 +7144,7 @@ fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
     oracle.set_price(&2_000_000i128, &price_ts);
     test_env
         .client
-        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &max_age);
+        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &max_age, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
 
     test_env.env.ledger().set_timestamp(T0);
     let subscriber = Address::generate(&test_env.env);
@@ -7189,7 +7193,7 @@ fn test_oracle_price_one_second_past_max_age_rejected() {
     oracle.set_price(&2_000_000i128, &price_ts);
     test_env
         .client
-        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &max_age);
+        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id), &max_age, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
 
     test_env.env.ledger().set_timestamp(T0);
     let subscriber = Address::generate(&test_env.env);
@@ -7303,12 +7307,13 @@ fn test_get_oracle_config_reflects_set_values() {
     let oracle_id = test_env.env.register(MockOracle, ());
     test_env
         .client
-        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id.clone()), &120u64);
+        .set_oracle_config(&test_env.admin, &true, &Some(oracle_id.clone()), &120u64, &crate::OracleKind::Spot, &0u64, &0u128, &1u128);
 
     let cfg = test_env.client.get_oracle_config();
     assert!(cfg.enabled);
     assert_eq!(cfg.oracle, Some(oracle_id));
     assert_eq!(cfg.max_age_seconds, 120u64);
+    assert_eq!(cfg.kind, crate::OracleKind::Spot);
 }
 
 #[test]
@@ -7318,6 +7323,178 @@ fn test_get_oracle_config_default_is_disabled() {
     assert!(!cfg.enabled);
     assert!(cfg.oracle.is_none());
     assert_eq!(cfg.max_age_seconds, 0u64);
+    assert_eq!(cfg.kind, crate::OracleKind::Spot);
+}
+
+// ── OracleAdapter Tests ───────────────────────────────────────────────────────
+
+#[test]
+fn test_oracle_kind_spot_config_persists() {
+    let test_env = TestEnv::default();
+    let oracle_id = test_env.env.register(MockOracle, ());
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle_id.clone()),
+        &3600u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.kind, crate::OracleKind::Spot);
+    assert!(cfg.enabled);
+}
+
+#[test]
+fn test_oracle_kind_twap_config_persists() {
+    let test_env = TestEnv::default();
+    let oracle_id = test_env.env.register(MockOracle, ());
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle_id.clone()),
+        &3600u64,
+        &crate::OracleKind::Twap,
+        &600u64, // 10-minute window
+        &0u128,
+        &1u128,
+    );
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.kind, crate::OracleKind::Twap);
+    assert_eq!(cfg.window_secs, 600u64);
+}
+
+#[test]
+fn test_oracle_kind_fixed_rate_config_persists() {
+    let test_env = TestEnv::default();
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &None::<Address>,
+        &0u64,
+        &crate::OracleKind::FixedRate,
+        &0u64,
+        &2u128,  // numerator: 2
+        &1u128,  // denominator: 1 → price = 2 * 10^7
+    );
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.kind, crate::OracleKind::FixedRate);
+    assert_eq!(cfg.fixed_numerator, 2u128);
+    assert_eq!(cfg.fixed_denominator, 1u128);
+}
+
+#[test]
+fn test_oracle_fixed_rate_zero_denominator_rejected() {
+    let test_env = TestEnv::default();
+    let result = test_env.client.try_set_oracle_config(
+        &test_env.admin,
+        &true,
+        &None::<Address>,
+        &0u64,
+        &crate::OracleKind::FixedRate,
+        &0u64,
+        &1u128,
+        &0u128, // denominator = 0 → should fail
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn test_oracle_config_updated_event_contains_kind() {
+    let test_env = TestEnv::default();
+    let oracle_id = test_env.env.register(MockOracle, ());
+    test_env.env.ledger().set_timestamp(T0);
+
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle_id.clone()),
+        &3600u64,
+        &crate::OracleKind::Twap,
+        &300u64,
+        &0u128,
+        &1u128,
+    );
+
+    let events = test_env.env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        if let Some(first) = topics.get(0) {
+            if soroban_sdk::Symbol::from_val(&test_env.env, &first)
+                == soroban_sdk::Symbol::new(&test_env.env, "oracle_config_updated")
+            {
+                let evt: crate::OracleConfigUpdatedEvent =
+                    soroban_sdk::FromVal::from_val(&test_env.env, &data);
+                assert_eq!(evt.kind, crate::OracleKind::Twap);
+                assert_eq!(evt.window_secs, 300u64);
+                assert!(evt.enabled);
+                found = true;
+            }
+        }
+    }
+    assert!(found, "oracle_config_updated event must be emitted on config change");
+}
+
+#[test]
+fn test_oracle_adapter_dispatch_fixed_rate_non_admin_rejected() {
+    let test_env = TestEnv::default();
+    let stranger = Address::generate(&test_env.env);
+    let result = test_env.client.try_set_oracle_config(
+        &stranger,
+        &true,
+        &None::<Address>,
+        &0u64,
+        &crate::OracleKind::FixedRate,
+        &0u64,
+        &2u128,
+        &1u128,
+    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_fixed_rate_adapter_quote_logic() {
+    // Unit-test the FixedRateAdapter directly (no contract invocation needed).
+    use crate::oracle_adapter::{FixedRateAdapter, OracleAdapter, PRICE_SCALE};
+    use crate::types::{OracleConfig, OracleKind};
+
+    let env = Env::default();
+    let dummy = Address::generate(&env);
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: None,
+        max_age_seconds: 0,
+        kind: OracleKind::FixedRate,
+        window_secs: 0,
+        fixed_numerator: 3,
+        fixed_denominator: 2,
+    };
+    // Expected: (3 * 10_000_000) / 2 = 15_000_000
+    let price = FixedRateAdapter::quote(&env, &config, &dummy, &dummy).unwrap();
+    assert_eq!(price, (3 * PRICE_SCALE) / 2);
+}
+
+#[test]
+fn test_fixed_rate_adapter_zero_denominator_errors() {
+    use crate::oracle_adapter::{FixedRateAdapter, OracleAdapter};
+    use crate::types::{Error, OracleConfig, OracleKind};
+
+    let env = Env::default();
+    let dummy = Address::generate(&env);
+    let config = OracleConfig {
+        enabled: true,
+        oracle: None,
+        max_age_seconds: 0,
+        kind: OracleKind::FixedRate,
+        window_secs: 0,
+        fixed_numerator: 1,
+        fixed_denominator: 0, // invalid
+    };
+    let result = FixedRateAdapter::quote(&env, &config, &dummy, &dummy);
+    assert_eq!(result, Err(Error::InvalidInput));
 }
 
 // -- Storage Layout Compatibility Tests ---------------------------------------

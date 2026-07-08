@@ -174,7 +174,7 @@ pub fn get_metadata_signed_nonce(env: &Env, signer: Address) -> u64 {
 ///
 /// Layout (all multi-byte integers big-endian, no padding):
 ///
-/// ```
+/// ```text
 ///   SIGNED_MSG_DOMAIN_TAG (32 bytes)
 /// || subscription_id   (4 bytes, u32 BE)
 /// || key_len           (4 bytes, u32 BE)
@@ -199,7 +199,7 @@ pub fn build_metadata_signed_message(
     network_id: &BytesN<32>,
 ) -> Bytes {
     let mut buf = Bytes::new(env);
-    buf.extend_from_slice(&SIGNED_MSG_DOMAIN_TAG[..]);
+    buf.extend_from_slice(&DOMAIN_METADATA_SIGNED[..]);
 
     let sub_id_bytes = payload.subscription_id.to_be_bytes();
     buf.extend_from_slice(&sub_id_bytes);

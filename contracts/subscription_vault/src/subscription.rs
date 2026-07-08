@@ -50,7 +50,7 @@ use crate::types::{
     SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent,
     SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -463,6 +463,26 @@ pub fn do_create_subscription_with_token(
         },
     );
 
+    // Issue soulbound credential
+    let credential = crate::types::CredentialBadge {
+        subscription_id: id,
+        tier: 1,
+        issued_at: env.ledger().timestamp(),
+        revoked: false,
+    };
+    env.storage().persistent().set(&DataKey::Credential(id), &credential);
+    // Extend TTL of credential just like subscription
+    env.storage().persistent().extend_ttl(&DataKey::Credential(id), SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+    
+    env.events().publish(
+        (Symbol::new(env, "credential_issued"), id),
+        crate::types::CredentialIssuedEvent {
+            subscription_id: id,
+            tier: 1,
+            issued_at: env.ledger().timestamp(),
+        },
+    );
+
     Ok(id)
 }
 
@@ -615,7 +635,7 @@ pub fn do_cancel_subscription(
 ) -> Result<(), Error> {
     authorizer.require_auth();
 
-    let mut sub = get_subscription(env, subscription_id)?;
+    let sub = get_subscription(env, subscription_id)?;
 
     if sub.is_expired(env.ledger().timestamp()) {
         return Err(Error::SubscriptionExpired);
@@ -630,6 +650,26 @@ pub fn do_cancel_subscription(
         return Err(Error::InvalidStatusTransition);
     }
 
+    apply_cancellation(env, subscription_id, sub, authorizer)
+}
+
+/// Mutation tail shared by single ([`do_cancel_subscription`]) and bulk
+/// ([`do_bulk_cancel_subscriptions`]) cancellation paths.
+///
+/// The caller is responsible for **all** authorization and for verifying that
+/// `sub` is neither expired nor already `Cancelled`. This helper transitions to
+/// `Cancelled`, refunds any remaining prepaid balance to the subscriber using
+/// the Checks-Effects-Interactions order, removes the id from the merchant,
+/// token, and subscriber indexes, and emits [`SubscriptionCancelledEvent`].
+///
+/// `authorizer` is recorded verbatim in the emitted event (the admin/operator on
+/// the bulk path, or the subscriber/merchant on the single path).
+fn apply_cancellation(
+    env: &Env,
+    subscription_id: u32,
+    mut sub: Subscription,
+    authorizer: Address,
+) -> Result<(), Error> {
     transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
 
@@ -691,6 +731,23 @@ pub fn do_cancel_subscription(
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
+
+    // Revoke soulbound credential if it exists
+    if let Some(mut credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+        if !credential.revoked {
+            credential.revoked = true;
+            env.storage().persistent().set(&DataKey::Credential(subscription_id), &credential);
+            
+            env.events().publish(
+                (Symbol::new(env, "credential_revoked"), subscription_id),
+                crate::types::CredentialRevokedEvent {
+                    subscription_id,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -810,7 +867,7 @@ pub fn do_pause_subscription(
 ) -> Result<(), Error> {
     authorizer.require_auth();
 
-    let mut sub = get_subscription(env, subscription_id)?;
+    let sub = get_subscription(env, subscription_id)?;
 
     if sub.is_expired(env.ledger().timestamp()) {
         return Err(Error::SubscriptionExpired);
@@ -825,13 +882,29 @@ pub fn do_pause_subscription(
         return Ok(());
     }
 
+    apply_pause(env, subscription_id, sub, authorizer)
+}
+
+/// Mutation tail shared by single ([`do_pause_subscription`]) and bulk
+/// ([`do_bulk_pause_subscriptions`]) pause paths.
+///
+/// The caller is responsible for **all** authorization and for verifying that
+/// `sub` is neither expired nor already `Paused`. This helper performs the
+/// `Active -> Paused` transition, persists it, and emits [`SubscriptionPausedEvent`].
+/// `authorizer` is recorded verbatim in the emitted event.
+fn apply_pause(
+    env: &Env,
+    subscription_id: u32,
+    mut sub: Subscription,
+    authorizer: Address,
+) -> Result<(), Error> {
     transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
 
     write_subscription(env, subscription_id, &sub);
 
     env.events().publish(
         (Symbol::new(env, "sub_paused"), subscription_id),
-        crate::types::SubscriptionPausedEvent {
+        SubscriptionPausedEvent {
             subscription_id,
             subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
@@ -905,6 +978,250 @@ pub fn do_resume_subscription(
     );
 
     Ok(())
+}
+
+// ── Bulk admin/operator pause & cancel ──────────────────────────────────────
+//
+// Operational-hygiene tooling for offboarding or containing a compromised
+// merchant. Both endpoints are authorized by the stored admin *or* operator,
+// guarded by a per-batch nonce, and are *partial-failure tolerant*: a bad id
+// (missing, expired, already in the target state, non-transitionable) is
+// recorded in the returned per-id outcome vector and the batch continues.
+//
+// Reuse note: each id is driven through the same `apply_pause` /
+// `apply_cancellation` helpers as the single-subscription endpoints, so refund,
+// index-removal, state-machine, and event semantics are identical — only the
+// authorization surface differs (admin/operator instead of subscriber/merchant).
+
+/// Build the per-id outcome for a hard failure (no state change).
+fn bulk_failed(subscription_id: u32, err: Error) -> BulkSubscriptionResult {
+    BulkSubscriptionResult {
+        subscription_id,
+        success: false,
+        changed: false,
+        error_code: err.to_code(),
+    }
+}
+
+/// Build the per-id outcome for an id that already sat in the target state
+/// (idempotent no-op — counted as a success but with `changed = false`).
+fn bulk_skipped(subscription_id: u32) -> BulkSubscriptionResult {
+    BulkSubscriptionResult {
+        subscription_id,
+        success: true,
+        changed: false,
+        error_code: 0,
+    }
+}
+
+/// Build the per-id outcome for an id that was transitioned by this call.
+fn bulk_changed(subscription_id: u32) -> BulkSubscriptionResult {
+    BulkSubscriptionResult {
+        subscription_id,
+        success: true,
+        changed: true,
+        error_code: 0,
+    }
+}
+
+/// Pause a single id on behalf of an already-authorized admin/operator batch.
+///
+/// Never aborts: returns a [`BulkSubscriptionResult`] describing the outcome.
+/// Already-`Paused` ids are skipped as no-ops; missing/expired/non-transitionable
+/// ids are reported as failures.
+fn bulk_pause_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubscriptionResult {
+    let sub = match get_subscription(env, subscription_id) {
+        Ok(s) => s,
+        Err(e) => return bulk_failed(subscription_id, e),
+    };
+
+    if sub.is_expired(env.ledger().timestamp()) {
+        return bulk_failed(subscription_id, Error::SubscriptionExpired);
+    }
+
+    // Idempotent: already paused — skip without aborting the batch.
+    if sub.status == SubscriptionStatus::Paused {
+        return bulk_skipped(subscription_id);
+    }
+
+    match apply_pause(env, subscription_id, sub, caller.clone()) {
+        Ok(()) => bulk_changed(subscription_id),
+        Err(e) => bulk_failed(subscription_id, e),
+    }
+}
+
+/// Cancel a single id on behalf of an already-authorized admin/operator batch.
+///
+/// Never aborts: returns a [`BulkSubscriptionResult`] describing the outcome.
+/// Already-`Cancelled` ids are skipped as no-ops; missing/expired/non-transitionable
+/// ids are reported as failures.
+fn bulk_cancel_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubscriptionResult {
+    let sub = match get_subscription(env, subscription_id) {
+        Ok(s) => s,
+        Err(e) => return bulk_failed(subscription_id, e),
+    };
+
+    if sub.is_expired(env.ledger().timestamp()) {
+        return bulk_failed(subscription_id, Error::SubscriptionExpired);
+    }
+
+    // Idempotent: already cancelled — skip without aborting the batch.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return bulk_skipped(subscription_id);
+    }
+
+    match apply_cancellation(env, subscription_id, sub, caller.clone()) {
+        Ok(()) => bulk_changed(subscription_id),
+        Err(e) => bulk_failed(subscription_id, e),
+    }
+}
+
+/// Validate the shared preconditions for a bulk batch and consume its nonce.
+///
+/// Order is security-critical:
+/// 1. Authorize `caller` as admin or operator (auth runs before any state touch).
+/// 2. Reject oversized batches *before* the nonce is consumed, so a rejected
+///    batch never burns a nonce.
+/// 3. Treat an empty list as an explicit no-op: it consumes no nonce and emits
+///    no envelope event (`Ok(false)` — "do not proceed").
+/// 4. Otherwise consume the per-batch nonce and return `Ok(true)` — "proceed".
+///
+/// The nonce shares the `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller
+/// address, so admin and operator each maintain an independent monotonic sequence.
+fn bulk_precheck(
+    env: &Env,
+    caller: &Address,
+    ids: &Vec<u32>,
+    nonce: u64,
+) -> Result<bool, Error> {
+    crate::admin::require_admin_or_operator_auth(env, caller)?;
+
+    if ids.len() > BATCH_MAX_SIZE {
+        return Err(Error::BatchTooLarge);
+    }
+
+    // Empty list: explicit no-op. No nonce burned, no envelope event.
+    if ids.is_empty() {
+        return Ok(false);
+    }
+
+    crate::nonce::check_and_advance(
+        env,
+        caller,
+        crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE,
+        nonce,
+    )?;
+
+    Ok(true)
+}
+
+/// Bulk-pause a list of subscriptions. Admin or operator only.
+///
+/// See [`bulk_precheck`] for the auth/size/nonce contract. Each id is processed
+/// independently; the returned vector has exactly one [`BulkSubscriptionResult`]
+/// per requested id, in request order. Duplicate ids are handled naturally: the
+/// first occurrence transitions the subscription, later occurrences observe it
+/// already `Paused` and are skipped.
+///
+/// On a non-empty batch, emits a single [`BulkPauseEvent`] envelope summarising
+/// the counts. The per-id `SubscriptionPausedEvent`s are emitted by `apply_pause`.
+pub fn do_bulk_pause_subscriptions(
+    env: &Env,
+    caller: Address,
+    ids: &Vec<u32>,
+    nonce: u64,
+) -> Result<Vec<BulkSubscriptionResult>, Error> {
+    if !bulk_precheck(env, &caller, ids, nonce)? {
+        return Ok(Vec::new(env));
+    }
+
+    let mut results = Vec::new(env);
+    let mut paused = 0u32;
+    let mut skipped = 0u32;
+    let mut failed = 0u32;
+
+    for id in ids.iter() {
+        let r = bulk_pause_one(env, id, &caller);
+        if !r.success {
+            failed += 1;
+        } else if r.changed {
+            paused += 1;
+        } else {
+            skipped += 1;
+        }
+        results.push_back(r);
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "bulk_paused"), caller.clone()),
+        BulkPauseEvent {
+            caller,
+            requested: ids.len(),
+            paused,
+            skipped,
+            failed,
+            nonce,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(results)
+}
+
+/// Bulk-cancel a list of subscriptions. Admin or operator only.
+///
+/// See [`bulk_precheck`] for the auth/size/nonce contract. Each id is processed
+/// independently; the returned vector has exactly one [`BulkSubscriptionResult`]
+/// per requested id, in request order. Duplicate ids are handled naturally: the
+/// first occurrence cancels (and refunds) the subscription, later occurrences
+/// observe it already `Cancelled` and are skipped — so no double-refund can occur.
+///
+/// On a non-empty batch, emits a single [`BulkCancelEvent`] envelope summarising
+/// the counts. The per-id `SubscriptionCancelledEvent`s are emitted by
+/// `apply_cancellation`.
+pub fn do_bulk_cancel_subscriptions(
+    env: &Env,
+    caller: Address,
+    ids: &Vec<u32>,
+    nonce: u64,
+) -> Result<Vec<BulkSubscriptionResult>, Error> {
+    if !bulk_precheck(env, &caller, ids, nonce)? {
+        return Ok(Vec::new(env));
+    }
+
+    let mut results = Vec::new(env);
+    let mut cancelled = 0u32;
+    let mut skipped = 0u32;
+    let mut failed = 0u32;
+
+    for id in ids.iter() {
+        let r = bulk_cancel_one(env, id, &caller);
+        if !r.success {
+            failed += 1;
+        } else if r.changed {
+            cancelled += 1;
+        } else {
+            skipped += 1;
+        }
+        results.push_back(r);
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "bulk_cancelled"), caller.clone()),
+        BulkCancelEvent {
+            caller,
+            requested: ids.len(),
+            cancelled,
+            skipped,
+            failed,
+            nonce,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(results)
 }
 
 /// Merchant-initiated one-off charge: debits `amount` from the subscription's prepaid balance.

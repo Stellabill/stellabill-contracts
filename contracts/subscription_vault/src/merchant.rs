@@ -310,42 +310,52 @@ pub fn credit_merchant_balance_for_token(
         return Err(Error::InvalidAmount);
     }
 
-    // Update simple balance
+    // ── EFFECTS: balance update
     let current = get_merchant_balance_by_token(env, merchant, token_addr);
     let new_balance = safe_add(current, amount)?;
     set_merchant_balance(env, merchant, token_addr, &new_balance);
 
-    // Update earnings struct
+    // ── EFFECTS: earnings update (SINGLE SOURCE OF TRUTH)
     let mut earnings = get_merchant_token_earnings(env, merchant, token_addr);
+
     match kind {
         BillingChargeKind::Interval => {
             earnings.accruals.interval = earnings
                 .accruals
                 .interval
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
         BillingChargeKind::Usage => {
             earnings.accruals.usage = earnings
                 .accruals
                 .usage
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
         BillingChargeKind::OneOff => {
             earnings.accruals.one_off = earnings
                 .accruals
                 .one_off
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
     }
+
     set_merchant_token_earnings(env, merchant, token_addr, &earnings);
+
+    // ── EFFECTS: register token
     add_merchant_token(env, merchant, token_addr);
+
+    // ── ACCOUNTING (invariant anchor)
+    crate::accounting::add_total_accounted(env, token_addr, amount)?;
+
+    // ── INVARIANT (test/CI only)
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, token_addr)?;
 
     Ok(())
 }
-
 pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Result<(), Error> {
     let token_addr = crate::admin::get_token(env)?;
     withdraw_merchant_funds_for_token(env, merchant, token_addr, amount)
@@ -359,39 +369,51 @@ pub fn withdraw_merchant_funds_for_token(
 ) -> Result<(), Error> {
     merchant.require_auth();
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
+
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
+
     if !crate::admin::is_token_accepted(env, &token_addr) {
         return Err(Error::InvalidInput);
     }
 
-    // Verify merchant config is initialized
-    let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+    // Ensure merchant config exists
+    let _config = get_merchant_config(env, merchant.clone())
+        .ok_or(Error::NotFound)?;
 
     let current = get_merchant_balance_by_token(env, &merchant, &token_addr);
+
     if current == 0 {
         return Err(Error::NotFound);
     }
+
     if amount > current {
         return Err(Error::InsufficientBalance);
     }
 
-    // Explicitly check vault's actual token balance before attempting transfer
+    // Vault balance check
     let token_client = token::Client::new(env, &token_addr);
-    if token_client.balance(&env.current_contract_address()) < amount {
+    let contract = env.current_contract_address();
+
+    if token_client.balance(&contract) < amount {
         return Err(Error::InsufficientBalance);
     }
 
     let new_balance = safe_sub(current, amount)?;
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // EFFECTS: Update internal state before external interactions (CEI pattern)
-    // ──────────────────────────────────────────────────────────────────────────
+    // ─────────────── EFFECTS ───────────────
+    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
+ // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
-    // Keep TokenEarnings.withdrawals in sync so the reconciliation invariant holds:
-    // balance = accruals - withdrawals - refunds
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.refunds = earnings
+        .refunds
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
@@ -399,7 +421,8 @@ pub fn withdraw_merchant_funds_for_token(
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
 
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+
+
     env.events().publish(
         (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
         MerchantWithdrawalEvent {
@@ -412,13 +435,12 @@ pub fn withdraw_merchant_funds_for_token(
         },
     );
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // INTERACTIONS: Only after internal state is consistent, call token contract
-    // INTERACTIONS: Only after internal state is consistent, call token contract
-    // ──────────────────────────────────────────────────────────────────────────
-    let token_client = token::Client::new(env, &token_addr);
-    let contract = env.current_contract_address();
+    // ─────────────── INTERACTION ───────────────
     token_client.transfer(&contract, &merchant, &amount);
+
+    // ─────────────── INVARIANT ───────────────
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
 
     Ok(())
 }
@@ -450,6 +472,7 @@ pub fn merchant_refund(
 
     // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.refunds = earnings
@@ -457,9 +480,7 @@ pub fn merchant_refund(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-
-    // Funds leave vault custody — keep TotalAccounted consistent.
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+ 
 
     env.events().publish(
         (Symbol::new(env, "merchant_refund"), merchant.clone()),
@@ -476,7 +497,8 @@ pub fn merchant_refund(
     // INTERACTIONS
     let token_client = token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-
+#[cfg(any(test, feature = "invariants"))]
+crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
     Ok(())
 }
 
@@ -563,7 +585,16 @@ fn flush_merchant_token(
 
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
+ // EFFECTS
+    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.refunds = earnings
+        .refunds
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, merchant, token);
     earnings.withdrawals = earnings
         .withdrawals
@@ -571,7 +602,7 @@ fn flush_merchant_token(
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, merchant, token, &earnings);
 
-    crate::accounting::sub_total_accounted(env, token, balance)?;
+    
 
     env.events().publish(
         (Symbol::new(env, "withdrawn"), merchant.clone(), token.clone()),
@@ -588,7 +619,8 @@ fn flush_merchant_token(
     // INTERACTIONS
     let token_client = token::Client::new(env, token);
     token_client.transfer(&env.current_contract_address(), &payout_address, &balance);
-
+#[cfg(any(test, feature = "invariants"))]
+crate::invariants::assert_token_balance_invariant(env, token)?;
     Ok(balance)
 }
 

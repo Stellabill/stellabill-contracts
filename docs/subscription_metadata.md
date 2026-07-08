@@ -200,3 +200,33 @@ The off-chain check `Address::from_account(env, &signer_pubkey) == sub.subscribe
 - An all-zero ed25519 public key still verifies if the same all-zero key is the *signer*. We do not block this; doing so would require an explicit black-list and the contract already refuses to act on a signature the on-chain path wouldn't accept for the same identity pair.
 - A compromised subscriber secret key can move metadata on every subscription the key is party to via either path. The environment cannot fix this in-protocol.
 
+
+# Soulbound Credential System
+
+## Overview
+
+Each subscription automatically receives an on-chain credential badge upon creation. This credential acts as a permanent historical record of the subscription and is explicitly **soulbound** (non-transferable). There is no entrypoint in the ABI to transfer the credential to another subscriber.
+
+## Lifecycle
+
+- **Automatic Issuance**: When a subscription is successfully created via `do_create_subscription`, a `CredentialBadge` is automatically generated and stored on-chain. This credential has an initial `tier` of 1 and a `revoked` status of `false`. A `CredentialIssuedEvent` is emitted.
+- **Automatic Revocation**: When a subscription is cancelled via `do_cancel_subscription`, the credential is automatically marked as `revoked = true`. The credential is not deleted from storage, preserving the historical record. A `CredentialRevokedEvent` is emitted.
+- **Manual Revocation**: An authorized merchant or contract admin can manually revoke an active credential via the `revoke_credential` entrypoint. This sets `revoked = true` idempotently without deleting the record, emitting the `CredentialRevokedEvent`.
+
+## Query Methods
+
+- `get_credential(subscription_id)`: Returns the `CredentialBadge` struct if it exists. Returns `Error::NotFound` otherwise.
+- `is_credential_active(subscription_id)`: Returns a boolean indicating whether the credential exists and is active (i.e. `revoked == false`).
+
+## Storage Structure
+
+Credentials are stored in persistent storage using a dedicated data key:
+- **Key**: `DataKey::Credential(subscription_id: u32)` (Discriminant: 49)
+- **Value**: `CredentialBadge { subscription_id: u32, tier: u32, issued_at: u64, revoked: bool }`
+
+## Security Rationale
+
+The credential system is designed to be a permanent, append-only record mapping subscriptions to badges. 
+- **Non-transferability**: By explicitly omitting any `transfer_credential` method from the ABI, credentials are strictly soulbound to the original subscriber. 
+- **Idempotency**: Revocation logic is idempotent, ensuring that cancelling a subscription with an already-revoked credential does not corrupt state. 
+- **Authorization**: Manual revocation strictly enforces authorization, guaranteeing only the merchant who owns the subscription or the global admin can revoke the badge.

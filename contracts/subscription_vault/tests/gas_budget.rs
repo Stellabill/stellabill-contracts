@@ -198,6 +198,15 @@ fn budget_withdraw_merchant_funds() {
     let merchant = Address::generate(&env);
     token_admin.mint(&subscriber, &10_000_000i128);
 
+    vault.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &0x1F,
+        &None,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
+
     let sub_id = vault.create_subscription(
         &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
     );
@@ -225,6 +234,16 @@ fn budget_withdraw_merchant_funds() {
 fn budget_charge_subscription_high_id() {
     let (env, vault, _token, token_admin, _admin) = make_env();
     let merchant = Address::generate(&env);
+
+    vault.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &0x1F,
+        &None,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
+
     let mut last_id = 0u32;
 
     for _ in 0..50u32 {
@@ -257,6 +276,15 @@ fn budget_charge_subscription_high_id() {
 fn budget_withdraw_dense_merchant_earnings() {
     let (env, vault, _token, token_admin, _admin) = make_env();
     let merchant = Address::generate(&env);
+
+    vault.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0,
+        &0x1F,
+        &None,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
 
     for _ in 0..20u32 {
         let subscriber = Address::generate(&env);
