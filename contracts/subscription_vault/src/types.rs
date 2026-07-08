@@ -227,8 +227,12 @@ pub struct MerchantKyc {
     NextProposalId,
     /// Governance proposal record keyed by proposal ID.
     Proposal(u64),
-    /// Soulbound credential badge keyed by subscription ID.
-    Credential(u32),
+    /// Coupon record keyed by its code symbol. Discriminant 49.
+    Coupon(soroban_sdk::Symbol),
+    /// Global redemption counter for a coupon code. Discriminant 50.
+    CouponRedemptions(soroban_sdk::Symbol),
+    /// Maps a subscription ID to its bound coupon code. Discriminant 51.
+    SubCoupon(u32),
 }
 
 impl DataKey {
@@ -291,7 +295,9 @@ impl DataKey {
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
             DataKey::Proposal(_) => 48,
-            DataKey::Credential(_) => 49,
+            DataKey::Coupon(_) => 49,
+            DataKey::CouponRedemptions(_) => 50,
+            DataKey::SubCoupon(_) => 51,
         }
     }
 
@@ -613,8 +619,20 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
-    /// A bulk admin/operator batch exceeded [`BATCH_MAX_SIZE`] entries.
-    BatchTooLarge = 6011,
+    /// Coupon code does not exist.
+    CouponNotFound = 6011,
+    /// Coupon has passed its expiration timestamp.
+    CouponExpired = 6012,
+    /// Coupon has reached its maximum global redemption count.
+    CouponRedemptionLimitReached = 6013,
+    /// Coupon has been explicitly revoked by the merchant.
+    CouponRevoked = 6014,
+    /// A coupon with this code already exists.
+    CouponAlreadyExists = 6015,
+    /// This subscription already has a coupon bound to it.
+    CouponAlreadyApplied = 6016,
+    /// Coupon token does not match the subscription's settlement token.
+    CouponTokenMismatch = 6017,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -1171,20 +1189,98 @@ pub const STMT_FLAG_SETTLED: u32 = 0b0001_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Selects the pricing strategy to use when resolving a charge amount.
+// ── Coupon types ─────────────────────────────────────────────────────────────
+
+/// Merchant-managed discount coupon.
 ///
-/// Stored inside [`OracleConfig`] and dispatched by `resolve_charge_amount`.
-/// Defaults to `Spot` for backwards compatibility when not explicitly set.
+/// Coupons are stored in persistent storage under `DataKey::Coupon(code)` and
+/// are identified by a unique symbol code. Subscription binding is tracked
+/// separately via `DataKey::SubCoupon(subscription_id)`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OracleKind {
-    /// Use the latest single price sample from the oracle (default behaviour).
-    Spot,
-    /// Use the median price across a sliding time window to resist manipulation.
-    Twap,
-    /// Use a fixed numerator/denominator ratio; no oracle reads are performed.
-    FixedRate,
+pub struct Coupon {
+    /// Human-readable coupon code (also the storage key).
+    pub code: soroban_sdk::Symbol,
+    /// Merchant who created and owns this coupon.
+    pub merchant: Address,
+    /// Settlement token this coupon applies to.
+    ///
+    /// Must match the subscription's token when `apply_coupon` is called.
+    pub token: Address,
+    /// Percentage discount in basis points (0..=10_000). 0 = no percent discount.
+    ///
+    /// Applied first: `discounted = gross * (10_000 - bps) / 10_000`.
+    pub percent_off_bps: u32,
+    /// Fixed token-unit discount applied after the percentage discount. 0 = disabled.
+    ///
+    /// The final payable amount is clamped to zero if the combined discount
+    /// exceeds the gross charge amount.
+    pub fixed_off: i128,
+    /// Maximum total subscriptions that may bind this coupon globally. 0 = unlimited.
+    pub max_redemptions: u32,
+    /// Ledger timestamp after which the coupon can no longer be applied. 0 = no expiry.
+    pub expires_at: u64,
+    /// Set to `true` when the merchant explicitly revokes this coupon.
+    pub revoked: bool,
 }
+
+/// Event emitted when a merchant creates a new coupon.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponCreatedEvent {
+    pub merchant: Address,
+    pub code: soroban_sdk::Symbol,
+    pub token: Address,
+    pub percent_off_bps: u32,
+    pub fixed_off: i128,
+    pub max_redemptions: u32,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant revokes a coupon.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponRevokedEvent {
+    pub merchant: Address,
+    pub code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscriber binds a coupon to a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponAppliedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a coupon discount is applied during a charge.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DiscountAppliedEvent {
+    pub subscription_id: u32,
+    /// Original gross charge amount before discount.
+    pub gross_amount: i128,
+    /// Amount deducted as discount.
+    pub discount_amount: i128,
+    /// Payable amount after discount (fed into fee split and merchant credit).
+    pub discounted_amount: i128,
+    pub coupon_code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
@@ -2376,6 +2472,9 @@ mod known_keys_tests {
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
             (DataKey::Proposal(1), false),
+            (DataKey::Coupon(soroban_sdk::Symbol::new(env, "TEST")), false),
+            (DataKey::CouponRedemptions(soroban_sdk::Symbol::new(env, "TEST")), false),
+            (DataKey::SubCoupon(1), false),
         ]
     }
 
@@ -2440,15 +2539,15 @@ mod known_keys_tests {
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
         let variants = all_variants(&env);
-        let mut seen = [false; 49];
+        let mut seen = [false; 52];
         for (key, _) in &variants {
             let d = key.canonical_discriminant() as usize;
             assert!(d < seen.len(), "discriminant {d} out of expected range");
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=48");
-        assert_eq!(variants.len(), 49, "variant count drifted from 49");
+        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..=51");
+        assert_eq!(variants.len(), 52, "variant count drifted from 52");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier
