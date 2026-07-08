@@ -35,6 +35,14 @@ pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
 /// Domain constant for operator batch charge operations.
 pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 
+/// Domain constant for off-chain signed metadata updates (`set_metadata_signed`).
+///
+/// Keeps signed-metadata-update nonces separated from privileged batch,
+/// rotation, and operator nonces, so a captured signed metadata payload cannot
+/// be replayed into a higher-privilege domain. Auth check (signer must be
+/// subscriber or merchant) runs **before** the nonce check.
+pub const DOMAIN_METADATA_SIGNED: u32 = 3;
+
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///
@@ -85,6 +93,17 @@ pub fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
 ///
 /// Auth check **must** run before calling this function. Invalid signers are rejected
 /// before the nonce counter is touched, preventing auth bypass via nonce manipulation.
+/// Pure-logic for advancing a nonce. Extracted to allow formal verification without
+/// Soroban environment dependencies.
+#[inline(always)]
+pub fn compute_next_nonce(stored: u64, expected: u64) -> Result<u64, Error> {
+    if expected != stored {
+        return Err(Error::NonceAlreadyUsed);
+    }
+
+    stored.checked_add(1).ok_or(Error::Overflow)
+}
+
 pub fn check_and_advance(
     env: &Env,
     signer: &Address,
@@ -94,15 +113,7 @@ pub fn check_and_advance(
     let key = DataKey::AdminNonce(signer.clone(), domain);
     let stored = env.storage().persistent().get::<DataKey, u64>(&key).unwrap_or(0);
 
-    // Reject if expected does not match stored exactly.
-    if expected != stored {
-        return Err(Error::NonceAlreadyUsed);
-    }
-
-    // Increment the counter atomically. Returns Error::Overflow on overflow (u64::MAX).
-    let next = stored
-        .checked_add(1)
-        .ok_or(Error::Overflow)?;
+    let next = compute_next_nonce(stored, expected)?;
 
     // Persist the incremented nonce before emitting event (effects-before-interactions).
     env.storage().persistent().set(&key, &next);
@@ -133,6 +144,7 @@ mod tests {
         assert_eq!(DOMAIN_BATCH_CHARGE, 0);
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
+        assert_eq!(DOMAIN_METADATA_SIGNED, 3);
     }
 
     #[test]

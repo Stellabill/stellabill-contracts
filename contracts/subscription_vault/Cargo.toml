@@ -15,6 +15,25 @@ oracle-pricing = []
 soroban-sdk = "22.0.0"
 
 [dev-dependencies]
+
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
 proptest = "1"
 hex = "0.4"
+# Pure-Rust ed25519 signer used to forge signed metadata payloads in tests.
+# Major-minor pinned so a future dalek release cannot silently desync
+# off-chain signing wire format from the Soroban host verifier. 2.2 is
+# the version currently pulled in transitively by soroban-sdk 22.0.0.
+ed25519-dalek = "=2.2"
+rand = "0.8"
+
+[[test]]
+name = "export_cursor"
+path = "tests/export_cursor.rs"
+
+[[test]]
+name = "safe_math_verification"
+path = "verification/safe_math_verification.rs"
+
+[[test]]
+name = "nonce_verification"
+path = "verification/nonce_verification.rs"

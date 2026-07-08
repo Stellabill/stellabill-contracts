@@ -46,12 +46,83 @@ No authorization required (read-only).
 List all metadata keys for a subscription. Returns an empty vector if none are set.
 No authorization required (read-only).
 
+### `set_metadata_signed(signer_pubkey, payload, signature)`
+
+Apply an off-chain signed metadata update. Designed for batching workflows where
+a merchant (or any party running an off-chain signer) pre-signs N
+`(key, value)` mutations and submits them as individual transactions without
+paying one `require_auth` fee per change.
+
+**Auth flow:**
+
+1. `subscription_id` is looked up. NotFound if it does not exist.
+2. The supplied ed25519 signature is verified against the canonical byte
+   string defined below. A forged signature aborts the transaction
+   (`panic` at the host crypto boundary by design — no typed-error downgrade).
+3. The signer public key is mapped to a Soroban Address via
+   `Address::from_account`. The resulting address must equal
+   `sub.subscriber` or `sub.merchant`; otherwise `Error::Forbidden`.
+4. `now < payload.expires_at` (strict); otherwise `Error::InvalidInput`.
+5. `payload.nonce` is consumed against
+   `(signer, DOMAIN_METADATA_SIGNED = 3)` via the same reuse-guard used by
+   admin nonces. Captured payloads are rejected with
+   `Error::NonceAlreadyUsed`. A side `nonce_consumed` event is emitted.
+6. The same key/value length and key-cap invariants from `set_metadata`
+   are re-enforced and the metadata storage slot is updated.
+7. `metadata_set_signed` topic emits `MetadataSetSignedEvent`.
+
+**Canonical message** (the bytes the off-chain signer MUST hash and sign):
+
+```
+[32-byte domain tag "SBL_META_SIGNED_v1\x00..."]
+|| u32_be(subscription_id)
+|| u32_be(key.len())  || key_bytes
+|| u32_be(value.len())|| value_bytes
+|| u64_be(nonce)
+|| u32_be(chain_id.len()) || chain_id_bytes   (env.ledger().chain_id())
+|| u64_be(expires_at)
+```
+
+The 32-byte domain tag and per-field length prefixes make the encoding
+unambiguous: two distinct payloads can never collide and no struct field
+boundary can be confused with another. The chain id is mixed in so a
+cross-chain replay of the same `(sub, signer, nonce, payload)` is
+rejected by ed25519_verify on the wrong chain id's reconstructed
+message.
+
+**Replay protection:** the off-chain signer fetches
+`get_metadata_signed_nonce(signer_address)` first to learn the next
+nonce, signs the payload with that nonce, and submits. The contract
+consumes `(signer, DOMAIN_METADATA_SIGNED)` so captured payloads are
+detected.
+
+**Expiry:** `expires_at` should be set comfortably after the expected
+submission window. Pick e.g. `now + max(2 * interval, 1 hour)`.
+`now >= expires_at` is rejected.
+
+### `get_metadata_signed_nonce(signer) -> u64`
+
+Read-only. Returns the next-expected nonce the off-chain signer must use
+when signing the next [`SignedMetadataPayload`] for that signer against
+`DOMAIN_METADATA_SIGNED`. Returns `0` on a signer's first signed update.
+
+### `delete_metadata_signed` (planned, not yet implemented)
+
+A symmetric `delete_metadata_signed` entrypoint will be added in a
+follow-up so batchers can also remove keys off-chain. It will share the
+same nonce domain, expiry, and identity checks.
+
 ## Events
 
-| Event              | Topic                           | Data                                        |
-|--------------------|---------------------------------|---------------------------------------------|
-| MetadataSetEvent   | `("metadata_set", sub_id)`      | `{ subscription_id, key, authorizer }`      |
-| MetadataDeletedEvent | `("metadata_deleted", sub_id)` | `{ subscription_id, key, authorizer }`     |
+| Event                   | Topic                                | Data                                                 |
+|-------------------------|--------------------------------------|------------------------------------------------------|
+| MetadataSetEvent        | `("metadata_set", sub_id)`           | `{ subscription_id, key, authorizer }`               |
+| MetadataDeletedEvent    | `("metadata_deleted", sub_id)`       | `{ subscription_id, key, authorizer }`               |
+| MetadataSetSignedEvent  | `("metadata_set_signed", sub_id)`    | `{ subscription_id, key, signer, nonce, timestamp }` |
+
+The `metadata_set` vs `metadata_set_signed` topic split lets indexers
+and audit pipelines attribute auth (on-chain `require_auth` vs
+off-chain ed25519) without ambiguity.
 
 ## Error Codes
 
@@ -99,7 +170,33 @@ Use metadata for lightweight off-chain references:
 - **Secrets**: API keys, tokens, passwords
 - **Large blobs**: Base64 images, documents, JSON payloads
 - **Financial data**: Credit card numbers, bank accounts
-- **Mutable state**: Use on-chain fields for status/balance tracking
+- **Mutable state**: Use on-chain fields for status/balance trackingMetadata is visible on-chain to anyone who can read ledger state. Treat all metadata values as **public and non-sensitive**.
 
-Metadata is visible on-chain to anyone who can read ledger state.
-Treat all metadata values as **public and non-sensitive**.
+## Security Model
+
+The signed off-chain path (`set_metadata_signed`) preserves the same security guarantees as on-chain `set_metadata` while removing the per-key transaction overhead. Each attack vector and its defence:
+
+| Attack vector | Defence | Rejection surface |
+| --- | --- | --- |
+| Forged ed25519 signature | `env.crypto().ed25519_verify` over canonical bytes | **Host panic** (no typed-error downgrade) |
+| Wrong-key signature | Same — host panic | Host panic |
+| Cross-chain replay | `chain_id` mixed into the canonical message bytes | Host panic |
+| Same-chain replay | Nonce consumed on `(signer, DOMAIN_METADATA_SIGNED = 3)` via `nonce::check_and_advance` | `Error::NonceAlreadyUsed` (1005) |
+| Out-of-order nonce | Strict `expected == stored` check — no skipping | `Error::NonceAlreadyUsed` |
+| Expired payload (`now >= expires_at`) | Strict-rejection at signature check time | `Error::InvalidInput` (3002) |
+| Cross-domain replay (signed → admin batch/rotate) | Domain tag `3` is part of the storage key; admin domains are 0/1 | `Error::NonceAlreadyUsed` |
+| Signer is neither subscriber nor merchant | `Address::from_account(pubkey)` compared to `sub.subscriber` / `sub.merchant` | `Error::Forbidden` (1002) |
+| Empty / whitespace key or value | `validation::reject_empty_string` ABI guard runs before crypto call | `Error::InvalidInput` |
+| Key-cap overflow (> 10 keys per subscription) | Same per-subscription 10-key cap as the on-chain path | `Error::MetadataKeyLimitReached` (6005) |
+| Counter overflow (`u64::MAX`) | `checked_add` in `nonce::check_and_advance` returns `Err` instead of wrapping | `Error::Overflow` (5005) |
+| Unknown `subscription_id` | `get_subscription` returns `NotFound` before any crypto or storage write | `Error::NotFound` (2001) |
+
+### Auth-path coupling soundness
+
+The off-chain check `Address::from_account(env, &signer_pubkey) == sub.subscriber` only holds because Soroban Strkey-decodes the on-chain account address to the same underlying `AccountId` bytes. That is the **one implicit invariant** tying the two paths together; if Soroban ever introduces an Address variant whose on-chain and off-chain derivations disagree, this equality check must be revisited.
+
+### Out-of-scope
+
+- An all-zero ed25519 public key still verifies if the same all-zero key is the *signer*. We do not block this; doing so would require an explicit black-list and the contract already refuses to act on a signature the on-chain path wouldn't accept for the same identity pair.
+- A compromised subscriber secret key can move metadata on every subscription the key is party to via either path. The environment cannot fix this in-protocol.
+

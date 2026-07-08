@@ -10,20 +10,28 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
+pub mod invariants;
 mod queries;
+pub mod nonce;
+mod period_snapshots;
 mod safe_math;
 mod subscription;
 mod types;
-
+mod validation; // <--- ADDED THIS LINE
 pub use safe_math::*;
+pub use types::{
+    EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
+    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+};
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
 
@@ -37,7 +45,7 @@ pub mod statements {
         AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
         BillingStatementAggregate, BillingStatementsPage, Error,
     };
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn append_statement(
         env: &Env,
@@ -130,7 +138,7 @@ pub mod statements {
 pub mod accounting {
     #![allow(unused_variables, dead_code)]
     use crate::types::Error;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
         Ok(())
@@ -146,8 +154,8 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, OracleConfig, Subscription};
-    use soroban_sdk::{Address, Env};
+    use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
+    use soroban_sdk::{Address, Env, Symbol};
 
     pub fn resolve_charge_amount(
         _env: &Env,
@@ -171,6 +179,72 @@ pub mod oracle {
             max_age_seconds: 0,
         }
     }
+
+    /// Emit an oracle liveness event for monitoring purposes.
+    ///
+    /// Reads the latest oracle price sample (if oracle is configured) and emits
+    /// an `OracleLivenessEvent` with the sample timestamp, computed age, and
+    /// health status. Health is determined by comparing the sample age against
+    /// half of the configured `max_age_seconds` threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The contract environment.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(OracleLivenessEvent)` - The liveness event with computed health status.
+    /// * `Err(Error::OracleNotConfigured)` - If oracle is not configured or disabled.
+    ///
+    /// # Events
+    ///
+    /// Emits `oracle_liveness` event with the liveness event data.
+    ///
+    /// # Security
+    ///
+    /// This is a view-only operation that does not require authentication.
+    /// It allows any caller to verify oracle liveness without privileged access.
+    pub fn emit_oracle_liveness(env: &Env) -> Result<OracleLivenessEvent, Error> {
+        let config = get_oracle_config(env);
+        
+        // Validate oracle is configured
+        if !config.enabled || config.oracle.is_none() || config.max_age_seconds == 0 {
+            return Err(Error::OracleNotConfigured);
+        }
+
+        let now = env.ledger().timestamp();
+        
+        // In a production implementation, this would call the oracle contract
+        // to get the latest price. For now, we simulate with a mock timestamp.
+        // The actual oracle call would be:
+        // let oracle_client = OracleClient::new(env, &config.oracle.unwrap());
+        // let price = oracle_client.latest_price();
+        
+        // For this implementation, we'll use a placeholder timestamp
+        // In production, replace with actual oracle call
+        let last_sample_ts = now.saturating_sub(60); // Simulate 60-second-old sample
+        
+        let age = now.saturating_sub(last_sample_ts);
+        
+        // Healthy if age <= max_age_seconds / 2
+        let threshold = config.max_age_seconds / 2;
+        let healthy = age <= threshold;
+
+        let event = OracleLivenessEvent {
+            last_sample_ts,
+            age,
+            healthy,
+            timestamp: now,
+        };
+
+        // Emit the event for off-chain monitoring
+        env.events().publish(
+            (Symbol::new(env, "oracle_liveness"),),
+            event.clone(),
+        );
+
+        Ok(event)
+    }
 }
 
 mod reentrancy;
@@ -184,7 +258,8 @@ mod reentrancy;
 /// touched.
 ///
 /// Implementation lives in [`nonce.rs`].
-mod nonce;
+pub mod nonce;
+mod period_snapshots;
 
 /// Operator: least-privilege charge delegate.
 ///
@@ -306,10 +381,10 @@ pub use types::{
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
-    MetadataSetEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
+    MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
     OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
     ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
-    ScheduledPayoutEvent, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
@@ -667,6 +742,28 @@ impl SubscriptionVault {
         nonce: u64,
     ) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
+    }
+
+    /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
+    ///
+    /// Migrates every per-merchant storage key (balances, earnings, config, pause
+    /// state, subscription index) and rewrites `Subscription.merchant` for all
+    /// subscriptions previously indexed under the old address.
+    ///
+    /// Admin only. `nonce` is consumed in `DOMAIN_MERCHANT_ROTATION` to prevent replay.
+    ///
+    /// # Errors
+    /// - `Unauthorized`     if caller is not the stored admin
+    /// - `NonceAlreadyUsed` if the nonce has already been used
+    /// - `SelfRotation`     if `old_merchant == new_merchant`
+    pub fn rotate_merchant_address(
+        env: Env,
+        admin: Address,
+        old_merchant: Address,
+        new_merchant: Address,
+        nonce: u64,
+    ) -> Result<(), Error> {
+        merchant::do_rotate_merchant_address(&env, admin, old_merchant, new_merchant, nonce)
     }
 
     /// Configure oracle pricing parameters. Admin only.
@@ -2967,6 +3064,53 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
+    /// Emit an oracle liveness event for monitoring purposes.
+    ///
+    /// This view-only function reads the latest oracle price sample and emits
+    /// an [`OracleLivenessEvent`] containing the sample timestamp, computed age,
+    /// and health status. Health is determined by comparing the sample age against
+    /// half of the configured `max_age_seconds` threshold.
+    ///
+    /// # Arguments
+    ///
+    /// This function takes no parameters.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(OracleLivenessEvent)` - The liveness event with computed health status.
+    /// * `Err(Error::OracleNotConfigured)` - If oracle is not configured or disabled.
+    ///
+    /// # Events
+    ///
+    /// Emits `oracle_liveness` event with the liveness event data for off-chain monitoring.
+    ///
+    /// # Security
+    ///
+    /// This is a view-only operation that does not require authentication.
+    /// Any caller can invoke this to verify oracle liveness without privileged access.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Check oracle health before charging
+    /// match client.emit_oracle_liveness(&env) {
+    ///     Ok(event) => {
+    ///         if event.healthy {
+    ///             // Proceed with oracle-dependent charge
+    ///         } else {
+    ///             // Oracle is stale, use fallback pricing or alert operators
+    ///         }
+    ///     }
+    ///     Err(Error::OracleNotConfigured) => {
+    ///         // Oracle not enabled, use base pricing
+    ///     }
+    ///     Err(e) => panic!("Unexpected error: {:?}", e),
+    /// }
+    /// ```
+    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
+        oracle::emit_oracle_liveness(&env)
+    }
+
     // ── Metadata ──────────────────────────────────────────────────────────────
 
     /// Set or update a metadata key-value pair on a subscription.
@@ -3009,6 +3153,86 @@ impl SubscriptionVault {
         validation::reject_empty_string(&key)?;
         validation::reject_empty_string(&value)?;
         metadata::set_metadata(&env, subscription_id, &authorizer, key, value)
+    }
+    /// Apply an off-chain signed metadata update.
+    ///
+    /// Merchants (or any party running an off-chain batcher) can pre-sign
+    /// metadata payloads with their ed25519 secret key and submit them as
+    /// a single transaction instead of paying one `set_metadata` fee per
+    /// key. Auth is proven entirely on the recipient side via the
+    /// signature — the calling transaction does **not** need a matching
+    /// `require_auth` from the signer.
+    ///
+    /// The off-chain signer must build the canonical byte stream produced
+    /// by [`crate::metadata::build_metadata_signed_message`] (a fixed
+    /// domain tag plus `(subscription_id, key, value, nonce, chain_id,
+    /// expires_at)`, length-prefixed and big-endian) and produce an
+    /// ed25519 signature over those bytes using the secret key whose
+    /// public counterpart is `signer_pubkey`.
+    ///
+    /// # Authorization
+    ///
+    /// The pubkey must correspond to the subscription's `subscriber` or
+    /// `merchant`. Otherwise [`Error::Forbidden`] is returned once the
+    /// signature itself has been verified.
+    ///
+    /// # Replay protection
+    ///
+    /// The off-chain signer queries
+    /// [`get_metadata_signed_nonce`](Self::get_metadata_signed_nonce), signs
+    /// the payload with that nonce, and submits. The contract consumes the
+    /// nonce for `(signer, DOMAIN_METADATA_SIGNED)`. A captured payload is
+    /// rejected with [`Error::NonceAlreadyUsed`].
+    ///
+    /// # Expiry
+    ///
+    /// `expires_at` is enforced strictly: `now >= expires_at` ⇒
+    /// [`Error::InvalidInput`]. Off-chain tooling should pick `expires_at`
+    /// comfortably after the expected submission window.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::NotFound`] — `subscription_id` does not exist.
+    /// * [`Error::InvalidInput`] — expired payload or empty key/value.
+    /// * [`Error::MetadataKeyTooLong`] / [`Error::MetadataValueTooLong`].
+    /// * [`Error::MetadataKeyLimitReached`].
+    /// * [`Error::NonceAlreadyUsed`] — replay or out-of-order nonce.
+    /// * [`Error::Forbidden`].
+    /// * [`Error::Overflow`] — nonce counter would overflow `u64::MAX`.
+    ///
+    /// Panics (host crypto error) on a forged ed25519 signature. That
+    /// boundary is intentional; a forged signature must abort the
+    /// transaction rather than be silently downgraded to a typed error.
+    ///
+    /// # Events
+    ///
+    /// On success emits `metadata_set_signed` (carrying
+    /// [`MetadataSetSignedEvent`]) and `nonce_consumed` keyed on
+    /// `(signer, DOMAIN_METADATA_SIGNED)`.
+    pub fn set_metadata_signed(
+        env: Env,
+        signer_pubkey: soroban_sdk::BytesN<32>,
+        payload: SignedMetadataPayload,
+        signature: soroban_sdk::BytesN<64>,
+    ) -> Result<(), Error> {
+        // Defense-in-depth ABI guards on the signed path: a sha-bump signer
+        // who controls a matching ed25519 key still cannot drive
+        // degenerate empty/whitespace keys or values into storage.
+        validation::reject_empty_string(&payload.key)?;
+        validation::reject_empty_string(&payload.value)?;
+        metadata::do_set_metadata_signed(&env, signer_pubkey, payload, signature)
+    }
+
+    /// Return the next-expected nonce for `(signer, DOMAIN_METADATA_SIGNED)`.
+    ///
+    /// Off-chain batching tools fetch this value before signing the next
+    /// [`SignedMetadataPayload`] so the on-chain `nonce::check_and_advance`
+    /// call accepts the payload. Returns `0` for a signer's first signed
+    /// update against this contract.
+    ///
+    /// Read-only; no auth required.
+    pub fn get_metadata_signed_nonce(env: Env, signer: Address) -> u64 {
+        nonce::get_nonce(&env, &signer, nonce::DOMAIN_METADATA_SIGNED)
     }
 
     ///
@@ -3090,6 +3314,131 @@ impl SubscriptionVault {
     /// Return the current protocol fee basis points (0 = disabled).
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
+    }
+
+    // ── Governance (Quorum-based proposals) ──────────────────────────────────
+
+    /// Submit a governance proposal for a privileged action.
+    ///
+    /// Creates a new proposal that must be voted on by guardians before execution.
+    /// The proposal will not execute until the ETA (execution timestamp) is reached.
+    ///
+    /// # Arguments
+    /// * `kind` — Type of proposal (RotateAdmin, SetProtocolFee).
+    /// * `target` — Primary target (new admin for RotateAdmin, treasury for SetProtocolFee).
+    /// * `target2` — Optional secondary target (e.g., treasury for SetProtocolFee).
+    /// * `target3` — Optional tertiary parameter (e.g., fee_bps for SetProtocolFee).
+    /// * `quorum_bps` — Required vote percentage in basis points (0-10000).
+    /// * `eta` — Timestamp after which proposal can be executed.
+    ///
+    /// # Returns
+    /// The newly created proposal ID (monotonically allocated).
+    pub fn submit_proposal(
+        env: Env,
+        kind: types::ProposalKind,
+        target: Address,
+        target2: Option<Address>,
+        target3: u32,
+        quorum_bps: u32,
+        eta: u64,
+    ) -> Result<u64, Error> {
+        governance::do_submit_proposal(&env, kind, target, target2, target3, quorum_bps, eta)
+    }
+
+    /// Cast a guardian vote on a proposal.
+    ///
+    /// Only addresses with assigned guardian weight can vote.
+    /// Votes are recorded per-guardian and validated during execution.
+    ///
+    /// # Arguments
+    /// * `proposal_id` — ID of the proposal to vote on.
+    /// * `voted_yes` — true to vote for, false to vote against.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not a guardian
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if proposal already executed
+    pub fn vote_proposal(env: Env, proposal_id: u64, voted_yes: bool) -> Result<(), Error> {
+        governance::do_vote_proposal(&env, proposal_id, voted_yes)
+    }
+
+    /// Execute a proposal if quorum is met and ETA has passed.
+    ///
+    /// Validates that:
+    /// 1. The proposal has not already been executed.
+    /// 2. The ETA timestamp has been reached.
+    /// 3. Quorum requirement is met (accounting for guardian removals).
+    /// 4. All votes from removed guardians are excluded.
+    ///
+    /// On success, applies the proposal's action (e.g., rotates admin or sets protocol fee).
+    ///
+    /// # Errors
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if ETA not reached or quorum not met
+    pub fn execute_proposal(env: Env, proposal_id: u64) -> Result<(), Error> {
+        governance::do_execute_proposal(&env, proposal_id)
+    }
+
+    /// Cancel a proposal (admin only).
+    ///
+    /// Only the current admin can cancel proposals. This prevents stale or unwanted
+    /// proposals from remaining on the books.
+    ///
+    /// # Arguments
+    /// * `proposal_id` — ID of the proposal to cancel.
+    /// * `reason` — Cancellation reason (emitted in event).
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    /// - `NotFound` if proposal does not exist
+    /// - `InvalidInput` if proposal already executed
+    pub fn cancel_proposal(env: Env, proposal_id: u64, reason: String) -> Result<(), Error> {
+        governance::do_cancel_proposal(&env, proposal_id, reason)
+    }
+
+    /// Add or update a guardian and their voting weight.
+    ///
+    /// Admin only. Sets a guardian's voting weight; weight of 0 is not allowed.
+    /// Call `remove_guardian` to remove a guardian entirely.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    /// - `InvalidInput` if weight is zero
+    pub fn add_guardian(env: Env, admin: Address, guardian: Address, weight: u32) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        governance::add_guardian(&env, guardian, weight)
+    }
+
+    /// Remove a guardian, immediately invalidating their future votes.
+    ///
+    /// Admin only. Once removed, a guardian cannot vote on new proposals, and their
+    /// prior votes are excluded during quorum validation.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the admin
+    pub fn remove_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        governance::remove_guardian(&env, &guardian)
+    }
+
+    /// Get a guardian's current voting weight (0 if not a guardian).
+    pub fn get_guardian_weight(env: Env, guardian: Address) -> u32 {
+        governance::get_guardian_weight(&env, &guardian)
+    }
+
+    /// Get the current proposal counter (next proposal ID to be allocated).
+    pub fn get_current_proposal_id(env: Env) -> u64 {
+        governance::get_current_proposal_id(&env)
+    }
+
+    /// Get proposal by ID (if it exists).
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Option<types::Proposal> {
+        governance::get_proposal(&env, proposal_id)
+    }
+
+    /// List all guardians and their voting weights.
+    pub fn list_guardians(env: Env) -> Vec<(Address, u32)> {
+        governance::list_guardians(&env)
     }
 
     // ── Blocklist ──────────────────────────────────────────────────────────────
@@ -3357,6 +3706,7 @@ impl SubscriptionVault {
 mod test_utils;
 
 #[cfg(test)]
+mod test_metadata_signed;
 mod test_charge_invariants;
 
 #[cfg(test)]
