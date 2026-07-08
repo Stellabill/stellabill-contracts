@@ -218,6 +218,12 @@ pub enum DataKey {
     NextProposalId,
     /// Governance proposal record keyed by proposal ID.
     Proposal(u64),
+    /// Coupon record keyed by its code symbol. Discriminant 49.
+    Coupon(soroban_sdk::Symbol),
+    /// Global redemption counter for a coupon code. Discriminant 50.
+    CouponRedemptions(soroban_sdk::Symbol),
+    /// Maps a subscription ID to its bound coupon code. Discriminant 51.
+    SubCoupon(u32),
 }
 
 impl DataKey {
@@ -279,6 +285,9 @@ impl DataKey {
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
             DataKey::Proposal(_) => 48,
+            DataKey::Coupon(_) => 49,
+            DataKey::CouponRedemptions(_) => 50,
+            DataKey::SubCoupon(_) => 51,
         }
     }
 
@@ -468,6 +477,16 @@ impl Subscription {
     }
 }
 
+/// A non-transferable (soulbound) credential badge linking a subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialBadge {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+    pub revoked: bool,
+}
+
 /// Detailed error information for insufficient balance scenarios.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -590,6 +609,20 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
+    /// Coupon code does not exist.
+    CouponNotFound = 6011,
+    /// Coupon has passed its expiration timestamp.
+    CouponExpired = 6012,
+    /// Coupon has reached its maximum global redemption count.
+    CouponRedemptionLimitReached = 6013,
+    /// Coupon has been explicitly revoked by the merchant.
+    CouponRevoked = 6014,
+    /// A coupon with this code already exists.
+    CouponAlreadyExists = 6015,
+    /// This subscription already has a coupon bound to it.
+    CouponAlreadyApplied = 6016,
+    /// Coupon token does not match the subscription's settlement token.
+    CouponTokenMismatch = 6017,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -656,6 +689,82 @@ pub struct BatchChargeResult {
 pub struct BatchWithdrawResult {
     pub success: bool,
     pub error_code: u32,
+}
+
+/// Maximum number of ids accepted by a single bulk admin/operator call
+/// ([`bulk_pause_subscriptions`](crate::SubscriptionVault::bulk_pause_subscriptions),
+/// [`bulk_cancel_subscriptions`](crate::SubscriptionVault::bulk_cancel_subscriptions)).
+///
+/// Batches larger than this are rejected wholesale with [`Error::BatchTooLarge`]
+/// before any state is touched, bounding per-transaction CPU/storage so a single
+/// oversized batch cannot exceed Soroban resource limits mid-loop.
+pub const BATCH_MAX_SIZE: u32 = 100;
+
+/// Per-id outcome of a bulk pause/cancel operation.
+///
+/// One entry is returned for every id in the request, in request order, so an
+/// operator can reconcile exactly what happened to each subscription without the
+/// batch aborting on the first problem.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    /// The subscription id this outcome refers to.
+    pub subscription_id: u32,
+    /// `true` when the id ended in the desired state (either it was transitioned
+    /// now, or it was already there — see `changed`). `false` on a hard error.
+    pub success: bool,
+    /// `true` when this call actually transitioned the subscription; `false` when
+    /// it was skipped as a no-op because it was already paused/cancelled.
+    pub changed: bool,
+    /// `0` on success; otherwise the [`Error`] code explaining why this id failed
+    /// (e.g. `NotFound`, `SubscriptionExpired`, `InvalidStatusTransition`).
+    pub error_code: u32,
+}
+
+/// Single envelope event emitted once per successful `bulk_pause_subscriptions`
+/// batch, summarising the per-id outcomes for off-chain indexers.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    /// Admin or operator address that authorized the batch.
+    pub caller: Address,
+    /// Number of ids submitted in the request.
+    pub requested: u32,
+    /// Number of subscriptions actually transitioned Active -> Paused.
+    pub paused: u32,
+    /// Number of ids skipped as already-paused no-ops.
+    pub skipped: u32,
+    /// Number of ids that failed (not found, expired, invalid transition, ...).
+    pub failed: u32,
+    /// The per-batch nonce consumed for replay protection.
+    pub nonce: u64,
+    /// Ledger timestamp when the batch was processed.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Single envelope event emitted once per successful `bulk_cancel_subscriptions`
+/// batch, summarising the per-id outcomes for off-chain indexers.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    /// Admin or operator address that authorized the batch.
+    pub caller: Address,
+    /// Number of ids submitted in the request.
+    pub requested: u32,
+    /// Number of subscriptions actually transitioned to Cancelled.
+    pub cancelled: u32,
+    /// Number of ids skipped as already-cancelled no-ops.
+    pub skipped: u32,
+    /// Number of ids that failed (not found, expired, invalid transition, ...).
+    pub failed: u32,
+    /// The per-batch nonce consumed for replay protection.
+    pub nonce: u64,
+    /// Ledger timestamp when the batch was processed.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// A read-only snapshot of the contract's configuration and current state.
@@ -1070,6 +1179,99 @@ pub const STMT_FLAG_SETTLED: u32 = 0b0001_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Coupon types ─────────────────────────────────────────────────────────────
+
+/// Merchant-managed discount coupon.
+///
+/// Coupons are stored in persistent storage under `DataKey::Coupon(code)` and
+/// are identified by a unique symbol code. Subscription binding is tracked
+/// separately via `DataKey::SubCoupon(subscription_id)`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Coupon {
+    /// Human-readable coupon code (also the storage key).
+    pub code: soroban_sdk::Symbol,
+    /// Merchant who created and owns this coupon.
+    pub merchant: Address,
+    /// Settlement token this coupon applies to.
+    ///
+    /// Must match the subscription's token when `apply_coupon` is called.
+    pub token: Address,
+    /// Percentage discount in basis points (0..=10_000). 0 = no percent discount.
+    ///
+    /// Applied first: `discounted = gross * (10_000 - bps) / 10_000`.
+    pub percent_off_bps: u32,
+    /// Fixed token-unit discount applied after the percentage discount. 0 = disabled.
+    ///
+    /// The final payable amount is clamped to zero if the combined discount
+    /// exceeds the gross charge amount.
+    pub fixed_off: i128,
+    /// Maximum total subscriptions that may bind this coupon globally. 0 = unlimited.
+    pub max_redemptions: u32,
+    /// Ledger timestamp after which the coupon can no longer be applied. 0 = no expiry.
+    pub expires_at: u64,
+    /// Set to `true` when the merchant explicitly revokes this coupon.
+    pub revoked: bool,
+}
+
+/// Event emitted when a merchant creates a new coupon.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponCreatedEvent {
+    pub merchant: Address,
+    pub code: soroban_sdk::Symbol,
+    pub token: Address,
+    pub percent_off_bps: u32,
+    pub fixed_off: i128,
+    pub max_redemptions: u32,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant revokes a coupon.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponRevokedEvent {
+    pub merchant: Address,
+    pub code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscriber binds a coupon to a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CouponAppliedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Event emitted when a coupon discount is applied during a charge.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DiscountAppliedEvent {
+    pub subscription_id: u32,
+    /// Original gross charge amount before discount.
+    pub gross_amount: i128,
+    /// Amount deducted as discount.
+    pub discount_amount: i128,
+    /// Payable amount after discount (fed into fee split and merchant credit).
+    pub discounted_amount: i128,
+    pub coupon_code: soroban_sdk::Symbol,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1078,6 +1280,17 @@ pub struct OracleConfig {
     pub oracle: Option<Address>,
     /// Maximum acceptable price age in seconds.
     pub max_age_seconds: u64,
+    /// Which pricing strategy to use when resolving charge amounts.
+    pub kind: OracleKind,
+    /// TWAP: length of the sliding observation window in seconds.
+    /// Ignored when `kind != Twap`.
+    pub window_secs: u64,
+    /// FixedRate: numerator of the fixed price ratio (scaled to 10^7).
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_numerator: u128,
+    /// FixedRate: denominator of the fixed price ratio. Must be non-zero.
+    /// Ignored when `kind != FixedRate`.
+    pub fixed_denominator: u128,
 }
 
 /// Price payload returned by oracle contract view methods.
@@ -1097,6 +1310,10 @@ pub struct OracleConfigUpdatedEvent {
     pub enabled: bool,
     pub oracle: Option<Address>,
     pub max_age_seconds: u64,
+    pub kind: OracleKind,
+    pub window_secs: u64,
+    pub fixed_numerator: u128,
+    pub fixed_denominator: u128,
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
@@ -1222,6 +1439,23 @@ pub struct RecoveryEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+}
+
+/// Event emitted when a soulbound credential is issued.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialIssuedEvent {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+}
+
+/// Event emitted when a soulbound credential is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialRevokedEvent {
+    pub subscription_id: u32,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is created.
@@ -2256,6 +2490,9 @@ mod known_keys_tests {
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
             (DataKey::Proposal(1), false),
+            (DataKey::Coupon(soroban_sdk::Symbol::new(env, "TEST")), false),
+            (DataKey::CouponRedemptions(soroban_sdk::Symbol::new(env, "TEST")), false),
+            (DataKey::SubCoupon(1), false),
         ]
     }
 
