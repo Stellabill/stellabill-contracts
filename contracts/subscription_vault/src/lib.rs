@@ -24,28 +24,32 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, 
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod dispute;
 mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
-pub mod nonce;
-pub mod period_snapshots;
-mod queries;
+pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-pub mod validation;
+mod validation;
 
 pub use safe_math::*;
 pub use types::{
-    EVENT_SCHEMA_VERSION, AdminRotatedEvent, ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent,
-    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent, Coupon, CouponCreatedEvent, CouponRevokedEvent, CouponAppliedEvent, DiscountAppliedEvent,
+    EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
+    DisputeResolvedEvent, DisputeStatus, Error, OracleLivenessEvent, ProtocolFeeConfiguredEvent,
+    Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
+    ProposalSubmittedEvent, ProposalVotedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
 
 /// State machine: validates and applies subscription status transitions.
 pub mod state_machine;
+
+/// Period snapshots: immutable per-period billing snapshots.
+pub mod period_snapshots;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
@@ -316,9 +320,9 @@ pub mod operator {
 
     pub fn do_operator_batch_charge(
         env: &Env,
-        operator: Address,
-        ids: &Vec<u32>,
-        nonce: u64,
+        _operator: Address,
+        _ids: &Vec<u32>,
+        _nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
         Ok(Vec::new(env))
     }
@@ -370,19 +374,20 @@ pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
-    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
-    MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent, SchemaMigratedEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent,
-    ProtocolFeeChargedEvent, RecoveryEvent, RecoveryReason,
-    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent, TokenEarnings,
-    TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    OracleLivenessEvent,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey,
+    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, FundsDepositedEvent,
+    LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent,
+    NextChargeInfo, OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    RecoveryEvent, RecoveryReason, SchemaMigratedEvent,
+    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent,
+    SubscriptionChargeFailedEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent,
+    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState,
+    UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
@@ -819,8 +824,18 @@ impl SubscriptionVault {
         Ok(FullSnapshotPage { subscriptions: subs, balances, next_start_id: next_start })
     }
 
-    /// Restore a previously exported snapshot page.
-    pub fn restore_snapshot_page(env: Env, admin: Address, start_id: u32, subscriptions: Vec<SubscriptionSummary>, balances: Vec<MerchantBalanceEntry>, _next_start_id: Option<u32>) -> Result<(), Error> {
+    /// Restore a previously exported snapshot page. Admin only. Emergency stop must be active.
+    ///
+    /// This operation overwrites subscription records and merchant balances for the
+    /// provided entries. It updates `NextId` to at least the highest restored id+1.
+    pub fn restore_snapshot_page(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        subscriptions: Vec<SubscriptionSummary>,
+        balances: Vec<MerchantBalanceEntry>,
+        _next_start_id: Option<u32>,
+    ) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         if !get_emergency_stop(&env) { return Err(Error::RecoveryNotAllowed); }
         let mut restored: u32 = 0;
@@ -1021,14 +1036,55 @@ impl SubscriptionVault {
     /// Pause a subscription.
     pub fn pause_subscription(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
         subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
+        let timestamp = env.ledger().timestamp();
+
         let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "sub_paused"), subscription_id), SubscriptionPausedEvent { subscription_id, subscriber: sub.subscriber, merchant: sub.merchant, authorizer, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (Symbol::new(&env, "sub_paused"), subscription_id),
+            SubscriptionPausedEvent {
+                subscription_id,
+                subscriber: sub.subscriber,
+                merchant: sub.merchant,
+                authorizer,
+                timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
     }
 
-    /// Resume a subscription.
-    pub fn resume_subscription(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
-        let old_sub = queries::get_subscription(&env, subscription_id)?;
+    /// Resume a paused or underfunded subscription.
+    ///
+    /// Allowed from `Paused`, `GracePeriod`, or `InsufficientBalance`.
+    /// Transitions back to `Active`, enabling future charges.
+    ///
+    /// Note: resuming from `InsufficientBalance` does **not** automatically trigger a
+    /// charge; the next scheduled charge will occur at the next billing engine cycle.
+    ///
+    /// # Arguments
+    ///
+    /// * `subscription_id` — Subscription to resume.
+    /// * `authorizer` — Must be either the subscriber or the merchant.
+    ///
+    /// # Auth
+    ///
+    /// `authorizer` must authorize and must be the subscriber or merchant.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::NotFound`] — Subscription does not exist.
+    /// * [`Error::Unauthorized`] — `authorizer` is neither subscriber nor merchant.
+    /// * [`Error::InvalidStatusTransition`] — Subscription is not in a resumable state.
+    ///
+    /// # Events
+    ///
+    /// Emits [`SubscriptionResumedEvent`] with `subscription_id` and timestamp.
+    pub fn resume_subscription(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
+        let _old_sub = queries::get_subscription(&env, subscription_id)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
         let sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish((Symbol::new(&env, "sub_resumed"), subscription_id), SubscriptionResumedEvent { subscription_id, subscriber: sub.subscriber, merchant: sub.merchant, authorizer, previous_status: old_sub.status, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
@@ -1110,7 +1166,25 @@ impl SubscriptionVault {
         let timestamp = env.ledger().timestamp();
         let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "charged"),), SubscriptionChargedEvent { subscription_id, subscriber: old_sub.subscriber, merchant: old_sub.merchant, token: old_sub.token, amount: old_sub.amount, lifetime_charged: new_sub.lifetime_charged, timestamp, period_start: old_sub.last_payment_timestamp, period_end: timestamp, schema_version: crate::types::EVENT_SCHEMA_VERSION });
+
+        let _period_start = old_sub.last_payment_timestamp;
+        let _period_end = timestamp;
+
+        env.events().publish(
+            (Symbol::new(&env, "charged"),),
+            SubscriptionChargedEvent {
+                subscription_id,
+                subscriber: old_sub.subscriber,
+                merchant: old_sub.merchant,
+                token: old_sub.token,
+                amount: old_sub.amount,
+                lifetime_charged: new_sub.lifetime_charged,
+                timestamp,
+                period_start: old_sub.last_payment_timestamp,
+                period_end: timestamp,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(result)
     }
 
@@ -1197,6 +1271,111 @@ impl SubscriptionVault {
 
     /// Get payout schedule.
     pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule { merchant::get_payout_schedule(&env, &merchant) }
+
+    // ── Dispute / Chargeback ──────────────────────────────────────────────────
+
+    /// Open a dispute against a charge for a subscription.
+    ///
+    /// The subscriber initiates the dispute. The disputed `amount` is moved from
+    /// the merchant's balance into escrow, and a [`Dispute`] record is created in
+    /// `Open` status. The merchant/admin has [`DISPUTE_WINDOW_SECS`] to respond.
+    ///
+    /// # Auth
+    ///
+    /// `subscriber` must authorise and must match the subscription's registered
+    /// subscriber.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `subscriber` does not match.
+    /// * [`Error::InvalidAmount`] — `amount` is zero or negative.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute is already open for this subscription.
+    /// * [`Error::InsufficientBalance`] — Merchant balance is insufficient.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeOpenedEvent`].
+    pub fn open_dispute(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        amount: i128,
+        evidence_hash: Option<BytesN<32>>,
+    ) -> Result<u64, Error> {
+        dispute::do_open_dispute(&env, subscriber, subscription_id, amount, evidence_hash)
+    }
+
+    /// Respond to a dispute with evidence. Admin only.
+    ///
+    /// Transitions the dispute from `Open` to `Responded`, signalling that the
+    /// admin has reviewed the dispute and is prepared for resolution.
+    ///
+    /// # Auth
+    ///
+    /// `admin` must match the stored contract admin.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Not the stored admin.
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    /// * [`Error::DisputeAlreadyResponded`] — Dispute is not in `Open` status.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeRespondedEvent`].
+    pub fn respond_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: u64,
+        evidence_hash: Option<BytesN<32>>,
+    ) -> Result<(), Error> {
+        dispute::do_respond_dispute(&env, admin, dispute_id, evidence_hash)
+    }
+
+    /// Resolve a dispute, routing escrowed funds. Admin only.
+    ///
+    /// * If the dispute is `Open` and the window has elapsed, it auto-resolves
+    ///   to the subscriber.
+    /// * If the dispute is `Responded`, the admin decides via
+    ///   `resolve_to_subscriber`.
+    /// * Resolving before response (window not elapsed) is rejected.
+    ///
+    /// # Auth
+    ///
+    /// `admin` must match the stored contract admin.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Not the stored admin.
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    /// * [`Error::DisputeAlreadyResolved`] — Already resolved.
+    /// * [`Error::DisputeNotResponded`] — Unresponded and window not elapsed.
+    ///
+    /// # Events
+    ///
+    /// Emits [`DisputeResolvedEvent`].
+    pub fn resolve_dispute(
+        env: Env,
+        admin: Address,
+        dispute_id: u64,
+        resolve_to_subscriber: bool,
+    ) -> Result<(), Error> {
+        dispute::do_resolve_dispute(&env, admin, dispute_id, resolve_to_subscriber)
+    }
+
+    /// Read a dispute record by its ID.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::DisputeNotFound`] — No dispute for `dispute_id`.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> Result<Dispute, Error> {
+        dispute::do_get_dispute(&env, dispute_id)
+    }
+
+    /// Return the active dispute ID for a subscription, if any.
+    pub fn get_subscription_dispute(env: Env, subscription_id: u32) -> Option<u64> {
+        dispute::do_get_subscription_dispute(&env, subscription_id)
+    }
 
     // ── Queries ──────────────────────────────────────────────────────────────
 

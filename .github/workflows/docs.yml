@@ -69,7 +69,7 @@ jobs:
 
       - name: Run script tests with coverage
         run: |
-          pytest scripts/test_generate_error_table.py -v --tb=short \
-            --cov=scripts/generate_error_table \
+          python -m pytest scripts/test_generate_error_table.py -v --tb=short \
+            --cov=scripts.generate_error_table \
             --cov-report=term-missing \
             --cov-fail-under=95

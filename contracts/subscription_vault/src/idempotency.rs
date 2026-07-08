@@ -7,8 +7,19 @@
 //!
 //! Storage key: `DataKey::IdemKey(subscription_id)` stores `IdemRingBuffer`.
 
-use crate::types::{DataKey, IdemRingBuffer, IDEM_HISTORY};
-use soroban_sdk::{BytesN, Env, Vec};
+use crate::types::DataKey;
+use soroban_sdk::{contracttype, BytesN, Env, Vec};
+
+/// Maximum number of idempotency keys retained per subscription.
+pub(crate) const IDEM_HISTORY: u32 = 10;
+
+/// Ring buffer of recently seen idempotency-key hashes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub(crate) struct IdemRingBuffer {
+    pub entries: Vec<BytesN<32>>,
+    pub cursor: u32,
+}
 
 /// Return the raw byte representation of a 32-byte idempotency key.
 fn key_bytes(key: &BytesN<32>) -> [u8; 32] {

@@ -45,9 +45,9 @@
 //! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
-use crate::subscription::{extend_subscription_ttl, next_charge_time};
-use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus, normalize_amount, denormalize_amount};
-use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
+use crate::subscription::extend_subscription_ttl;
+use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 /// Maximum `limit` for [`get_subscriptions_by_merchant`] and [`get_subscriptions_by_token`]
 /// (aligned with [`list_subscriptions_by_subscriber`]).
@@ -364,7 +364,7 @@ pub fn list_subscriptions_by_subscriber(
 
 use crate::types::{
     PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
-    TokenEarnings, TokenLiabilities,
+    TokenLiabilities,
 };
 
 /// Maximum number of subscriptions to scan in a single prepaid balance query.

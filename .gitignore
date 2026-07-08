@@ -41,6 +41,11 @@ Thumbs.db
 logs/
 debug/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Build and dist
 dist/
 build/
@@ -55,3 +60,4 @@ tarpaulin-report.html
 
 test_snapshots/
 **/test_snapshots/
+.coverage

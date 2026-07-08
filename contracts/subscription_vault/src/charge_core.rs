@@ -196,7 +196,7 @@ pub fn charge_one(
     if let Some(ref k) = idempotency_key {
         let hashed = crate::idempotency::hash_idem_key(
             env,
-            crate::types::DOMAIN_CHARGE_INTERVAL,
+            crate::nonce::DOMAIN_CHARGE_INTERVAL,
             subscription_id,
             k,
         );
@@ -349,7 +349,7 @@ pub fn charge_one(
             if let Some(k) = idempotency_key {
                 let hashed = crate::idempotency::hash_idem_key(
                     env,
-                    crate::types::DOMAIN_CHARGE_INTERVAL,
+                    crate::nonce::DOMAIN_CHARGE_INTERVAL,
                     subscription_id,
                     &k,
                 );

@@ -22,11 +22,10 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent,
-    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
-    OP_CHARGE, Subscription,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    PayoutSchedule, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
+    MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -283,7 +282,7 @@ pub fn get_merchant_balance_by_token(env: &Env, merchant: &Address, token: &Addr
     env.storage().instance().get(&key).unwrap_or(0i128)
 }
 
-fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
+pub fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
     let key = merchant_balance_key(merchant, token);
     env.storage().instance().set(&key, balance);
 }

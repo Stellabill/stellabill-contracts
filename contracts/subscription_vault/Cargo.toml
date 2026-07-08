@@ -7,6 +7,9 @@ description = "Stellarbill prepaid subscription vault - recurring USDC billing o
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [features]
 default = ["oracle-pricing"]
 oracle-pricing = []

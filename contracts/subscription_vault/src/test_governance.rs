@@ -1,13 +1,13 @@
 #![cfg(test)]
 
-use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE, ProposalKind};
+use crate::types::{OP_WITHDRAW, OP_REFUND, ProposalKind};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
 
 // ── Governance Proposal Tests ──────────────────────────────────────────────
 
 /// Helper to initialize contract with admin and token
-fn init_vault<'a>(env: &'a Env, admin: &'a Address) -> (Address, SubscriptionVaultClient<'a>) {
+fn init_vault<'a>(env: &'a Env, admin: &Address) -> (Address, SubscriptionVaultClient<'a>) {
     let token_admin = Address::generate(env);
     let token_address = env.register_stellar_asset_contract_v2(token_admin).address();
     
@@ -133,7 +133,7 @@ fn test_invalid_quorum_bps() {
         &eta,
     );
 
-    assert!(result.is_err());
+    assert!(result.is_err(), "proposal with quorum > 10000 must be rejected");
 }
 
 #[test]
@@ -145,8 +145,7 @@ fn test_eta_in_past_rejected() {
     let new_admin = Address::generate(&env);
     let (_, client) = init_vault(&env, &admin);
 
-    // Advance time so we can subtract 3600 without underflowing
-    env.ledger().set_timestamp(5000);
+    env.ledger().set_timestamp(1_000_000);
     let current_time = env.ledger().timestamp();
     let eta_in_past = current_time - 3600;  // 1 hour ago
 
@@ -160,7 +159,7 @@ fn test_eta_in_past_rejected() {
         &eta_in_past,
     );
 
-    assert!(result.is_err());
+    assert!(result.is_err(), "proposal with past ETA must be rejected");
 }
 
 #[test]

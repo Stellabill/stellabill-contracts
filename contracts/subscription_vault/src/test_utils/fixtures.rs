@@ -1,6 +1,5 @@
 use crate::{SubscriptionStatus, SubscriptionVaultClient, types::DataKey};
-use soroban_sdk::testutils::Ledger;
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
 const DEFAULT_INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -55,6 +54,7 @@ pub fn create_subscription_detailed(
 }
 
 /// Create a test subscription with a specific merchant.
+#[allow(dead_code)]
 pub fn create_subscription_with_merchant(
     env: &Env,
     client: &SubscriptionVaultClient,
@@ -136,6 +136,7 @@ pub fn create_active_subscription(
 }
 
 /// Test subscription helper with specific merchant (4 args).
+#[allow(dead_code)]
 pub fn create_test_subscription_with_merchant(
     env: &Env,
     client: &SubscriptionVaultClient,
@@ -169,6 +170,7 @@ pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balanc
 }
 
 /// Seed the `next_id` counter to an arbitrary value.
+#[allow(dead_code)]
 pub fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
     env.as_contract(contract_id, || {
         crate::admin::write_config(env, &DataKey::NextId, &value);

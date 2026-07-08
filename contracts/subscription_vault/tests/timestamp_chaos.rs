@@ -107,6 +107,7 @@ struct ChaosEnv {
     env: Env,
     client: SubscriptionVaultClient<'static>,
     token: Address,
+    #[allow(dead_code)]
     admin: Address,
 }
 

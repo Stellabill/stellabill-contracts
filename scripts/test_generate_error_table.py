@@ -9,9 +9,16 @@ from unittest.mock import patch
 
 import pytest
 
-# Add current directory to sys.path so we can import generate_error_table
-sys.path.append(str(Path(__file__).resolve().parent))
-import generate_error_table as MOD
+# ---------------------------------------------------------------------------
+# Load the module under test — add `scripts` to sys.path so coverage can
+# trace the import via the normal import machinery.
+# ---------------------------------------------------------------------------
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR.parent))
+
+import scripts.generate_error_table as MOD  # noqa: E402
 
 # Re-export symbols under test
 parse_variants = MOD.parse_variants

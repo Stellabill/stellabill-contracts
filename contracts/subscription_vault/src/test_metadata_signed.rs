@@ -42,18 +42,13 @@ use crate::{
     metadata::build_metadata_signed_message, SignedMetadataPayload, SubscriptionVault,
     SubscriptionVaultClient,
 };
-use ed25519_dalek::{SigningKey, Signature, Signer as _, PUBLIC_KEY_LENGTH};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, PUBLIC_KEY_LENGTH};
 use rand::rngs::OsRng;
-use soroban_sdk::{testutils::{Address as _, Events}, Address, Bytes, BytesN, Env, String, TryFromVal};
-fn address_from_bytes32(env: &Env, b32: &BytesN<32>) -> Address {
-    soroban_sdk::Address::try_from_val(
-        env,
-        &soroban_sdk::xdr::ScAddress::Account(soroban_sdk::xdr::AccountId(
-            soroban_sdk::xdr::PublicKey::PublicKeyTypeEd25519(soroban_sdk::xdr::Uint256(b32.to_array())),
-        )),
-    ).unwrap()
-}
-
+use soroban_sdk::xdr::{AccountId, PublicKey, ScAddress, Uint256};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events as _, Address, Bytes, BytesN, Env, String,
+    TryFromVal, TryIntoVal,
+};
 
 // ── Constants shared by the test suite ────────────────────────────────────────
 
@@ -134,9 +129,8 @@ fn sign_payload(
 ) -> (BytesN<64>, Bytes) {
     let chain = env.ledger().network_id();
     let msg = build_metadata_signed_message(env, payload, &chain);
-    let mut msg_buf = std::vec![0u8; msg.len() as usize];
-    msg.copy_into_slice(&mut msg_buf);
-    let sig: Signature = key.keypair.sign(&msg_buf);
+    let msg_bytes: Vec<u8> = msg.iter().collect();
+    let sig: Signature = key.keypair.sign(&msg_bytes);
     let sig_arr = sig.to_bytes();
     let sig_bytes: [u8; 64] = sig_arr;
     (BytesN::from_array(env, &sig_bytes), msg)
@@ -168,6 +162,15 @@ fn bytes32(env: &Env, src: &[u8]) -> BytesN<32> {
     BytesN::from_array(env, &buf)
 }
 
+fn pubkey_to_address(env: &Env, pubkey: &BytesN<32>) -> Address {
+    let arr = pubkey.to_array();
+    Address::try_from_val(
+        env,
+        &ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(arr)))),
+    )
+    .unwrap()
+}
+
 // ── Positive paths ───────────────────────────────────────────────────────────
 
 #[test]
@@ -176,10 +179,7 @@ fn fresh_nonce_is_zero() {
     let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
 
     let key = KeyMaterial::fresh();
-    let sub_addr_from_pubkey = address_from_bytes32(
-        &env,
-        &bytes32(&env, &key.pub_bytes),
-    );
+    let sub_addr_from_pubkey = pubkey_to_address(&env, &bytes32(&env, &key.pub_bytes));
 
     // Bind the freshly generated signer to the subscriber's own ed25519
     // public key: derive a Soroban address from `key.pub_bytes` and use
@@ -204,7 +204,7 @@ fn subscriber_signed_set_succeeds() {
     let sub_key = KeyMaterial::fresh();
     let merchant_address = Address::generate(&env);
     let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-    let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+    let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
 
     let sub_id = client.create_subscription(
         &subscriber,
@@ -232,7 +232,7 @@ fn merchant_signed_set_succeeds() {
     let _mer_key = KeyMaterial::fresh();
 
     let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-    let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+    let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
     // Merchants and subscribers cannot be the same address, so use fresh
     // random for merchant. The merchant path is exercised in
     // `merchant_signed_set_via_merchants_keypair_payload` below because the
@@ -240,7 +240,7 @@ fn merchant_signed_set_succeeds() {
     // sign with `_mer_key` and use the address derived from `_mer_key`.
     let merchant_pubkey_bytes = _mer_key.pub_bytes;
     let merchant_pubkey = bytes32(&env, &merchant_pubkey_bytes);
-    let merchant = address_from_bytes32(&env, &merchant_pubkey);
+    let merchant = pubkey_to_address(&env, &merchant_pubkey);
 
     let sub_id = client.create_subscription(
         &subscriber,
@@ -268,7 +268,7 @@ fn sequential_nonces_advance() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -280,7 +280,7 @@ fn sequential_nonces_advance() {
             &None::<u64>,
         )
     };
-    let signer = address_from_bytes32(&env, &bytes32(&env, &sub_key.pub_bytes));
+    let signer = pubkey_to_address(&env, &bytes32(&env, &sub_key.pub_bytes));
 
     for (n, key, value) in [
         (0u64, "k1", "v1"),
@@ -316,7 +316,7 @@ fn replayed_nonce_is_rejected() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -349,7 +349,7 @@ fn skipped_nonce_is_rejected() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -383,7 +383,7 @@ fn expires_at_equal_to_now_rejected() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -412,7 +412,7 @@ fn expires_at_in_past_rejected() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -444,7 +444,7 @@ fn expires_at_in_future_succeeds() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -478,7 +478,7 @@ fn forged_signature_panics() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -496,11 +496,10 @@ fn forged_signature_panics() {
     // Sign the **wrong** message with the same key — verification must
     // panic on the host crypto boundary.
     let bogus_msg = Bytes::from_slice(&env, b"completely different bytes");
-    let mut bogus_buf = std::vec![0u8; bogus_msg.len() as usize];
-    bogus_msg.copy_into_slice(&mut bogus_buf);
-    let wrong_sig: Signature = sub_key.keypair.sign(&bogus_buf);
-    let wrong_sig_arr: [u8; 64] = wrong_sig.to_bytes();
-    let wrong_sig_n = BytesN::from_array(&env, &wrong_sig_arr);
+    let bogus_msg_bytes: Vec<u8> = bogus_msg.iter().collect();
+    let wrong_sig: Signature = sub_key.keypair.sign(&bogus_msg_bytes);
+    let wrong_sig_bytes: [u8; 64] = wrong_sig.to_bytes();
+    let wrong_sig_n = BytesN::from_array(&env, &wrong_sig_bytes);
 
     client.set_metadata_signed(
         &bytes32(&env, &sub_key.pub_bytes),
@@ -518,7 +517,7 @@ fn wrong_key_signature_panics() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -535,9 +534,8 @@ fn wrong_key_signature_panics() {
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
     let chain = env.ledger().network_id();
     let msg = build_metadata_signed_message(&env, &payload, &chain);
-    let mut msg_buf = std::vec![0u8; msg.len() as usize];
-    msg.copy_into_slice(&mut msg_buf);
-    let sig: Signature = attacker.keypair.sign(&msg_buf);
+    let msg_bytes: Vec<u8> = msg.iter().collect();
+    let sig: Signature = attacker.keypair.sign(&msg_bytes);
     let sig_arr: [u8; 64] = sig.to_bytes();
 
     client.set_metadata_signed(
@@ -555,7 +553,7 @@ fn chain_id_mismatch_panics() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -633,7 +631,7 @@ fn key_too_long_rejected() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -673,7 +671,7 @@ fn value_too_long_rejected() {
 
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -709,7 +707,7 @@ fn empty_key_rejected() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -743,7 +741,7 @@ fn empty_value_rejected() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -777,7 +775,7 @@ fn key_cap_reached() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let subscriber_pubkey = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &subscriber_pubkey);
+        let subscriber = pubkey_to_address(&env, &subscriber_pubkey);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -826,9 +824,9 @@ fn subscriber_and_merchant_nonces_independent() {
 
     let sub_id = {
         let spk = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &spk);
+        let subscriber = pubkey_to_address(&env, &spk);
         let mpk = bytes32(&env, &mer_key.pub_bytes);
-        let merchant = address_from_bytes32(&env, &mpk);
+        let merchant = pubkey_to_address(&env, &mpk);
         client.create_subscription(
             &subscriber,
             &merchant,
@@ -848,8 +846,8 @@ fn subscriber_and_merchant_nonces_independent() {
     // Merchant now sees *their* domain counter still at zero.
     let spk = bytes32(&env, &sub_key.pub_bytes);
     let mpk = bytes32(&env, &mer_key.pub_bytes);
-    let subscriber = address_from_bytes32(&env, &spk);
-    let merchant = address_from_bytes32(&env, &mpk);
+    let subscriber = pubkey_to_address(&env, &spk);
+    let merchant = pubkey_to_address(&env, &mpk);
     assert_eq!(client.get_metadata_signed_nonce(&merchant), 0);
     assert_eq!(client.get_metadata_signed_nonce(&subscriber), 1);
 }
@@ -870,20 +868,11 @@ fn cross_domain_nonce_does_not_collide() {
 fn nonce_overflow_is_guarded() {
     let (env, client, _token, _admin) = setup();
     env.mock_all_auths();
-    let contract_id = client.address.clone();
     let sub_id = {
         let sub_key = KeyMaterial::fresh();
         let spk = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &spk);
+        let subscriber = pubkey_to_address(&env, &spk);
         let merchant = Address::generate(&env);
-        let _ = client.try_initialize_merchant_config(
-            &merchant,
-            &merchant,
-            &0i32,
-            &0x1Fi32,
-            &None,
-            &soroban_sdk::String::from_str(&env, "https://example.com"),
-        );
         client.create_subscription(
             &subscriber,
             &merchant,
@@ -895,7 +884,7 @@ fn nonce_overflow_is_guarded() {
         )
     };
     let signer = Address::generate(&env);
-    env.as_contract(&contract_id, || {
+    env.as_contract(&client.address, || {
         // Seed the counter to u64::MAX and verify the next consume
         // overflows (returns Error::Overflow) instead of wrapping to 0.
         crate::nonce::check_and_advance(&env, &signer, crate::nonce::DOMAIN_METADATA_SIGNED, 0)
@@ -942,7 +931,7 @@ fn success_emits_signed_event() {
     let sub_key = KeyMaterial::fresh();
     let sub_id = {
         let spk = bytes32(&env, &sub_key.pub_bytes);
-        let subscriber = address_from_bytes32(&env, &spk);
+        let subscriber = pubkey_to_address(&env, &spk);
         let merchant = Address::generate(&env);
         client.create_subscription(
             &subscriber,
@@ -962,7 +951,7 @@ fn success_emits_signed_event() {
     let mut found_signed = false;
     for ev in events.iter() {
         let topics = ev.1;
-        let topic0: soroban_sdk::Symbol = soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        let topic0: soroban_sdk::Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
         if topic0 == soroban_sdk::Symbol::new(&env, "metadata_set_signed") {
             found_signed = true;
             break;

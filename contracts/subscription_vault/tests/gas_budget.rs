@@ -49,10 +49,11 @@ const BUDGET_CHARGE_CPU: u64 = 2_000_000;
 const BUDGET_CHARGE_READS: u64 = 100;
 const BUDGET_CHARGE_WRITES: u64 = 100;
 
-/// `withdraw_merchant_funds`: merchant balance read/write + token transfer.
-const BUDGET_WITHDRAW_CPU: u64 = 1_000_000;
-const BUDGET_WITHDRAW_READS: u64 = 100;
-const BUDGET_WITHDRAW_WRITES: u64 = 100;
+/// `withdraw_merchant_funds`: merchant balance read/write + token transfer +
+/// merchant config check.
+const BUDGET_WITHDRAW_CPU: u64 = 1_100_000;
+const BUDGET_WITHDRAW_READS: u64 = 20;
+const BUDGET_WITHDRAW_WRITES: u64 = 20;
 
 /// Soft-warning threshold: print a `[Warn]` line when consumption exceeds this
 /// fraction of the hard limit. Does not fail the test on its own.
@@ -87,6 +88,11 @@ fn make_env() -> (
     vault.init(&token.address, &7u32, &admin, &100i128, &(3 * 86_400u64));
 
     (env, vault, token, token_admin_client, admin)
+}
+
+fn init_merchant(vault: &SubscriptionVaultClient<'static>, merchant: &Address) {
+    let url = soroban_sdk::String::from_str(&vault.env, "https://example.com");
+    vault.initialize_merchant_config(merchant, merchant, &0, &0x1F, &None::<Address>, &url);
 }
 
 /// Print a `[Budget]` line, emit `[Warn]` if above threshold, and assert hard limits.
@@ -139,9 +145,10 @@ fn budget_create_subscription() {
     env.cost_estimate().budget().reset_unlimited();
     vault.create_subscription(&subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("create_subscription", cpu, reads, writes, BUDGET_CREATE_CPU, BUDGET_CREATE_READS, BUDGET_CREATE_WRITES);
 }
 
@@ -160,9 +167,10 @@ fn budget_deposit_funds() {
     env.cost_estimate().budget().reset_unlimited();
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("deposit_funds", cpu, reads, writes, BUDGET_DEPOSIT_CPU, BUDGET_DEPOSIT_READS, BUDGET_DEPOSIT_WRITES);
 }
 
@@ -189,9 +197,10 @@ fn budget_charge_subscription() {
     env.cost_estimate().budget().reset_unlimited();
     vault.charge_subscription(&sub_id, &None);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("charge_subscription", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
 }
 
@@ -211,13 +220,15 @@ fn budget_withdraw_merchant_funds() {
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
     vault.charge_subscription(&sub_id, &None);
+    init_merchant(&vault, &merchant);
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &1_000i128);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("withdraw_merchant_funds", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
 }
 
@@ -258,9 +269,10 @@ fn budget_charge_subscription_high_id() {
     env.cost_estimate().budget().reset_unlimited();
     vault.charge_subscription(&last_id, &None);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("charge_subscription_high_id", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
 }
 
@@ -289,12 +301,14 @@ fn budget_withdraw_dense_merchant_earnings() {
     for id in 0..20u32 {
         vault.charge_subscription(&id, &None);
     }
+    init_merchant(&vault, &merchant);
 
     env.cost_estimate().budget().reset_unlimited();
     vault.withdraw_merchant_funds(&merchant, &5_000i128);
 
-    let cpu = env.cost_estimate().resources().instructions as u64;
-    let reads = env.cost_estimate().resources().read_entries as u64;
-    let writes = env.cost_estimate().resources().write_entries as u64;
+    let resources = env.cost_estimate().resources();
+    let cpu = resources.instructions.max(0) as u64;
+    let reads = resources.read_entries as u64;
+    let writes = resources.write_entries as u64;
     assert_budget("withdraw_dense_merchant_earnings", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
 }
