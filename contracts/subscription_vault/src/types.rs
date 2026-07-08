@@ -600,6 +600,8 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
+    /// A bulk admin/operator batch exceeded [`BATCH_MAX_SIZE`] entries.
+    BatchTooLarge = 6011,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -666,6 +668,82 @@ pub struct BatchChargeResult {
 pub struct BatchWithdrawResult {
     pub success: bool,
     pub error_code: u32,
+}
+
+/// Maximum number of ids accepted by a single bulk admin/operator call
+/// ([`bulk_pause_subscriptions`](crate::SubscriptionVault::bulk_pause_subscriptions),
+/// [`bulk_cancel_subscriptions`](crate::SubscriptionVault::bulk_cancel_subscriptions)).
+///
+/// Batches larger than this are rejected wholesale with [`Error::BatchTooLarge`]
+/// before any state is touched, bounding per-transaction CPU/storage so a single
+/// oversized batch cannot exceed Soroban resource limits mid-loop.
+pub const BATCH_MAX_SIZE: u32 = 100;
+
+/// Per-id outcome of a bulk pause/cancel operation.
+///
+/// One entry is returned for every id in the request, in request order, so an
+/// operator can reconcile exactly what happened to each subscription without the
+/// batch aborting on the first problem.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    /// The subscription id this outcome refers to.
+    pub subscription_id: u32,
+    /// `true` when the id ended in the desired state (either it was transitioned
+    /// now, or it was already there — see `changed`). `false` on a hard error.
+    pub success: bool,
+    /// `true` when this call actually transitioned the subscription; `false` when
+    /// it was skipped as a no-op because it was already paused/cancelled.
+    pub changed: bool,
+    /// `0` on success; otherwise the [`Error`] code explaining why this id failed
+    /// (e.g. `NotFound`, `SubscriptionExpired`, `InvalidStatusTransition`).
+    pub error_code: u32,
+}
+
+/// Single envelope event emitted once per successful `bulk_pause_subscriptions`
+/// batch, summarising the per-id outcomes for off-chain indexers.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    /// Admin or operator address that authorized the batch.
+    pub caller: Address,
+    /// Number of ids submitted in the request.
+    pub requested: u32,
+    /// Number of subscriptions actually transitioned Active -> Paused.
+    pub paused: u32,
+    /// Number of ids skipped as already-paused no-ops.
+    pub skipped: u32,
+    /// Number of ids that failed (not found, expired, invalid transition, ...).
+    pub failed: u32,
+    /// The per-batch nonce consumed for replay protection.
+    pub nonce: u64,
+    /// Ledger timestamp when the batch was processed.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
+/// Single envelope event emitted once per successful `bulk_cancel_subscriptions`
+/// batch, summarising the per-id outcomes for off-chain indexers.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    /// Admin or operator address that authorized the batch.
+    pub caller: Address,
+    /// Number of ids submitted in the request.
+    pub requested: u32,
+    /// Number of subscriptions actually transitioned to Cancelled.
+    pub cancelled: u32,
+    /// Number of ids skipped as already-cancelled no-ops.
+    pub skipped: u32,
+    /// Number of ids that failed (not found, expired, invalid transition, ...).
+    pub failed: u32,
+    /// The per-batch nonce consumed for replay protection.
+    pub nonce: u64,
+    /// Ledger timestamp when the batch was processed.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// A read-only snapshot of the contract's configuration and current state.

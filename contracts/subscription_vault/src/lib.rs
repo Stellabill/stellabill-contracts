@@ -374,6 +374,7 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    BulkCancelEvent, BulkPauseEvent, BulkSubscriptionResult, BATCH_MAX_SIZE,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
     CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -825,6 +826,96 @@ impl SubscriptionVault {
     ) -> Result<Vec<BatchChargeResult>, Error> {
         require_not_emergency_stop(&env)?;
         admin::do_batch_charge(&env, &subscription_ids, nonce)
+    }
+
+    // ── Bulk pause / cancel (operational hygiene) ─────────────────────────────
+
+    /// Pause many subscriptions in one transaction. Admin **or** operator.
+    ///
+    /// Operational tooling for offboarding or containing a compromised merchant
+    /// without calling [`pause_subscription`](Self::pause_subscription) one id at
+    /// a time. The batch is **partial-failure tolerant**: ids that are missing,
+    /// expired, or already paused never abort the batch — each id's fate is
+    /// reported in the returned vector (one [`BulkSubscriptionResult`] per
+    /// requested id, in request order). Already-paused ids are skipped as
+    /// idempotent no-ops (`changed = false`).
+    ///
+    /// Unlike [`batch_charge`](Self::batch_charge), this is intentionally **not**
+    /// gated by the emergency stop — pausing must remain available precisely when
+    /// the circuit breaker is engaged. This mirrors the single-id
+    /// [`pause_subscription`](Self::pause_subscription).
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` — Must match the stored admin or the stored operator.
+    /// * `subscription_ids` — Ids to pause. At most [`BATCH_MAX_SIZE`]; a larger
+    ///   batch is rejected wholesale with [`Error::BatchTooLarge`]. An empty list
+    ///   is a no-op (no nonce consumed, no event).
+    /// * `nonce` — Per-batch replay protection on the `DOMAIN_OPERATOR_BATCH_CHARGE`
+    ///   counter, keyed per caller. Read the current value with
+    ///   [`get_admin_nonce`](Self::get_admin_nonce) (admin) or
+    ///   [`get_operator_nonce`](Self::get_operator_nonce) (operator), passing
+    ///   domain `2`.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+    /// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] ids supplied.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+    ///
+    /// # Events
+    ///
+    /// Emits one [`SubscriptionPausedEvent`] per actually-paused id, plus a single
+    /// [`BulkPauseEvent`] envelope summarising the batch.
+    pub fn bulk_pause_subscriptions(
+        env: Env,
+        caller: Address,
+        subscription_ids: Vec<u32>,
+        nonce: u64,
+    ) -> Result<Vec<BulkSubscriptionResult>, Error> {
+        subscription::do_bulk_pause_subscriptions(&env, caller, &subscription_ids, nonce)
+    }
+
+    /// Cancel many subscriptions in one transaction. Admin **or** operator.
+    ///
+    /// Operational tooling for offboarding or containing a compromised merchant.
+    /// Like [`bulk_pause_subscriptions`](Self::bulk_pause_subscriptions) it is
+    /// **partial-failure tolerant** and returns one [`BulkSubscriptionResult`] per
+    /// requested id, in request order. Already-cancelled ids are skipped as
+    /// idempotent no-ops, so a duplicated id can never be refunded twice.
+    ///
+    /// Each cancelled id refunds its remaining prepaid balance to the subscriber,
+    /// exactly as [`cancel_subscription`](Self::cancel_subscription) does. Because
+    /// the loop performs external token transfers, the call is wrapped in a
+    /// `ReentrancyGuard` for defense in depth.
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` — Must match the stored admin or the stored operator.
+    /// * `subscription_ids` — Ids to cancel. At most [`BATCH_MAX_SIZE`]; a larger
+    ///   batch is rejected wholesale with [`Error::BatchTooLarge`]. An empty list
+    ///   is a no-op (no nonce consumed, no event).
+    /// * `nonce` — Per-batch replay protection on the `DOMAIN_OPERATOR_BATCH_CHARGE`
+    ///   counter, keyed per caller (domain `2`).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+    /// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] ids supplied.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+    ///
+    /// # Events
+    ///
+    /// Emits one [`SubscriptionCancelledEvent`] per actually-cancelled id, plus a
+    /// single [`BulkCancelEvent`] envelope summarising the batch.
+    pub fn bulk_cancel_subscriptions(
+        env: Env,
+        caller: Address,
+        subscription_ids: Vec<u32>,
+        nonce: u64,
+    ) -> Result<Vec<BulkSubscriptionResult>, Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_cancel_subscriptions")?;
+        subscription::do_bulk_cancel_subscriptions(&env, caller, &subscription_ids, nonce)
     }
 
     // ── Emergency Stop ────────────────────────────────────────────────────────
@@ -3634,6 +3725,9 @@ mod test_validation;
 
 #[cfg(test)]
 mod test_abi_validators_integration;
+
+#[cfg(test)]
+mod test_bulk_admin_ops;
 
 #[cfg(test)]
 mod test {
