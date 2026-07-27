@@ -1135,6 +1135,15 @@ pub struct DiscountAppliedEvent {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Pricing strategy used to resolve oracle-based quotes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    Spot = 0,
+    Twap = 1,
+    FixedRate = 2,
+}
+
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

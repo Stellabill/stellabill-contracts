@@ -29,6 +29,7 @@ mod governance;
 mod idempotency;
 mod merchant;
 mod metadata;
+pub mod oracle_adapter;
 pub mod queries;
 mod safe_math;
 mod subscription;
@@ -38,9 +39,9 @@ mod validation;
 pub use safe_math::*;
 pub use types::{
     EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
-    DisputeResolvedEvent, DisputeStatus, Error, OracleLivenessEvent, ProtocolFeeConfiguredEvent,
-    Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
-    ProposalSubmittedEvent, ProposalVotedEvent,
+    DisputeResolvedEvent, DisputeStatus, Error, OracleKind, OracleLivenessEvent,
+    ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent, ProposalExecutedEvent,
+    ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -154,7 +155,7 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
+    use crate::types::{Error, OracleConfig, OracleKind, OracleLivenessEvent, Subscription};
     use soroban_sdk::{Address, Env, Symbol};
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
