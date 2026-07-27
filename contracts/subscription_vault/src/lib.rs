@@ -1775,6 +1775,8 @@ mod test_utils;
 mod test_metadata_signed;
 #[cfg(test)]
 mod test_charge_invariants;
+#[cfg(test)]
+mod test_nonce_domains;
 
 #[cfg(test)]
 mod test_scheduled_cancel;

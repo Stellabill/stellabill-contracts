@@ -42,7 +42,6 @@ pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 /// be replayed into a higher-privilege domain. Auth check (signer must be
 /// subscriber or merchant) runs **before** the nonce check.
 pub const DOMAIN_METADATA_SIGNED: u32 = 3;
-pub const DOMAIN_MERCHANT_ROTATION: u32 = 4;
 
 /// Domain constant for charge_interval operations.
 pub const DOMAIN_CHARGE_INTERVAL: u32 = 4;
@@ -158,6 +157,10 @@ mod tests {
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
         assert_eq!(DOMAIN_METADATA_SIGNED, 3);
+        assert_eq!(DOMAIN_CHARGE_INTERVAL, 4);
+        assert_eq!(DOMAIN_DEPOSIT_FUNDS, 5);
+        assert_eq!(DOMAIN_CHARGE_ONEOFF, 6);
+        assert_eq!(DOMAIN_MERCHANT_ROTATION, 7);
     }
 
     #[test]
