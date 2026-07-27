@@ -201,6 +201,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Transfer intent keyed by subscription ID (instance). Discriminant 54.
+    TransferIntent(u32),
 }
 
 impl DataKey {
@@ -260,6 +262,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
+            DataKey::TransferIntent(_) => 54,
         }
     }
 
@@ -309,6 +312,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
+    54, // TransferIntent(u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -655,6 +659,14 @@ pub enum Error {
     DisputeAlreadyOpen = 10005,
     /// The dispute has already been responded to by the admin.
     DisputeAlreadyResponded = 10006,
+
+    // --- Subscription Transfer (11000-11099) ---
+    /// The transfer intent was not found or has expired.
+    TransferIntentNotFound = 11001,
+    /// The transfer intent has expired.
+    TransferIntentExpired = 11002,
+    /// The transfer target is invalid.
+    InvalidTransferTarget = 11003,
 }
 
 impl Error {
@@ -1979,6 +1991,7 @@ mod known_keys_tests {
             (DataKey::NextDisputeId, true),
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
+            (DataKey::TransferIntent(1), true),
         ]
     }
 
@@ -2068,6 +2081,45 @@ mod known_keys_tests {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
         assert!(seen.iter().all(|&s| s));
-        assert_eq!(variants.len(), 50);
+        assert_eq!(variants.len(), 51);
     }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }

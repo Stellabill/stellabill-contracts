@@ -2285,4 +2285,156 @@ pub fn do_configure_usage_limits(
     Ok(())
 }
 
+pub fn do_initiate_transfer(
+    env: &Env,
+    subscription_id: u32,
+    from: Address,
+    to: Address,
+    expires_at: u64,
+) -> Result<(), Error> {
+    from.require_auth();
 
+    let sub = get_subscription(env, subscription_id)?;
+    if sub.subscriber != from {
+        return Err(Error::Unauthorized);
+    }
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    if sub.is_expired(env.ledger().timestamp()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    if expires_at <= env.ledger().timestamp() {
+        return Err(Error::InvalidInput);
+    }
+
+    if from == to {
+        return Err(Error::InvalidTransferTarget);
+    }
+
+    let intent = crate::types::TransferIntent {
+        subscription_id,
+        from: from.clone(),
+        to: to.clone(),
+        expires_at,
+    };
+
+    env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);
+
+    env.events().publish(
+        (Symbol::new(env, "transfer_intent_created"), subscription_id),
+        crate::types::TransferIntentCreatedEvent {
+            subscription_id,
+            from,
+            to,
+            expires_at,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+pub fn do_accept_transfer(
+    env: &Env,
+    subscription_id: u32,
+    to: Address,
+) -> Result<(), Error> {
+    to.require_auth();
+
+    let intent_key = DataKey::TransferIntent(subscription_id);
+    let intent: crate::types::TransferIntent = env
+        .storage()
+        .instance()
+        .get(&intent_key)
+        .ok_or(Error::TransferIntentNotFound)?;
+
+    if intent.to != to {
+        return Err(Error::Unauthorized);
+    }
+
+    if intent.expires_at <= env.ledger().timestamp() {
+        env.storage().instance().remove(&intent_key);
+        return Err(Error::TransferIntentExpired);
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+    
+    // Clean up intent
+    env.storage().instance().remove(&intent_key);
+
+    // Enforce credit limit for new subscriber
+    let liability_amount = if sub.status == SubscriptionStatus::Active { sub.amount } else { 0 };
+    let additional_liability = safe_add(sub.prepaid_balance, liability_amount)?;
+    enforce_credit_limit_for_delta(env, &to, &sub.token, additional_liability)?;
+
+    // Remove from old subscriber's index
+    let old_subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
+    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&old_subscriber_key) {
+        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+            let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
+            ids.remove(idx_u32);
+            env.storage().instance().set(&old_subscriber_key, &ids);
+        }
+    }
+
+    // Add to new subscriber's index
+    let new_subscriber_key = DataKey::SubscriberSubs(to.clone());
+    let mut new_ids: Vec<u32> = env
+        .storage()
+        .instance()
+        .get(&new_subscriber_key)
+        .unwrap_or(Vec::new(env));
+    new_ids.push_back(subscription_id);
+    env.storage().instance().set(&new_subscriber_key, &new_ids);
+
+    sub.subscriber = to.clone();
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "subscription_transferred"), subscription_id),
+        crate::types::SubscriptionTransferredEvent {
+            subscription_id,
+            from: intent.from,
+            to,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+pub fn do_veto_transfer(
+    env: &Env,
+    subscription_id: u32,
+    merchant: Address,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    let sub = get_subscription(env, subscription_id)?;
+    if sub.merchant != merchant {
+        return Err(Error::Unauthorized);
+    }
+
+    let intent_key = DataKey::TransferIntent(subscription_id);
+    if !env.storage().instance().has(&intent_key) {
+        return Err(Error::TransferIntentNotFound);
+    }
+
+    env.storage().instance().remove(&intent_key);
+
+    env.events().publish(
+        (Symbol::new(env, "transfer_vetoed"), subscription_id),
+        crate::types::TransferVetoedEvent {
+            subscription_id,
+            merchant,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}

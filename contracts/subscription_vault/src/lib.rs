@@ -1096,6 +1096,38 @@ impl SubscriptionVault {
         subscription::do_cleanup_subscription(&env, subscription_id, authorizer)
     }
 
+    /// Initiate a transfer to a new subscriber.
+    pub fn initiate_transfer(
+        env: Env,
+        subscription_id: u32,
+        from: Address,
+        to: Address,
+        expires_at: u64,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "initiate_transfer")?;
+        subscription::do_initiate_transfer(&env, subscription_id, from, to, expires_at)
+    }
+
+    /// Accept a pending transfer as the new subscriber.
+    pub fn accept_transfer(
+        env: Env,
+        subscription_id: u32,
+        to: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "accept_transfer")?;
+        subscription::do_accept_transfer(&env, subscription_id, to)
+    }
+
+    /// Veto a pending transfer as the merchant.
+    pub fn veto_transfer(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "veto_transfer")?;
+        subscription::do_veto_transfer(&env, subscription_id, merchant)
+    }
+
     /// Merchant-initiated one-off charge.
     pub fn charge_one_off(env: Env, subscription_id: u32, merchant: Address, amount: i128, idem_key: Option<soroban_sdk::BytesN<32>>) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
@@ -1811,3 +1843,6 @@ mod test {
         assert_eq!(client.version(), 1);
     }
 }
+
+#[cfg(test)]
+mod test_subscription_transfer;
