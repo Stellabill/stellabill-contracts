@@ -42,15 +42,13 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
-    PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
-    SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
+    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
+    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -127,14 +125,21 @@ pub fn next_id(env: &Env) -> u32 {
 }
 
 pub fn next_plan_id(env: &Env) -> u32 {
-    let id: u32 = env.storage().instance().get(&DataKey::NextPlanId).unwrap_or(0);
+    let id: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::NextPlanId)
+        .unwrap_or(0);
     let next = id.checked_add(1).unwrap_or(id);
     env.storage().instance().set(&DataKey::NextPlanId, &next);
     id
 }
 
 pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
-    env.storage().instance().get(&DataKey::Plan(plan_template_id)).ok_or(Error::NotFound)
+    env.storage()
+        .instance()
+        .get(&DataKey::Plan(plan_template_id))
+        .ok_or(Error::NotFound)
 }
 
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
@@ -144,7 +149,9 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
-    env.storage().persistent().set(&DataKey::Sub(subscription_id), sub);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Sub(subscription_id), sub);
     extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
 }
 
@@ -200,7 +207,11 @@ fn count_active_subscriptions_for_plan(
             continue;
         }
 
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if &sub.subscriber == subscriber && sub.status == SubscriptionStatus::Active {
                 count = count.saturating_add(1);
             }
@@ -229,10 +240,7 @@ fn enforce_plan_concurrency_limit(
     Ok(())
 }
 
-fn credit_limit_key(
-    subscriber: &Address,
-    token: &Address,
-) -> DataKey {
+fn credit_limit_key(subscriber: &Address, token: &Address) -> DataKey {
     DataKey::CreditLimit(subscriber.clone(), token.clone())
 }
 
@@ -275,7 +283,11 @@ fn compute_subscriber_exposure(
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if &sub.subscriber != subscriber || &sub.token != token {
                 continue;
             }
@@ -470,10 +482,16 @@ pub fn do_create_subscription_with_token(
         issued_at: env.ledger().timestamp(),
         revoked: false,
     };
-    env.storage().persistent().set(&DataKey::Credential(id), &credential);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Credential(id), &credential);
     // Extend TTL of credential just like subscription
-    env.storage().persistent().extend_ttl(&DataKey::Credential(id), SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
-    
+    env.storage().persistent().extend_ttl(
+        &DataKey::Credential(id),
+        SUB_TTL_THRESHOLD as u32,
+        SUB_TTL_EXTEND_TO as u32,
+    );
+
     env.events().publish(
         (Symbol::new(env, "credential_issued"), id),
         crate::types::CredentialIssuedEvent {
@@ -733,11 +751,17 @@ fn apply_cancellation(
     );
 
     // Revoke soulbound credential if it exists
-    if let Some(mut credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+    if let Some(mut credential) = env
+        .storage()
+        .persistent()
+        .get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id))
+    {
         if !credential.revoked {
             credential.revoked = true;
-            env.storage().persistent().set(&DataKey::Credential(subscription_id), &credential);
-            
+            env.storage()
+                .persistent()
+                .set(&DataKey::Credential(subscription_id), &credential);
+
             env.events().publish(
                 (Symbol::new(env, "credential_revoked"), subscription_id),
                 crate::types::CredentialRevokedEvent {
@@ -845,7 +869,6 @@ pub fn do_unschedule_cancel(
     );
     Ok(())
 }
-
 
 /// Pause a subscription (no charges until resumed).
 ///
@@ -964,7 +987,7 @@ pub fn do_resume_subscription(
 
     write_subscription(env, subscription_id, &sub);
 
-     env.events().publish(
+    env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
         crate::types::SubscriptionResumedEvent {
             subscription_id,
@@ -1088,12 +1111,7 @@ fn bulk_cancel_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSub
 ///
 /// The nonce shares the `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller
 /// address, so admin and operator each maintain an independent monotonic sequence.
-fn bulk_precheck(
-    env: &Env,
-    caller: &Address,
-    ids: &Vec<u32>,
-    nonce: u64,
-) -> Result<bool, Error> {
+fn bulk_precheck(env: &Env, caller: &Address, ids: &Vec<u32>, nonce: u64) -> Result<bool, Error> {
     crate::admin::require_admin_or_operator_auth(env, caller)?;
 
     if ids.len() > BATCH_MAX_SIZE {
@@ -1376,7 +1394,7 @@ pub fn do_charge_one_off(
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
-        
+
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
                 (symbol_short!("cap_reach"), subscription_id),
@@ -1458,7 +1476,7 @@ pub fn do_cleanup_subscription(
 
         transition_to(&mut sub.status, SubscriptionStatus::Archived)?;
         write_subscription(env, subscription_id, &sub);
-        
+
         env.events().publish(
             (Symbol::new(env, "subscription_archived"), subscription_id),
             crate::types::SubscriptionArchivedEvent {
@@ -1725,8 +1743,9 @@ pub fn do_update_subscription_cap(
     write_subscription(env, subscription_id, &sub);
 
     // Get admin address for event, fallback to a zero-address if not set
-    let admin_addr = crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
-    
+    let admin_addr =
+        crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
+
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
         LifetimeCapUpdatedEvent {
@@ -2207,7 +2226,10 @@ pub fn do_set_merchant_max_subs(
         .set(&DataKey::MerchantMaxSubs(merchant.clone()), &max_subs);
 
     env.events().publish(
-        (Symbol::new(env, "merchant_max_subs_updated"), merchant.clone()),
+        (
+            Symbol::new(env, "merchant_max_subs_updated"),
+            merchant.clone(),
+        ),
         crate::types::MerchantMaxSubsUpdatedEvent {
             merchant,
             max_subs,
@@ -2284,5 +2306,3 @@ pub fn do_configure_usage_limits(
 
     Ok(())
 }
-
-
