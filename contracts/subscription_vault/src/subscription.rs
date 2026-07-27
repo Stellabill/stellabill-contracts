@@ -743,6 +743,11 @@ pub fn do_deposit_funds(
 
     // EFFECTS
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Reset consecutive failure counter on fresh deposit so the clock starts
+    // clean if the subscriber tops up before the next charge attempt.
+    env.storage()
+        .instance()
+        .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
 
     // INTERACTIONS

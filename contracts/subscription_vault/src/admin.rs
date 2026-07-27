@@ -530,6 +530,24 @@ pub fn get_buyout_premium_bps(env: &Env) -> u32 {
     read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
 }
 
+/// Set the auto-pause threshold (number of consecutive InsufficientBalance failures
+/// before a subscription is automatically paused). `0` disables auto-pause.
+pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::AutoPauseThreshold, &threshold);
+    Ok(())
+}
+
+/// Return the configured auto-pause threshold. `0` means disabled.
+pub fn get_auto_pause_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AutoPauseThreshold)
+        .unwrap_or(0u32)
+}
+
 // ── Schema migration ──────────────────────────────────────────────────────────
 
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {

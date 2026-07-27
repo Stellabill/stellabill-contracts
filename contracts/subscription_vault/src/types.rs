@@ -216,6 +216,10 @@ pub enum DataKey {
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
     ChargeSalt(u32),
+    /// Consecutive InsufficientBalance charge failures for a subscription. Discriminant 62.
+    ChargeFailureCounter(u32),
+    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
+    AutoPauseThreshold,
 }
 
 impl DataKey {
@@ -284,6 +288,8 @@ impl DataKey {
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
             DataKey::ChargeSalt(_) => 61,
+            DataKey::ChargeFailureCounter(_) => 62,
+            DataKey::AutoPauseThreshold => 63,
         }
     }
 
@@ -336,6 +342,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     54, // TransferIntent(u32)
     59,
     61, // ChargeSalt(u32)
+    62, // ChargeFailureCounter(u32)
+    63, // AutoPauseThreshold
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -2353,6 +2361,8 @@ mod known_keys_tests {
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
             (DataKey::ChargeSalt(1), true),
+            (DataKey::ChargeFailureCounter(1), true),
+            (DataKey::AutoPauseThreshold, true),
         ]
     }
 
@@ -2452,7 +2462,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 62);
+        assert_eq!(variants.len(), 64);
     }
 }
 
@@ -2524,6 +2534,18 @@ pub struct MerchantAddressRotatedEvent {
     pub new_merchant: Address,
     pub subscriptions_updated: u32,
     pub timestamp: u64,
+}
+
+/// Event emitted when a subscription is automatically paused after N consecutive
+/// InsufficientBalance charge failures.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent {
+    pub subscription_id: u32,
+    pub consecutive_failures: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 #[contracttype]
