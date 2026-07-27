@@ -14,3 +14,6 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+[patch.crates-io]
+ethnum = "1.5.3"

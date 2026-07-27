@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4.2.2
         with:
           # Check out the PR head so we can push a fixup commit back.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
 
