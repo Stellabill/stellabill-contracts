@@ -1799,6 +1799,9 @@ mod test_coupon;
 mod test_bulk_admin_ops;
 
 #[cfg(test)]
+mod test_dispute_matrix;
+
+#[cfg(test)]
 mod test {
     use super::*;
     use crate::SubscriptionVaultClient;
