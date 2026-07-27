@@ -133,6 +133,10 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "DisputeWindowElapsed":           ("Check auto-resolution rules; dispute can now be resolved.", "—", False),
     "DisputeAlreadyOpen":             ("A dispute is already open for this subscription; wait for resolution.", "DisputeOpenedEvent", False),
     "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
+    # Subscription Transfer
+    "TransferIntentNotFound":         ("Verify transfer initiation or expiry before retrying.", "—", False),
+    "TransferIntentExpired":          ("Transfer intent has expired; initiate a new transfer.", "—", False),
+    "InvalidTransferTarget":          ("Provide a valid target address (not self).", "—", False),
 }
 # fmt: on
 
