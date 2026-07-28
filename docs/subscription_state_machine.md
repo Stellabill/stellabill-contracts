@@ -6,6 +6,30 @@ For full lifecycle, on-chain representation, and invariants see [subscription_li
 
 This document describes the state machine for `SubscriptionStatus` in the SubscriptionVault contract. The state machine enforces valid lifecycle transitions to prevent invalid states and ensure data integrity.
 
+### Design Principles
+
+All state transitions are:
+- **Explicit**: No hidden implicit transitions; every transition goes through `transition_to()`
+- **Total**: Exhaustive match over all states (compiler-enforced)
+- **Atomic**: Validation happens before any state mutation
+- **Safe**: Invalid transitions fail without partial accounting changes
+
+## Core Transition Function
+
+The single authoritative function for all status changes is `transition_to()` in `state_machine.rs`:
+
+```rust
+pub fn transition_to(
+    current: &mut SubscriptionStatus,
+    target: SubscriptionStatus,
+) -> Result<(), Error>
+```
+
+**Every entrypoint that modifies subscription status MUST call this function.** This ensures:
+1. Validation happens before mutation (atomic transitions)
+2. No partial state changes on failure
+3. Centralized, auditable transition logic
+
 ## States
 
 The subscription can be in one of four states:
@@ -54,11 +78,21 @@ Grace period is managed by charge flow on `Active` subscriptions.
 |------|-----|--------|-------------|
 | Active | Paused | `pause_subscription()` | Temporarily pause billing |
 | Active | Cancelled | `cancel_subscription()` | Permanently cancel subscription |
-| Active | InsufficientBalance | `charge_subscription()` (auto) | Charge failed due to insufficient balance |
+| Active | GracePeriod | `charge_one()` (auto) | Charge failed, grace period active |
+| Active | InsufficientBalance | `charge_one()` (auto) | Charge failed, grace expired |
+| Active | Expired | Any entrypoint (auto) | Subscription expired |
+| GracePeriod | Active | `charge_one()` or `resume_subscription()` | Successful charge or manual resume |
+| GracePeriod | InsufficientBalance | `charge_one()` (auto) | Grace period expired |
+| GracePeriod | Cancelled | `cancel_subscription()` | Cancel during grace |
+| GracePeriod | Expired | Any entrypoint (auto) | Subscription expired |
 | Paused | Active | `resume_subscription()` | Resume billing |
 | Paused | Cancelled | `cancel_subscription()` | Cancel while paused |
+| Paused | Expired | Any entrypoint (auto) | Subscription expired |
 | InsufficientBalance | Active | `resume_subscription()` | Resume after deposit |
 | InsufficientBalance | Cancelled | `cancel_subscription()` | Cancel due to funding issues |
+| InsufficientBalance | Expired | Any entrypoint (auto) | Subscription expired |
+| Cancelled | Archived | `cleanup_subscription()` | Archive terminal subscription |
+| Expired | Archived | `cleanup_subscription()` | Archive expired subscription |
 | *any* | Same | (idempotent) | Setting same status is always allowed |
 
 ### Invalid Transitions (Blocked)
@@ -68,8 +102,14 @@ Grace period is managed by charge flow on `Active` subscriptions.
 | Cancelled | Active | Terminal state - no reactivation |
 | Cancelled | Paused | Terminal state - no changes allowed |
 | Cancelled | InsufficientBalance | Terminal state - no changes allowed |
+| Cancelled | GracePeriod | Terminal state - no changes allowed |
+| Cancelled | Expired | Must transition to Archived instead |
+| Archived | *any* | Final terminal state - completely immutable |
 | Paused | InsufficientBalance | Cannot fail charge on paused subscription |
 | InsufficientBalance | Paused | Must either fund and resume, or cancel |
+| Active | Archived | Must go through Cancelled or Expired first |
+| Paused | Archived | Must go through Cancelled or Expired first |
+| GracePeriod | Archived | Must go through Cancelled or Expired first |
 
 ## Implementation
 

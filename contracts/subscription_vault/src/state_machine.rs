@@ -1,122 +1,85 @@
-//! Subscription status state machine and transition validation.
+//! State machine: validates and applies subscription status transitions.
 //!
-//! Full subscription lifecycle and on-chain representation are described in `docs/subscription_lifecycle.md`.
-//!
-//! Kept in a separate module so PRs touching state transitions do not conflict
-//! with PRs touching billing, batch charge, or top-up estimation.
+//! Every status change MUST go through `transition_to`. The transition matrix
+//! is derived from `docs/subscription_state_machine.md`.
+
+use soroban_sdk::{Env, Vec};
 
 use crate::types::{Error, SubscriptionStatus};
 
-/// Validates if a status transition is allowed by the state machine.
+/// Returns `true` if transitioning from `from` to `to` is permitted.
 ///
-/// # State Transition Rules
-///
-/// | From              | To                  | Allowed |
-/// |-------------------|---------------------|---------|
-/// | Active            | Paused              | Yes     |
-/// | Active            | Cancelled           | Yes     |
-/// | Active            | InsufficientBalance | Yes     |
-/// | Paused            | Active              | Yes     |
-/// | Paused            | Cancelled           | Yes     |
-/// | InsufficientBalance | Active            | Yes     |
-/// | InsufficientBalance | Cancelled         | Yes     |
-/// | Cancelled         | *any*               | No      |
-/// | *any*             | Same status         | Yes (idempotent) |
-///
-/// # Arguments
-/// * `from` - Current status
-/// * `to` - Target status
-///
-/// # Returns
-/// * `Ok(())` if transition is valid
-/// * `Err(Error::InvalidStatusTransition)` if transition is invalid
+/// Same-state (idempotent) transitions are always allowed.
+pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
+    if from == to {
+        return true;
+    }
+    use SubscriptionStatus::*;
+    matches!(
+        (from, to),
+        (Active, Paused)
+            | (Active, Cancelled)
+            | (Active, InsufficientBalance)
+            | (Active, GracePeriod)
+            | (Active, Expired)
+            | (Paused, Active)
+            | (Paused, Cancelled)
+            | (Paused, Expired)
+            | (InsufficientBalance, Active)
+            | (InsufficientBalance, Cancelled)
+            | (InsufficientBalance, Expired)
+            | (InsufficientBalance, Paused)
+            | (GracePeriod, Active)
+            | (GracePeriod, Cancelled)
+            | (GracePeriod, InsufficientBalance)
+            | (GracePeriod, Expired)
+            | (Cancelled, Archived)
+            | (Expired, Archived)
+    )
+}
+
+/// Validates a transition, returning `Err(InvalidStatusTransition)` if not allowed.
 pub fn validate_status_transition(
     from: &SubscriptionStatus,
     to: &SubscriptionStatus,
 ) -> Result<(), Error> {
-    if from == to {
-        return Ok(());
-    }
-
-    let valid = match from {
-        SubscriptionStatus::Active => matches!(
-            to,
-            SubscriptionStatus::Paused
-                | SubscriptionStatus::Cancelled
-                | SubscriptionStatus::InsufficientBalance
-                | SubscriptionStatus::GracePeriod
-                | SubscriptionStatus::Expired
-        ),
-        SubscriptionStatus::Paused => {
-            matches!(
-                to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
-            )
-        }
-        SubscriptionStatus::Cancelled => matches!(to, SubscriptionStatus::Archived),
-        SubscriptionStatus::InsufficientBalance => {
-            matches!(
-                to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
-            )
-        }
-        SubscriptionStatus::GracePeriod => {
-            matches!(
-                to,
-                SubscriptionStatus::Active
-                    | SubscriptionStatus::Cancelled
-                    | SubscriptionStatus::InsufficientBalance
-                    | SubscriptionStatus::Expired
-            )
-        }
-        SubscriptionStatus::Expired => matches!(to, SubscriptionStatus::Archived),
-        SubscriptionStatus::Archived => false,
-    };
-
-    if valid {
+    if can_transition(from, to) {
         Ok(())
     } else {
         Err(Error::InvalidStatusTransition)
     }
 }
 
-/// Returns all valid target statuses for a given current status.
+/// Validates and applies a status transition atomically.
 ///
-/// This is useful for UI/documentation to show available actions.
-pub fn get_allowed_transitions(status: &SubscriptionStatus) -> &'static [SubscriptionStatus] {
-    match status {
-        SubscriptionStatus::Active => &[
-            SubscriptionStatus::Paused,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::InsufficientBalance,
-            SubscriptionStatus::GracePeriod,
-            SubscriptionStatus::Expired,
-        ],
-        SubscriptionStatus::Paused => &[
-            SubscriptionStatus::Active,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::Expired,
-        ],
-        SubscriptionStatus::Cancelled => &[SubscriptionStatus::Archived],
-        SubscriptionStatus::InsufficientBalance => &[
-            SubscriptionStatus::Active,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::Expired,
-        ],
-        SubscriptionStatus::GracePeriod => &[
-            SubscriptionStatus::Active,
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::InsufficientBalance,
-            SubscriptionStatus::Expired,
-        ],
-        SubscriptionStatus::Expired => &[SubscriptionStatus::Archived],
-        SubscriptionStatus::Archived => &[],
-    }
+/// `current` is only mutated on success; on error it is left unchanged.
+pub fn transition_to(
+    current: &mut SubscriptionStatus,
+    next: SubscriptionStatus,
+) -> Result<(), Error> {
+    validate_status_transition(current, &next)?;
+    *current = next;
+    Ok(())
 }
 
-/// Checks if a transition is valid without returning an error.
+/// Returns the set of valid target statuses from `from`, excluding self.
 ///
-/// Convenience wrapper around [`validate_status_transition`] for boolean checks.
-pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
-    validate_status_transition(from, to).is_ok()
+/// Used by tests and tooling to enumerate the transition matrix.
+pub fn get_allowed_transitions(from: &SubscriptionStatus) -> Vec<SubscriptionStatus> {
+    let env = Env::default();
+    let mut out: Vec<SubscriptionStatus> = Vec::new(&env);
+    use SubscriptionStatus::*;
+    let targets: &[SubscriptionStatus] = match from {
+        Active => &[Paused, Cancelled, InsufficientBalance, GracePeriod, Expired],
+        Paused => &[Active, Cancelled, Expired],
+        Cancelled => &[Archived],
+        InsufficientBalance => &[Active, Paused, Cancelled, Expired],
+        GracePeriod => &[Active, Cancelled, InsufficientBalance, Expired],
+        Expired => &[Archived],
+        Archived => &[],
+    };
+    for t in targets {
+        out.push_back(t.clone());
+    }
+    out
 }

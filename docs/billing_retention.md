@@ -1,5 +1,10 @@
 # Billing statement retention and compaction
 
+This document covers retention and compaction for the **per-charge audit log**
+(`statements.rs`).  Period billing statements (`billing_statements.rs`,
+`PeriodBillingStatement`) are stored separately and are **not** affected by
+compaction — see `docs/billing_statements.md`.
+
 This contract supports bounded billing-statement growth using configurable retention and explicit compaction.
 
 ## Retention model
@@ -12,9 +17,10 @@ Default policy keeps all rows until retention is explicitly set.
 
 ## Compaction flow
 
-- `compact_billing_statements(admin, subscription_id, keep_recent_override)`
-- Admin-only operation
-- Prunes oldest detailed rows beyond keep threshold
+- **Inline pruning**: Every new statement appended (`charge_subscription`, `charge_one_off`, etc.) automatically checks the global `keep_recent` threshold. If exceeded, the oldest row is pruned inline to cap storage growth dynamically without manual intervention.
+- **Explicit compaction**: `compact_billing_statements(admin, subscription_id, keep_recent_override)`
+  - Admin-only operation
+  - Prunes oldest detailed rows beyond keep threshold in bulk (useful when global retention is lowered or when using an override)
 - Preserves high-level auditability in `BillingStatementAggregate`:
   - `pruned_count`
   - `total_amount`
@@ -33,7 +39,7 @@ Read aggregate with `get_stmt_compacted_aggregate(subscription_id)`.
 ## Guidance
 
 - Choose `keep_recent` to match frontend history window (for example, 12-24 periods).
-- Run compaction periodically for high-volume subscriptions.
+- Inline pruning automatically maintains this bound. Explicit compaction is only needed if retention policies are dynamically lowered and immediate cleanup is required.
 
 ## Security and operations
 

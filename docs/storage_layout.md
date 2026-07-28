@@ -6,13 +6,14 @@ This document describes the subscription vault contract's storage layout, keys, 
 
 ## Storage Overview
 
-The contract uses Soroban's **instance storage** for all persistent data. Instance storage is tied to the contract instance and persists across invocations.
+The contract uses Soroban's **instance storage** for global configurations and **persistent storage** for individual, unbounded subscription records. This hybrid strategy prevents instance footprint bloat and eliminates potential key collisions.
 
-### Storage Type
+### Storage Types
 
-- **Instance Storage**: All contract data uses `env.storage().instance()`
-- **Persistence**: Data survives contract upgrades when keys remain compatible
-- **Access Pattern**: Key-value store with typed keys and values
+- **Instance Storage**: Global configuration data (Admin, Token, MinTopup, NextId, etc.) uses `env.storage().instance()`.
+- **Persistent Storage**: All individual subscription records use `env.storage().persistent()`, keyed under the typed `DataKey::Sub(u32)` enum.
+- **Persistence**: Data survives contract upgrades and has appropriate TTL settings for on-chain storage.
+- **Access Pattern**: Key-value store with typed keys and values.
 
 ---
 
@@ -37,7 +38,9 @@ The contract uses Soroban's **instance storage** for all persistent data. Instan
 
 | Key | Type | Value Type | Description |
 |-----|------|------------|-------------|
-| `{subscription_id}` | `u32` | `Subscription` | Individual subscription data keyed by ID |
+| `DataKey::Sub(id)` | `DataKey` | `Subscription` | Individual subscription data keyed by ID |
+
+**Storage Location**: Persistent keyed storage (`env.storage().persistent()`)
 
 **Subscription Structure** (`contracts/subscription_vault/src/types.rs`):
 
@@ -67,10 +70,66 @@ pub enum SubscriptionStatus {
 **Key Generation**: Sequential u32 IDs from `next_id` counter
 
 **Storage Operations**:
-- Create: `do_create_subscription()` → sets `{id}` key
-- Read: `get_subscription()` → reads `{id}` key
-- Update: All lifecycle functions modify and re-set `{id}` key
-- Delete: Not implemented (cancelled subscriptions remain in storage)
+- Create: `do_create_subscription()` → sets `DataKey::Sub(id)` key in persistent storage
+- Read: `get_subscription()` → reads `DataKey::Sub(id)` key from persistent storage and extends its TTL when it is near expiration
+- Update: All lifecycle functions modify and re-set `DataKey::Sub(id)` key in persistent storage, then extend its TTL via `SUB_TTL_THRESHOLD` / `SUB_TTL_EXTEND_TO`
+- Delete: Not implemented (cancelled subscriptions remain in persistent storage)
+
+**TTL behavior:** Subscription entries are kept alive on every read and write. Billing statement secondary index entries and billing period snapshots also carry their own TTL thresholds (`BILLING_STATEMENT_TTL_THRESHOLD`, `BILLING_STATEMENT_TTL_EXTEND_TO`, `BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD`, `BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO`) and are extended when the corresponding storage operations execute.
+
+#### TTL exhaustion semantics
+
+A `DataKey::Sub(id)` entry is readable while `live_until_ledger >= current_ledger`. The contract refreshes this window on every `get_subscription`/`write_subscription` via `extend_ttl(SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO)`, so an entry that is touched at least once per `SUB_TTL_EXTEND_TO` window (365 days) never expires.
+
+If the window does lapse, the entry is **archived/expired by the host**, and the next access does **not** degrade gracefully to `Error::NotFound` (which would only surface for a key that was never written). Instead the Soroban host aborts with `Error(Storage, InternalError)`, surfaced to the SDK test harness as a panic. This is the safe outcome: an expired record can never be silently read back as live data. On-chain, accessing it would require a `RestoreFootprint` operation before the read.
+
+This behavior is pinned by `contracts/subscription_vault/tests/ttl_exhaustion.rs`, which forces the env past the TTL boundary and asserts:
+- the record is readable at *exactly* its last live ledger;
+- one ledger later the access raises the host error (no stale read);
+- a read at the last live ledger re-extends the TTL and restores access past the original window;
+- a second full TTL cycle preserves the record byte-for-byte, then expires again once unrefreshed.
+
+---
+
+## Known-Instance-Key Allowlist (defensive write guard)
+
+Instance storage holds the contract's global invariant-bearing config (admin,
+token, fees, balances, merchant state). A future PR that adds a new `DataKey`
+variant — or revives a legacy `Symbol`-keyed code path — could accidentally
+write an *unknown* key into instance storage and bypass these invariants. To
+catch that drift before it ships, the contract pins a canonical allowlist of the
+instance-tier keys.
+
+### Components (`contracts/subscription_vault/src/types.rs`)
+
+| Item | Role |
+|------|------|
+| `DataKey::canonical_discriminant(&self) -> u32` | Exhaustive, wildcard-free match mapping each variant to its frozen declaration-order discriminant. Adding a variant without an arm is a **compile error**. |
+| `KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32]` | The canonical, sorted set of instance-tier discriminants (mirrors the registry table). |
+| `is_known_instance_discriminant(u32) -> bool` / `DataKey::is_known_instance_key(&self) -> bool` | Membership checks. The raw-`u32` form can reject a *synthetic* unknown key without constructing one. |
+| `assert_known_data_key(&DataKey)` | `debug_assert!`-based guard. **No-op in release/wasm** (zero overhead); trips under `cfg(test)`/debug so CI catches drift. |
+| `debug_assert_known_key!(key)` | Macro wrapper for instance storage helpers. Expands to nothing in release builds. |
+
+### Two layers of protection
+
+1. **Compile time** — `canonical_discriminant` is exhaustive. A new `DataKey`
+   variant cannot compile until it is explicitly numbered, forcing a conscious
+   instance-vs-persistent classification.
+2. **Test/CI time** — `assert_known_data_key` (via `debug_assert_known_key!`)
+   trips if an unknown or persistent-tier key reaches instance storage, while
+   remaining a no-op in the deployed wasm.
+
+### Adding a new `DataKey` variant
+
+1. Append the variant to `DataKey` (never reorder existing variants).
+2. Append a row to the registry table on `DataKey` with its storage tier.
+3. Add a match arm to `canonical_discriminant` with the next number.
+4. If it is **instance**-tier, add its discriminant to
+   `KNOWN_INSTANCE_KEY_DISCRIMINANTS` and to the positive test enumeration.
+
+The allowlist tests (`types::known_keys_tests`) assert the registry stays
+contiguous (`0..=44`), duplicate-free, and exactly consistent with the
+classification table, so any of the steps above being skipped fails CI.
 
 ---
 
@@ -259,13 +318,18 @@ pub enum SubscriptionStatus {
 ```
 
 ### 2. Key Collision
-**Problem**: New keys conflict with subscription IDs
-```rust
-// BAD: Using u32 for config could collide with subscription IDs
-env.storage().instance().set(&0u32, &config);  // ❌ Collides with subscription ID 0
+**Problem**: New keys conflict with subscription IDs.
+With our storage architecture:
+- Subscription records live in persistent storage (`env.storage().persistent()`) keyed under `DataKey::Sub(u32)`.
+- Global configurations live in instance storage (`env.storage().instance()`) keyed under `Symbol`s or other typed keys.
+Because persistent and instance storages occupy completely disjoint namespaces in Soroban, key collision between configurations and subscriptions is physically impossible. However, when adding new config keys in instance storage, always use unique `DataKey` variants or `Symbol`s to prevent internal collisions.
 
-// GOOD: Use Symbol keys for config
-env.storage().instance().set(&Symbol::new(env, "config"), &config);  // ✅
+```rust
+// Subscription (Persistent Storage)
+env.storage().persistent().set(&DataKey::Sub(0), &sub);
+
+// Config (Instance Storage)
+env.storage().instance().set(&DataKey::NextId, &1u32);
 ```
 
 ### 3. Missing Default Values
