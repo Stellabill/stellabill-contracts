@@ -529,6 +529,7 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
+    DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
