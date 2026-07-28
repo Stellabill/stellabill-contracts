@@ -61,6 +61,7 @@ fn create_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     (id, subscriber, merchant)
 }

@@ -87,6 +87,7 @@ fn create_subscription_last_id_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     assert_eq!(id, u32::MAX - 1, "last valid id must be u32::MAX - 1");
@@ -115,6 +116,7 @@ fn create_subscription_at_max_returns_limit_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
         .expect_err("must fail when counter is at u32::MAX");
 
@@ -138,6 +140,7 @@ fn create_subscription_counter_unchanged_after_failure() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     assert_eq!(

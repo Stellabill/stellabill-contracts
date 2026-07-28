@@ -45,7 +45,8 @@ use crate::types::{
     BillingChargeKind, DataKey, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
-    PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, SubscriberCreateWindow,
+    PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, ReferralAttributedEvent,
+    SubscriberCreateWindow,
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
     SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
@@ -466,6 +467,7 @@ pub fn do_create_subscription(
     usage_enabled: bool,
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
+    inviter: Option<Address>,
 ) -> Result<u32, Error> {
     let token = crate::admin::get_token(env)?;
 
@@ -482,6 +484,7 @@ pub fn do_create_subscription(
         usage_enabled,
         lifetime_cap,
         expires_at,
+        inviter,
     )
 }
 
@@ -496,11 +499,19 @@ pub fn do_create_subscription_with_token(
     usage_enabled: bool,
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
+    inviter: Option<Address>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
 
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
+
+    // Reject self-referral: inviter cannot be the same as subscriber.
+    if let Some(ref inviter_addr) = inviter {
+        if inviter_addr == &subscriber {
+            return Err(Error::SelfReferralNotAllowed);
+        }
+    }
 
     enforce_creation_rate_limit(env, &subscriber)?;
 
@@ -668,6 +679,20 @@ pub fn do_create_subscription_with_token(
             issued_at: env.ledger().timestamp(),
         },
     );
+
+    // Emit referral attribution when a valid inviter is provided.
+    if let Some(ref inviter_addr) = inviter {
+        env.events().publish(
+            (Symbol::new(env, "referral_attributed"), id),
+            ReferralAttributedEvent {
+                subscription_id: id,
+                inviter: inviter_addr.clone(),
+                subscriber: subscriber.clone(),
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
 
     Ok(id)
 }

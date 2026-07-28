@@ -575,6 +575,7 @@ pub use types::{
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
@@ -1265,6 +1266,7 @@ impl SubscriptionVault {
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -1274,6 +1276,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1285,6 +1288,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1317,6 +1321,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1329,6 +1334,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -3001,3 +3007,6 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_merchant_tags;
+
+#[cfg(test)]
+mod test_referral_self;
