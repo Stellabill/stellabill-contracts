@@ -46,16 +46,13 @@ pub const DOMAIN_SUBSCRIBER_WITHDRAWAL: u32 = 8;
 pub const DOMAIN_CHARGEBACK_DISPUTE: u32 = 9;
 
 /// Domain constant for charge_interval operations.
-pub const DOMAIN_CHARGE_INTERVAL: u32 = 4;
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 5;
 
 /// Domain constant for deposit_funds operations.
-pub const DOMAIN_DEPOSIT_FUNDS: u32 = 5;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 6;
 
 /// Domain constant for charge_one_off operations.
-pub const DOMAIN_CHARGE_ONEOFF: u32 = 6;
-
-/// Domain constant for merchant rotation operations.
-pub const DOMAIN_MERCHANT_ROTATION: u32 = 7;
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 7;
 
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
@@ -159,6 +156,10 @@ mod tests {
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
         assert_eq!(DOMAIN_METADATA_SIGNED, 3);
+        assert_eq!(DOMAIN_CHARGE_INTERVAL, 4);
+        assert_eq!(DOMAIN_DEPOSIT_FUNDS, 5);
+        assert_eq!(DOMAIN_CHARGE_ONEOFF, 6);
+        assert_eq!(DOMAIN_MERCHANT_ROTATION, 7);
     }
 
     #[test]

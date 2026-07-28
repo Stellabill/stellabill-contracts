@@ -88,7 +88,7 @@ fn test_apply_coupon_subscriber_auth() {
     let code = Symbol::new(&env, "TEST_CODE");
 
     client.mock_all_auths().create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
 
     let res = client.try_apply_coupon(&wrong_subscriber, &sub_id, &code);
     assert_eq!(res.err().unwrap().unwrap().to_code(), Error::Unauthorized.to_code());
@@ -105,7 +105,7 @@ fn test_apply_coupon_expired() {
     // Expires in 100 seconds
     client.mock_all_auths().create_coupon(&merchant, &code, &token, &0, &0, &0, &(now + 100));
     
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
 
     // Advance time past expiry
     env.ledger().set_timestamp(now + 200);
@@ -124,7 +124,7 @@ fn test_apply_coupon_revoked() {
     client.mock_all_auths().create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
     client.mock_all_auths().revoke_coupon(&merchant, &code);
 
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(res.err().unwrap().unwrap().to_code(), Error::CouponRevoked.to_code());
@@ -141,8 +141,8 @@ fn test_apply_coupon_limit_reached() {
     // Max 1 redemption
     client.mock_all_auths().create_coupon(&merchant, &code, &token, &0, &0, &1, &0);
 
-    let sub_id1 = client.mock_all_auths().subscribe(&subscriber1, &merchant, &1000, &86400, &None, &None);
-    let sub_id2 = client.mock_all_auths().subscribe(&subscriber2, &merchant, &1000, &86400, &None, &None);
+    let sub_id1 = client.mock_all_auths().create_subscription(&subscriber1, &merchant, &1000, &86400, &false, &None, &None);
+    let sub_id2 = client.mock_all_auths().create_subscription(&subscriber2, &merchant, &1000, &86400, &false, &None, &None);
 
     // First one works
     client.mock_all_auths().apply_coupon(&subscriber1, &sub_id1, &code);
@@ -162,7 +162,7 @@ fn test_apply_coupon_already_applied() {
 
     client.mock_all_auths().create_coupon(&merchant, &code1, &token, &0, &0, &0, &0);
     client.mock_all_auths().create_coupon(&merchant, &code2, &token, &0, &0, &0, &0);
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
 
     client.mock_all_auths().apply_coupon(&subscriber, &sub_id, &code1);
     
@@ -181,7 +181,7 @@ fn test_apply_coupon_token_mismatch() {
     // Coupon is for wrong_token
     client.mock_all_auths().create_coupon(&merchant, &code, &wrong_token, &0, &0, &0, &0);
     // Subscription is for token
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(res.err().unwrap().unwrap().to_code(), Error::CouponTokenMismatch.to_code());
@@ -236,18 +236,18 @@ fn test_charge_with_discount() {
     let treasury = Address::generate(&env);
     let code = Symbol::new(&env, "DISCOUNT");
 
-    client.mock_all_auths().set_protocol_fee(&treasury, &1000); // 10% fee
+    client.mock_all_auths().set_protocol_fee(&admin, &treasury, &1000); // 10% fee
     
     // 50% discount
     client.mock_all_auths().create_coupon(&merchant, &code, &token, &5000, &0, &0, &0);
     
     // Subscription is for 1000 units
-    let sub_id = client.mock_all_auths().subscribe(&subscriber, &merchant, &1000, &86400, &None, &None);
+    let sub_id = client.mock_all_auths().create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None, &None);
     client.mock_all_auths().apply_coupon(&subscriber, &sub_id, &code);
 
     // Deposit 1000
     let token_client = soroban_sdk::token::Client::new(&env, &token);
-    let token_admin = soroban_sdk::testutils::Address::generate(&env);
+    let token_admin = Address::generate(&env);
     // mint some tokens to subscriber...
     // wait, we mock deposit in our test suite? Actually tests do it manually, let's use deposit.
     // wait, the standard token contract isn't initialized here?
