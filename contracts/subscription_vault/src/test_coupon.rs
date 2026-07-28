@@ -317,7 +317,7 @@ fn test_charge_with_discount() {
 
     // Deposit 1000
     let token_client = soroban_sdk::token::Client::new(&env, &token);
-    let token_admin = soroban_sdk::testutils::Address::generate(&env);
+    let token_admin = Address::generate(&env);
     // mint some tokens to subscriber...
     // wait, we mock deposit in our test suite? Actually tests do it manually, let's use deposit.
     // wait, the standard token contract isn't initialized here?

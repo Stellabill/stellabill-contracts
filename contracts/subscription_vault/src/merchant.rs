@@ -870,6 +870,7 @@ pub fn do_rotate_merchant_address(
 
     // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
     let subs_key_old = DataKey::MerchantSubs(old_merchant.clone());
+    let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
     let sub_ids: soroban_sdk::Vec<u32> = storage
         .get(&subs_key_old)
         .unwrap_or(soroban_sdk::Vec::new(env));
@@ -887,8 +888,8 @@ pub fn do_rotate_merchant_address(
                 env.storage().persistent().set(&sub_key, &sub);
                 subscriptions_updated += 1;
             }
-            if !already {
-                seen.push_back(pair.clone());
+        }
+    }
 
                 let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
                 let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
@@ -944,4 +945,114 @@ pub fn do_rotate_merchant_address(
     );
 
     Ok(())
+}
+
+/// Emit a balance snapshot event for a single (merchant, token) pair.
+///
+/// Admin-only. Reads the current on-chain balance and accrued/withdrawn/refunded
+/// totals for the pair and publishes a `MerchantBalanceSnapshotEvent`. Safe to
+/// call even when nothing has been earned yet (emits a zero-valued snapshot).
+pub fn do_emit_merchant_balance_snapshot(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    token: Address,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let balance = get_merchant_balance_by_token(env, &merchant, &token);
+    let earnings = get_merchant_token_earnings(env, &merchant, &token);
+    let accrued = earnings
+        .accruals
+        .interval
+        .checked_add(earnings.accruals.usage)
+        .unwrap_or(0)
+        .checked_add(earnings.accruals.one_off)
+        .unwrap_or(0);
+    let withdrawn = earnings.withdrawals;
+    let refunded = earnings.refunds;
+    let ledger_sequence = env.ledger().sequence();
+    let timestamp = env.ledger().timestamp();
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        crate::types::MerchantBalanceSnapshotEvent {
+            merchant,
+            token,
+            balance,
+            accrued,
+            withdrawn,
+            refunded,
+            ledger_sequence,
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Emit balance snapshots for every distinct (merchant, token) pair referenced
+/// by subscriptions in `[start_id, end_id)`. Admin-only.
+///
+/// Each (merchant, token) pair is snapshotted only once, even if referenced by
+/// multiple subscriptions in the range. Returns the list of events emitted.
+pub fn do_emit_all_balances_snapshot(
+    env: &Env,
+    admin: Address,
+    start_id: u32,
+    end_id: u32,
+) -> Result<Vec<crate::types::MerchantBalanceSnapshotEvent>, Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let mut seen: Vec<(Address, Address)> = Vec::new(env);
+    let mut out: Vec<crate::types::MerchantBalanceSnapshotEvent> = Vec::new(env);
+
+    for sub_id in start_id..end_id {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        {
+            let pair = (sub.merchant.clone(), sub.token.clone());
+            let already = seen.contains(&pair);
+            if !already {
+                seen.push_back(pair.clone());
+
+                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let accrued = earnings
+                    .accruals
+                    .interval
+                    .checked_add(earnings.accruals.usage)
+                    .unwrap_or(0)
+                    .checked_add(earnings.accruals.one_off)
+                    .unwrap_or(0);
+                let withdrawn = earnings.withdrawals;
+                let refunded = earnings.refunds;
+                let ledger_sequence = env.ledger().sequence();
+                let timestamp = env.ledger().timestamp();
+
+                let ev = crate::types::MerchantBalanceSnapshotEvent {
+                    merchant: pair.0.clone(),
+                    token: pair.1.clone(),
+                    balance,
+                    accrued,
+                    withdrawn,
+                    refunded,
+                    ledger_sequence,
+                    timestamp,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                };
+
+                env.events().publish(
+                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    ev.clone(),
+                );
+                out.push_back(ev);
+            }
+        }
+    }
+
+    Ok(out)
 }
