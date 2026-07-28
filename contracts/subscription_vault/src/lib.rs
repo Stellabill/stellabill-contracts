@@ -113,36 +113,6 @@ pub mod statements {
     }
 }
 
-/// Period snapshots: write billing-period summaries for reconciliation.
-pub mod period_snapshots {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::{
-        BillingPeriodSnapshot, DataKey, Error, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-        BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
-    };
-    use soroban_sdk::Env;
-
-    pub fn write_period_snapshot(
-        _env: &Env,
-        _snapshot: BillingPeriodSnapshot,
-    ) -> Result<(), Error> {
-        Ok(())
-    }
-    pub fn get_period_snapshot(
-        _env: &Env,
-        _subscription_id: u32,
-        _period_index: u64,
-    ) -> Option<BillingPeriodSnapshot> {
-        None
-    }
-    pub fn list_period_snapshots(
-        _env: &Env,
-        _subscription_id: u32,
-        _limit: u32,
-    ) -> soroban_sdk::Vec<BillingPeriodSnapshot> {
-        soroban_sdk::Vec::new(_env)
-    }
-}
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 ///
@@ -246,7 +216,7 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(_env))
+        Ok(Vec::new(env))
     }
 
     /// Single interval charge driven by the operator.
@@ -1893,7 +1863,6 @@ impl SubscriptionVault {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
 
-        let timestamp = env.ledger().timestamp();
         merchant::withdraw_merchant_funds(&env, merchant.clone(), amount)?;
 
         let new_balance = merchant::get_merchant_balance(&env, &merchant);
@@ -2931,7 +2900,10 @@ mod test_charge_invariants;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
+#[cfg(test)]
 mod test_insufficient_balance;
+#[cfg(test)]
+mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test {
