@@ -271,7 +271,6 @@ pub mod oracle {
     }
 }
 
-mod reentrancy;
 
 /// Operator: least-privilege charge delegate.
 pub mod operator {

@@ -585,16 +585,7 @@ fn flush_merchant_token(
 
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
- // EFFECTS
-    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
-    earnings.refunds = earnings
-        .refunds
-        .checked_add(amount)
-        .ok_or(Error::Overflow)?;
-    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, merchant, token);
     earnings.withdrawals = earnings
         .withdrawals

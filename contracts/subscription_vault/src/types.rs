@@ -200,6 +200,14 @@ pub enum DataKey {
     PayoutSchedule(Address),
     /// Transfer intent keyed by subscription ID (instance). Discriminant 54.
     TransferIntent(u32),
+    /// KYC requirements and merchant status. Discriminant 55.
+    Kyc(KycKey),
+    /// Coupon configuration keyed by code. Discriminant 56.
+    Coupon(soroban_sdk::Symbol),
+    /// Coupon redemption counter keyed by code. Discriminant 57.
+    CouponRedemptions(soroban_sdk::Symbol),
+    /// Issued credentials keyed by subscription ID. Discriminant 58.
+    Credential(u32),
 }
 
 impl DataKey {
@@ -260,6 +268,10 @@ impl DataKey {
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
             DataKey::TransferIntent(_) => 54,
+            DataKey::Kyc(_) => 55,
+            DataKey::Coupon(_) => 56,
+            DataKey::CouponRedemptions(_) => 57,
+            DataKey::Credential(_) => 58,
         }
     }
 
@@ -522,6 +534,8 @@ pub enum Error {
     SelfRotation = 1004,
     /// Nonce has already been used for this signer and domain.
     NonceAlreadyUsed = 1005,
+    /// Batch size exceeds maximum allowed size.
+    BatchTooLarge = 1006,
 
     // --- Not Found (2000-2099) ---
     /// The requested resource was not found in storage.
@@ -2213,6 +2227,131 @@ pub struct TransferIntentCreatedEvent {
 pub struct TransferVetoedEvent {
     pub subscription_id: u32,
     pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub accrued: i128,
+    pub withdrawn: i128,
+    pub refunded: i128,
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    pub admin: Address,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+    pub subscriptions_updated: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialIssuedEvent {
+    pub subscription_id: u32,
+    pub caller: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialRevokedEvent {
+    pub subscription_id: u32,
+    pub caller: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCreatedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub lifetime_cap: Option<i128>,
+    pub expires_at: Option<u64>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FundsDepositedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub lifetime_charged: i128,
+    pub timestamp: u64,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelledEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub authorizer: Address,
+    pub refund_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub authorizer: Address,
+    pub previous_status: SubscriptionStatus,
     pub timestamp: u64,
     pub schema_version: u32,
 }
