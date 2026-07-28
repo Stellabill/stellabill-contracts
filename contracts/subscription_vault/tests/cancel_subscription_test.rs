@@ -58,9 +58,7 @@ fn setup() -> (
     // Deposit funds
     client.deposit_funds(&sub_id, &subscriber, &30_000_000, &None);
 
-    (
-        env, client, sub_id, subscriber, merchant, stranger,
-    )
+    (env, client, sub_id, subscriber, merchant, stranger)
 }
 
 #[test]
@@ -201,7 +199,10 @@ fn test_cancel_refunds_prepaid_balance() {
 
     // Subscriber got their refund
     let subscriber_balance_after = token_client.balance(&subscriber);
-    assert_eq!(subscriber_balance_after, subscriber_balance_before + deposit);
+    assert_eq!(
+        subscriber_balance_after,
+        subscriber_balance_before + deposit
+    );
 
     // Vault no longer holds the refunded amount
     let contract_balance_after = token_client.balance(&contract_id);
