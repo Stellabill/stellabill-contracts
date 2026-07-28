@@ -128,6 +128,10 @@ filter withdrawal events per token without decoding the payload.
    recoverable stranded balance.
 6. **Reconciliation**: `MerchantBalance = total_accruals − total_withdrawals − total_refunds`.
    This must always be true and is verified by `get_reconciliation_snapshot`.
+7. **Property-test invariant**: random sequences of charges, withdrawals, and cancellations
+   are exercised by `prop_merchant_earnings_sum_equals_total_accounted` so that the sum of
+   all merchant-bucket balances for a token remains equal to `TotalAccounted[(token)]` after
+   every mutation.
 
 ## Storage Layout
 
