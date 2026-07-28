@@ -1822,6 +1822,17 @@ pub struct MerchantAddressRotatedEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when a merchant balance snapshot is published.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a subscriber withdraws funds after cancellation.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriberWithdrawalEvent {
