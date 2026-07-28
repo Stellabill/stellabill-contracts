@@ -32,8 +32,15 @@ jobs:
         run: python scripts/generate_error_table.py
 
       - name: Commit regenerated table if changed
-        # Only auto-commit on PRs (push to a branch), not on merge to main.
-        if: github.event_name == 'pull_request'
+        # Only auto-commit on PRs that originate from a branch in *this* repo,
+        # never from a fork. Forks trigger the job (so the table is still
+        # generated as a PR artifact / diff), but the workflow does not
+        # attempt `git push` against the head repo since github-actions[bot]
+        # has no write access there. Skipping on direct pushes to main is
+        # important because no PR exists yet in that path.
+        if: |
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
