@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Env, Map, String, Symbol, Vec, Bytes, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -332,7 +332,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
 pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
-    KNOWN_INSTANCE_KEY_DISCRIMINANTS.iter().any(|&known| known == discriminant)
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
 }
 
 /// Debug-only guard asserting that `key` belongs to the canonical instance-key
@@ -340,7 +342,11 @@ pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
 #[inline]
 #[allow(dead_code)]
 pub fn assert_known_data_key(key: &DataKey) {
-    debug_assert!(key.is_known_instance_key(), "Unknown or persistent key reached instance storage: {}", key.canonical_discriminant());
+    debug_assert!(
+        key.is_known_instance_key(),
+        "Unknown or persistent key reached instance storage: {}",
+        key.canonical_discriminant()
+    );
 }
 
 /// Convenience wrapper over [`assert_known_data_key`] for instance storage helpers.
@@ -448,7 +454,10 @@ pub struct InsufficientBalanceError {
 
 impl InsufficientBalanceError {
     pub const fn new(available: i128, required: i128) -> Self {
-        Self { available, required }
+        Self {
+            available,
+            required,
+        }
     }
     pub fn shortfall(&self) -> i128 {
         self.required - self.available
@@ -661,6 +670,8 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
+    /// Expiration timestamp is at or before the current ledger time.
+    InvalidExpiration = 3008,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -683,6 +694,8 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
+    /// Subscription is not in GracePeriod for a buyout operation.
+    NotInGracePeriod = 4011,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -787,7 +800,9 @@ pub enum Error {
 
 impl Error {
     /// Returns the numeric code for this error.
-    pub const fn to_code(self) -> u32 { self as u32 }
+    pub const fn to_code(self) -> u32 {
+        self as u32
+    }
 }
 
 /// Event emitted when an admin nonce is consumed by a privileged operation.
@@ -1557,6 +1572,20 @@ pub struct GracePeriodEnteredEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraceBuyoutEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub deposit_amount: i128,
+    pub charge_amount: i128,
+    pub premium_paid: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriptionResumedEvent {
     pub subscription_id: u32,
@@ -1956,6 +1985,13 @@ pub struct MerchantConfig {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantMultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantPausedEvent {
     pub merchant: Address,
@@ -2328,7 +2364,12 @@ mod known_keys_tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        assert!(!variants.is_empty(), "variant count must be non-zero");
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
+        assert!(n > 0, "variant count must be non-zero");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier

@@ -1,5 +1,5 @@
-use crate::{SubscriptionStatus, SubscriptionVaultClient, types::DataKey};
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
+use crate::{types::DataKey, SubscriptionStatus, SubscriptionVaultClient};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
 const DEFAULT_INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -65,7 +65,7 @@ pub fn create_subscription_with_merchant(
     use soroban_sdk::String;
     // We try to initialize merchant, but it might already be initialized.
     // However, initialize_merchant_config overwrites or we can just ignore failure.
-    // Better: let's only init if we generated it, but since `merchant` is passed in, 
+    // Better: let's only init if we generated it, but since `merchant` is passed in,
     // it might be cleaner to just call it and ignore error, or expect the caller to init it.
     // Wait, let's just initialize it.
     let _ = client.try_initialize_merchant_config(

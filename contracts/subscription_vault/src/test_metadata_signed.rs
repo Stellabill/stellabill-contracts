@@ -55,9 +55,15 @@ use soroban_sdk::{
 /// 30 days — generous billing interval for any test that needs a numeric value.
 const INTERVAL_SECONDS: u64 = 30 * 24 * 60 * 60;
 /// 10 USDC (6 decimals).
-fn amount() -> i128 { 10_000_000 }
-fn min_topup() -> i128 { 1_000_000 }
-fn grace_period() -> u64 { 7 * 24 * 60 * 60 }
+fn amount() -> i128 {
+    10_000_000
+}
+fn min_topup() -> i128 {
+    1_000_000
+}
+fn grace_period() -> u64 {
+    7 * 24 * 60 * 60
+}
 fn one_hour_from_now(env: &Env) -> u64 {
     env.ledger().timestamp() + 60 * 60
 }
@@ -216,7 +222,14 @@ fn subscriber_signed_set_succeeds() {
         &None::<u64>,
     );
 
-    let payload = payload_for(&env, sub_id, "invoice_id", "INV-2026-001", 0u64, one_hour_from_now(&env));
+    let payload = payload_for(
+        &env,
+        sub_id,
+        "invoice_id",
+        "INV-2026-001",
+        0u64,
+        one_hour_from_now(&env),
+    );
     let (signature, _msg) = sign_payload(&env, &sub_key, &payload);
 
     client.set_metadata_signed(&subscriber_pubkey, &payload, &signature);
@@ -252,7 +265,14 @@ fn merchant_signed_set_succeeds() {
         &None::<u64>,
     );
 
-    let payload = payload_for(&env, sub_id, "plan_name", "Pro Monthly", 0u64, one_hour_from_now(&env));
+    let payload = payload_for(
+        &env,
+        sub_id,
+        "plan_name",
+        "Pro Monthly",
+        0u64,
+        one_hour_from_now(&env),
+    );
     let (signature, _msg) = sign_payload(&env, &_mer_key, &payload);
 
     client.set_metadata_signed(&merchant_pubkey, &payload, &signature);
@@ -282,11 +302,7 @@ fn sequential_nonces_advance() {
     };
     let signer = pubkey_to_address(&env, &bytes32(&env, &sub_key.pub_bytes));
 
-    for (n, key, value) in [
-        (0u64, "k1", "v1"),
-        (1u64, "k2", "v2"),
-        (2u64, "k3", "v3"),
-    ] {
+    for (n, key, value) in [(0u64, "k1", "v1"), (1u64, "k2", "v2"), (2u64, "k3", "v3")] {
         let payload = payload_for(&env, sub_id, key, value, n, one_hour_from_now(&env));
         let (signature, _msg) = sign_payload(&env, &sub_key, &payload);
         client.set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
@@ -334,11 +350,8 @@ fn replayed_nonce_is_rejected() {
     client.set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
 
     // Replay of the same nonce must be rejected with NonceAlreadyUsed.
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::NonceAlreadyUsed)));
 }
 
@@ -368,11 +381,7 @@ fn skipped_nonce_is_rejected() {
     client.set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &p0, &sig0);
 
     // Try nonce 0 again (already consumed) - rejected.
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &p0,
-        &sig0,
-    );
+    let res = client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &p0, &sig0);
     assert_eq!(res, Err(Ok(crate::Error::NonceAlreadyUsed)));
 }
 
@@ -398,11 +407,8 @@ fn expires_at_equal_to_now_rejected() {
     let now = env.ledger().timestamp();
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, now);
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::InvalidInput)));
 }
 
@@ -427,11 +433,8 @@ fn expires_at_in_past_rejected() {
     let now = env.ledger().timestamp();
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, now.saturating_sub(1));
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::InvalidInput)));
 }
 
@@ -501,11 +504,7 @@ fn forged_signature_panics() {
     let wrong_sig_bytes: [u8; 64] = wrong_sig.to_bytes();
     let wrong_sig_n = BytesN::from_array(&env, &wrong_sig_bytes);
 
-    client.set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &wrong_sig_n,
-    );
+    client.set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &wrong_sig_n);
 }
 
 #[test]
@@ -575,10 +574,10 @@ fn chain_id_mismatch_panics() {
     preimage.extend_from_slice(forged_chain_bytes);
     let forged_chain = soroban_sdk::Bytes::from_slice(&env, forged_chain_bytes);
     let _ = forged_chain; // touch unused
-    // We need the EXACT bytes the contract will sign — easiest is to call
-    // build_metadata_signed_message with the "wrong" chain bytes via the
-    // public test path. Since build_metadata_signed_message uses the
-    // contract's chain_id internally, we instead forge manually:
+                          // We need the EXACT bytes the contract will sign — easiest is to call
+                          // build_metadata_signed_message with the "wrong" chain bytes via the
+                          // public test path. Since build_metadata_signed_message uses the
+                          // contract's chain_id internally, we instead forge manually:
     let mut to_sign: Vec<u8> = Vec::new();
     to_sign.extend_from_slice(b"SBL_META_SIGNED_v1\x00\x00\x00\x00\x00\x00\x00\x00");
     to_sign.extend_from_slice(&payload.subscription_id.to_be_bytes());
@@ -616,11 +615,8 @@ fn missing_subscription_rejected() {
     // way of resolving the pubkey to a known party. The signer pubkey's
     // derived address won't match sub.subscriber/sub.merchant when the
     // subscription doesn't exist (we get NotFound before party-check).
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::NotFound)));
 }
 
@@ -656,11 +652,8 @@ fn key_too_long_rejected() {
     };
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
 
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::MetadataKeyTooLong)));
 }
 
@@ -693,11 +686,8 @@ fn value_too_long_rejected() {
     };
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
 
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::MetadataValueTooLong)));
 }
 
@@ -727,11 +717,8 @@ fn empty_key_rejected() {
         expires_at: one_hour_from_now(&env),
     };
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::InvalidInput)));
 }
 
@@ -761,11 +748,8 @@ fn empty_value_rejected() {
         expires_at: one_hour_from_now(&env),
     };
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::InvalidInput)));
 }
 
@@ -791,7 +775,14 @@ fn key_cap_reached() {
     // Fill the 10-key cap on signed path.
     for n in 0u32..crate::MAX_METADATA_KEYS {
         let key_name = format!("k{}", n);
-        let payload = payload_for(&env, sub_id, &key_name, "v", n as u64, one_hour_from_now(&env));
+        let payload = payload_for(
+            &env,
+            sub_id,
+            &key_name,
+            "v",
+            n as u64,
+            one_hour_from_now(&env),
+        );
         let (signature, _) = sign_payload(&env, &sub_key, &payload);
         client.set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     }
@@ -806,11 +797,8 @@ fn key_cap_reached() {
         one_hour_from_now(&env),
     );
     let (signature, _) = sign_payload(&env, &sub_key, &payload);
-    let res = client.try_set_metadata_signed(
-        &bytes32(&env, &sub_key.pub_bytes),
-        &payload,
-        &signature,
-    );
+    let res =
+        client.try_set_metadata_signed(&bytes32(&env, &sub_key.pub_bytes), &payload, &signature);
     assert_eq!(res, Err(Ok(crate::Error::MetadataKeyLimitReached)));
 }
 
@@ -858,7 +846,7 @@ fn cross_domain_nonce_does_not_collide() {
     // that is *separate* from the admin's `(admin, DOMAIN_BATCH_CHARGE)` and
     // `(admin, DOMAIN_ADMIN_ROTATION)` counters. Tag-only collision check:
     // domain 3 is registered for metadata.
-    use crate::nonce::{DOMAIN_BATCH_CHARGE, DOMAIN_ADMIN_ROTATION, DOMAIN_METADATA_SIGNED};
+    use crate::nonce::{DOMAIN_ADMIN_ROTATION, DOMAIN_BATCH_CHARGE, DOMAIN_METADATA_SIGNED};
     assert_eq!(DOMAIN_BATCH_CHARGE, 0);
     assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
     assert_eq!(DOMAIN_METADATA_SIGNED, 3);
@@ -891,9 +879,10 @@ fn nonce_overflow_is_guarded() {
             .expect("first consume ok");
         crate::nonce::check_and_advance(&env, &signer, crate::nonce::DOMAIN_METADATA_SIGNED, 1)
             .expect("second consume ok");
-        env.storage()
-            .persistent()
-            .set(&crate::DataKey::AdminNonce(signer.clone(), crate::nonce::DOMAIN_METADATA_SIGNED), &u64::MAX);
+        env.storage().persistent().set(
+            &crate::DataKey::AdminNonce(signer.clone(), crate::nonce::DOMAIN_METADATA_SIGNED),
+            &u64::MAX,
+        );
         let res = crate::nonce::check_and_advance(
             &env,
             &signer,
