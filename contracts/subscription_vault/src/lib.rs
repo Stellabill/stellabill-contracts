@@ -1747,6 +1747,12 @@ impl SubscriptionVault {
     /// Update merchant config.
     pub fn set_merchant_config(env: Env, merchant: Address, config: MerchantConfig) -> Result<(), Error> { merchant::set_merchant_config(&env, merchant, config) }
 
+    /// Configure merchant withdrawal co-signers and threshold.
+    pub fn set_merchant_multisig(env: Env, admin: Address, merchant: Address, signers: Vec<Address>, threshold: u32) -> Result<(), Error> { merchant::set_merchant_multisig(&env, admin, merchant, signers, threshold) }
+
+    /// Get merchant withdrawal co-signer config.
+    pub fn get_merchant_multisig_config(env: Env, merchant: Address) -> Option<crate::types::MerchantMultiSigConfig> { merchant::get_merchant_multisig_config(&env, merchant) }
+
     /// Partial update merchant config.
     pub fn update_merchant_config(env: Env, merchant: Address, new_payout_address: Option<Address>, new_fee_bips: Option<i32>, new_allowed_operations: Option<i32>, new_is_active: Option<bool>, new_fee_address: Option<Option<Address>>, new_redirect_url: Option<String>, new_is_paused: Option<bool>) -> Result<MerchantConfig, Error> { merchant::update_merchant_config(&env, merchant, new_payout_address, new_fee_bips, new_allowed_operations, new_is_active, new_fee_address, new_redirect_url, new_is_paused) }
 

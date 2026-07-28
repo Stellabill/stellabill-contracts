@@ -201,6 +201,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Merchant withdrawal multi-sig configuration. Discriminant 54.
+    MerchantMultiSig(Address),
 }
 
 impl DataKey {
@@ -260,6 +262,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
+            DataKey::MerchantMultiSig(_) => 54,
         }
     }
 
@@ -309,6 +312,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
+    54, // MerchantMultiSig(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1771,6 +1775,13 @@ pub struct MerchantConfig {
     pub redirect_url: String,
     pub is_paused: bool,
     pub last_updated: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantMultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
 }
 
 #[contracttype]
