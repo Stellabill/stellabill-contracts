@@ -201,6 +201,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 54.
+    BuyoutPremiumBps,
 }
 
 impl DataKey {
@@ -565,6 +567,8 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
+    /// Subscription is not in GracePeriod for a buyout operation.
+    NotInGracePeriod = 4011,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -1396,6 +1400,20 @@ pub struct GracePeriodEnteredEvent {
     pub subscription_id: u32,
     pub previous_status: SubscriptionStatus,
     pub grace_expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraceBuyoutEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub deposit_amount: i128,
+    pub charge_amount: i128,
+    pub premium_paid: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }

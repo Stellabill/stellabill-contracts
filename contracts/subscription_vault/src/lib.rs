@@ -919,6 +919,25 @@ impl SubscriptionVault {
         Ok(())
     }
 
+    /// Grace-period buyout: deposit enough to cover the missed charge plus a
+    /// buyout premium and immediately return to Active.
+    ///
+    /// Combines deposit + charge in one atomic call so the subscriber does not
+    /// need to cancel and re-create when a payment method briefly fails.
+    ///
+    /// Returns `(charge_amount, premium_paid)` on success.
+    pub fn grace_buyout(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(i128, i128), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "grace_buyout")?;
+        subscription::do_grace_buyout(&env, subscription_id, subscriber, amount, idem_key)
+    }
+
     /// Creates a reusable plan template.
     pub fn create_plan_template(
         env: Env,
@@ -1797,6 +1816,9 @@ mod test_coupon;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
+
+#[cfg(test)]
+mod test_grace_buyout;
 
 #[cfg(test)]
 mod test {
