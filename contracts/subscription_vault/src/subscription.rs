@@ -585,6 +585,17 @@ pub fn do_create_subscription_with_token(
 
     // Allocate ID with overflow / limit guard.
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
+
+    if usage_enabled {
+        let limits_key = DataKey::UsageLimits(id);
+        if let Some(limits) = env.storage().instance().get::<_, crate::types::UsageLimits>(&limits_key) {
+            if limits.merchant != merchant {
+                return Err(Error::UsageLimitsRequired);
+            }
+        } else {
+            return Err(Error::UsageLimitsRequired);
+        }
+    }
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
@@ -929,6 +940,14 @@ pub fn do_grace_buyout(
             timestamp: now,
             period_start: now.saturating_sub(sub.interval_seconds),
             period_end: now,
+            salt: {
+                let mut salt_buf = [0u8; 20];
+                salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
+                salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
+                env.crypto().sha256(&salt_input).into()
+            },
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
@@ -2637,12 +2656,22 @@ pub fn do_configure_usage_limits(
 ) -> Result<(), Error> {
     merchant.require_auth();
 
-    let sub = get_subscription(env, subscription_id)?;
-    if sub.merchant != merchant {
-        return Err(Error::Forbidden);
-    }
-    if !sub.usage_enabled {
-        return Err(Error::UsageNotEnabled);
+    let sub_result = get_subscription(env, subscription_id);
+    match sub_result {
+        Ok(sub) => {
+            if sub.merchant != merchant {
+                return Err(Error::Forbidden);
+            }
+            if !sub.usage_enabled {
+                return Err(Error::UsageNotEnabled);
+            }
+        },
+        Err(_) => {
+            let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
+            if subscription_id != next_id {
+                return Err(Error::NotFound);
+            }
+        }
     }
 
     if let Some(cap) = usage_cap_units {
@@ -2652,6 +2681,7 @@ pub fn do_configure_usage_limits(
     }
 
     let limits = UsageLimits {
+        merchant: merchant.clone(),
         rate_limit_max_calls,
         rate_window_secs,
         burst_min_interval_secs,
