@@ -187,7 +187,7 @@ pub enum DataKey {
     BillingStatementAggregate(u32),
     /// Max concurrent active subscriptions allowed for a merchant. Discriminant 45.
     MerchantMaxSubs(Address),
-    /// Guardian voting weights for governance proposals. Discriminant 46.
+    /// Guardians voting weights for governance proposals. Discriminant 46.
     Guardians,
     /// Auto-incrementing proposal ID counter for governance. Discriminant 47.
     NextProposalId,
@@ -213,6 +213,8 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    SubscriberCreateCap,
+    SubscriberCreateWindow(Address),
 }
 
 impl DataKey {
@@ -278,6 +280,8 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::SubscriberCreateCap => 59,
+            DataKey::SubscriberCreateWindow(_) => 60,
         }
     }
 
@@ -328,6 +332,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
+    59,
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -751,7 +756,9 @@ pub enum Error {
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
     /// A bulk operation was called with more ids than `BATCH_MAX_SIZE` allows.
-    BatchTooLarge = 6018,
+    // Error 6018 is already defined above in Limits, but kept here for schema matching, see 1006.
+    /// Subscriber has exceeded the rolling 24-hour subscription creation limit.
+    SubscriberRateLimited = 6019,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -803,6 +810,21 @@ impl Error {
     pub const fn to_code(self) -> u32 {
         self as u32
     }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriberCreateWindow {
+    pub start_ts: u64,
+    pub count: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RateLimitTrippedEvent {
+    pub subscriber: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Event emitted when an admin nonce is consumed by a privileged operation.
@@ -1508,17 +1530,6 @@ pub struct SubscriptionCancelUnscheduledEvent {
     pub subscription_id: u32,
     pub unscheduled_by: Address,
     pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
 }
 
 /// Per-id outcome of a bulk pause/cancel operation.
@@ -2303,6 +2314,8 @@ mod known_keys_tests {
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
             (DataKey::TransferIntent(1), true),
+            (DataKey::SubscriberCreateCap, true),
+            (DataKey::SubscriberCreateWindow(a.clone()), false),
         ]
     }
 
@@ -2329,9 +2342,9 @@ mod known_keys_tests {
 
     #[test]
     fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (54) can never be
+        // Discriminants beyond the highest registered variant (60) can never be
         // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(55));
+        assert!(!is_known_instance_discriminant(61));
         assert!(!is_known_instance_discriminant(9_999));
         assert!(!is_known_instance_discriminant(u32::MAX));
     }
@@ -2347,7 +2360,7 @@ mod known_keys_tests {
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=54`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
     /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
@@ -2364,6 +2377,7 @@ mod known_keys_tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
+        let n = variants.len();
         assert!(
             seen.iter().all(|&s| s),
             "discriminants are not contiguous 0..={}",
@@ -2399,8 +2413,9 @@ mod known_keys_tests {
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
-        assert!(seen.iter().all(|&s| s));
-        assert_eq!(variants.len(), 51);
+        
+        let variants = all_variants(&env);
+        assert_eq!(variants.len(), 53);
     }
 }
 
@@ -2472,24 +2487,6 @@ pub struct MerchantAddressRotatedEvent {
     pub new_merchant: Address,
     pub subscriptions_updated: u32,
     pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CredentialIssuedEvent {
-    pub subscription_id: u32,
-    pub caller: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CredentialRevokedEvent {
-    pub subscription_id: u32,
-    pub caller: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
 }
 
 #[contracttype]
