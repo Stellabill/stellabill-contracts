@@ -36,11 +36,12 @@ use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
 use crate::types::{
-    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
-    GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
-    UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
+    Error, GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionAutoPausedEvent,
+    SubscriptionCancelledEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
+    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -388,6 +389,11 @@ pub fn charge_one(
                 sub.grace_start_timestamp = None;
             }
 
+            // Reset consecutive failure counter on any successful charge.
+            env.storage()
+                .instance()
+                .remove(&DataKey::ChargeFailureCounter(subscription_id));
+
             // Check if cap is now exactly reached -- auto-cancel
             let cap_reached = sub
                 .lifetime_cap
@@ -549,6 +555,41 @@ pub fn charge_one(
                     schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
+
+            // Increment consecutive failure counter and auto-pause if threshold reached.
+            let threshold = crate::admin::get_auto_pause_threshold(env);
+            if threshold > 0 && sub.status == SubscriptionStatus::InsufficientBalance {
+                let counter_key = DataKey::ChargeFailureCounter(subscription_id);
+                let failures: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&counter_key)
+                    .unwrap_or(0u32)
+                    .saturating_add(1);
+                env.storage().instance().set(&counter_key, &failures);
+
+                if failures >= threshold {
+                    // Re-load subscription to apply the Paused transition cleanly.
+                    let mut sub2 =
+                        crate::queries::get_subscription(env, subscription_id).unwrap();
+                    if sub2.status == SubscriptionStatus::InsufficientBalance {
+                        if transition_to(&mut sub2.status, SubscriptionStatus::Paused).is_ok() {
+                            crate::subscription::write_subscription(env, subscription_id, &sub2);
+                            env.storage().instance().remove(&counter_key);
+                            env.events().publish(
+                                (Symbol::new(env, "sub_auto_paused"), subscription_id),
+                                SubscriptionAutoPausedEvent {
+                                    subscription_id,
+                                    consecutive_failures: failures,
+                                    threshold,
+                                    timestamp: now,
+                                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
 
             Ok(ChargeExecutionResult::InsufficientBalance)
         }

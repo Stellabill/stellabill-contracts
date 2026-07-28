@@ -2885,6 +2885,17 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
+    /// Set the number of consecutive InsufficientBalance failures before a
+    /// subscription is automatically paused. `0` disables auto-pause. Admin only.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
+    }
+
+    /// Return the current auto-pause threshold (`0` = disabled).
+    pub fn get_auto_pause_threshold(env: Env) -> u32 {
+        admin::get_auto_pause_threshold(&env)
+    }
+
     /// Returns the schema version.
     pub fn version(_env: Env) -> u32 {
         1
@@ -2951,6 +2962,9 @@ mod test_coupon;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
+
+#[cfg(test)]
+mod test_auto_pause;
 
 #[cfg(test)]
 mod test_grace_buyout;

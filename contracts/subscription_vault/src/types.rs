@@ -233,22 +233,10 @@ pub enum DataKey {
     MerchantApproved(Address),
     /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
     ChargeSalt(u32),
-    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 64.
-    BuyoutPremiumBps,
-    /// Coupon code bound to a subscription (persistent). Discriminant 65.
-    SubCoupon(u32),
-    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 66.
-    MerchantMultiSig(Address),
-    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 67.
-    SubscriberActiveCount(Address),
-    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 68.
-    SubscriberActiveCapOverride(Address),
-    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
-    /// global). Discriminant 69. See `merchant::set_tag_allowlist`.
-    TagAllowlist,
-    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
-    /// (instance). Discriminant 70. See `merchant::set_merchant_tags`.
-    MerchantTags(Address),
+    /// Consecutive InsufficientBalance charge failures for a subscription. Discriminant 62.
+    ChargeFailureCounter(u32),
+    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
+    AutoPauseThreshold,
 }
 
 impl DataKey {
@@ -317,16 +305,9 @@ impl DataKey {
             DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::MerchantWhitelistMode => 61,
-            DataKey::MerchantApproved(_) => 62,
-            DataKey::ChargeSalt(_) => 63,
-            DataKey::BuyoutPremiumBps => 64,
-            DataKey::SubCoupon(_) => 65,
-            DataKey::MerchantMultiSig(_) => 66,
-            DataKey::SubscriberActiveCount(_) => 67,
-            DataKey::SubscriberActiveCapOverride(_) => 68,
-            DataKey::TagAllowlist => 69,
-            DataKey::MerchantTags(_) => 70,
+            DataKey::ChargeSalt(_) => 61,
+            DataKey::ChargeFailureCounter(_) => 62,
+            DataKey::AutoPauseThreshold => 63,
         }
     }
 
@@ -378,15 +359,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
     59,
-    61, // MerchantWhitelistMode
-    62, // MerchantApproved(Address)
-    63, // ChargeSalt(u32)
-    64, // BuyoutPremiumBps
-    66, // MerchantMultiSig(Address)
-    67, // SubscriberActiveCount(Address)
-    68, // SubscriberActiveCapOverride(Address)
-    69, // TagAllowlist
-    70, // MerchantTags(Address)
+    61, // ChargeSalt(u32)
+    62, // ChargeFailureCounter(u32)
+    63, // AutoPauseThreshold
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -2434,13 +2409,8 @@ mod known_keys_tests {
             (DataKey::MerchantWhitelistMode, true),
             (DataKey::MerchantApproved(a.clone()), true),
             (DataKey::ChargeSalt(1), true),
-            (DataKey::BuyoutPremiumBps, true),
-            (DataKey::SubCoupon(1), false),
-            (DataKey::MerchantMultiSig(a.clone()), true),
-            (DataKey::SubscriberActiveCount(a.clone()), true),
-            (DataKey::SubscriberActiveCapOverride(a.clone()), true),
-            (DataKey::TagAllowlist, true),
-            (DataKey::MerchantTags(a.clone()), true),
+            (DataKey::ChargeFailureCounter(1), true),
+            (DataKey::AutoPauseThreshold, true),
         ]
     }
 
@@ -2525,7 +2495,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 71);
+        assert_eq!(variants.len(), 64);
     }
 }
 
@@ -2573,6 +2543,42 @@ pub struct TransferVetoedEvent {
 pub enum KycKey {
     Required,
     Merchant(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub accrued: i128,
+    pub withdrawn: i128,
+    pub refunded: i128,
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    pub admin: Address,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+    pub subscriptions_updated: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a subscription is automatically paused after N consecutive
+/// InsufficientBalance charge failures.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent {
+    pub subscription_id: u32,
+    pub consecutive_failures: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 #[contracttype]
