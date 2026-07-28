@@ -41,6 +41,7 @@ mod reentrancy;
 mod oracle_adapter;
 mod validation;
 
+pub use charge_core::calculate_prorated_first_charge;
 pub use safe_math::*;
 pub use types::{
     AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
@@ -2854,3 +2855,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_merchant_whitelist;
+
+#[cfg(test)]
+mod test_proration_fuzz;
