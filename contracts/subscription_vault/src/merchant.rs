@@ -176,6 +176,136 @@ fn require_whitelist_approval(env: &Env, merchant: &Address) -> Result<(), Error
     Ok(())
 }
 
+// ── Merchant compliance-category tags (#564) ────────────────────────────────
+//
+// A small, admin-controlled allowlist (`DataKey::TagAllowlist`) defines the
+// set of tag symbols ("saas", "media", "nonprofit", ...) that may be assigned
+// to a merchant. Each merchant carries at most `MAX_MERCHANT_TAGS` tags
+// (`DataKey::MerchantTags(merchant)`), letting downstream indexers group
+// merchant activity by compliance category and letting admins efficiently
+// identify — and, via the existing blocklist/pause machinery, act on —
+// whole classes of merchants without maintaining an out-of-band mapping.
+//
+// Tags are purely descriptive metadata: setting or clearing them never
+// touches merchant balances, pause state, or approval status, and is
+// intentionally unrestricted by those states (an admin must be able to tag,
+// or clear the tags of, an already-paused/blocked merchant for reporting).
+
+/// Return the current admin-controlled tag allowlist, or an empty list if
+/// none has been configured yet.
+pub fn get_tag_allowlist(env: &Env) -> Vec<Symbol> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TagAllowlist)
+        .unwrap_or(Vec::new(env))
+}
+
+/// Replace the global tag allowlist. Admin-only.
+///
+/// The allowlist itself is not bounded by `MAX_MERCHANT_TAGS` — that limit
+/// applies per-merchant, not to the catalog of valid tags — but it must be
+/// duplicate-free so allowlist membership checks stay unambiguous.
+///
+/// Tags already assigned to a merchant are **not** retroactively revalidated
+/// against a shrunk allowlist: removing a tag from the allowlist only blocks
+/// *future* `set_merchant_tags` calls from reusing it, mirroring how
+/// `revoke_merchant` doesn't retroactively unwind past state elsewhere in
+/// this module. An admin who needs to fully retire a tag can follow up with
+/// `set_merchant_tags` calls to clear it from affected merchants.
+///
+/// # Errors
+/// * [`Error::Unauthorized`] — caller is not the stored admin.
+/// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+pub fn set_tag_allowlist(env: &Env, admin: Address, tags: Vec<Symbol>) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let mut seen = Vec::new(env);
+    for tag in tags.iter() {
+        if seen.contains(&tag) {
+            return Err(Error::DuplicateMerchantTag);
+        }
+        seen.push_back(tag);
+    }
+
+    env.storage().instance().set(&DataKey::TagAllowlist, &tags);
+
+    env.events().publish(
+        (Symbol::new(env, "tag_allowlist_updated"),),
+        crate::types::TagAllowlistUpdatedEvent {
+            admin,
+            tags,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Return the compliance-category tags currently assigned to `merchant`, or
+/// an empty list if none have been set.
+pub fn get_merchant_tags(env: &Env, merchant: Address) -> Vec<Symbol> {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantTags(merchant))
+        .unwrap_or(Vec::new(env))
+}
+
+/// Set (fully replacing) `merchant`'s compliance-category tags. Admin-only.
+///
+/// Pass an empty `tags` vector to clear all tags — this is always allowed,
+/// including for a merchant that is currently paused or blocklisted, since
+/// clearing compliance metadata must never be blocked by the very
+/// enforcement state that metadata may have informed.
+///
+/// # Errors
+/// * [`Error::Unauthorized`] — caller is not the stored admin.
+/// * [`Error::MerchantTagLimitExceeded`] — `tags.len() > MAX_MERCHANT_TAGS`.
+/// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+/// * [`Error::UnknownMerchantTag`] — a tag is not present in the current
+///   allowlist (`get_tag_allowlist`).
+pub fn set_merchant_tags(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    tags: Vec<Symbol>,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    if tags.len() > crate::types::MAX_MERCHANT_TAGS {
+        return Err(Error::MerchantTagLimitExceeded);
+    }
+
+    let allowlist = get_tag_allowlist(env);
+    let mut seen = Vec::new(env);
+    for tag in tags.iter() {
+        if seen.contains(&tag) {
+            return Err(Error::DuplicateMerchantTag);
+        }
+        if !allowlist.contains(&tag) {
+            return Err(Error::UnknownMerchantTag);
+        }
+        seen.push_back(tag);
+    }
+
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantTags(merchant.clone()), &tags);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_tags_updated"), merchant.clone()),
+        crate::types::MerchantTagsUpdatedEvent {
+            merchant,
+            admin,
+            tags,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
 fn validate_merchant_config_input(
     _payout_address: &Address,
     fee_bips: i32,

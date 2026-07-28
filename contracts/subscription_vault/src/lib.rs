@@ -537,6 +537,7 @@ pub use types::{
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
@@ -550,7 +551,7 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -2719,6 +2720,42 @@ impl SubscriptionVault {
         merchant::revoke_merchant(&env, admin, merchant)
     }
 
+    /// Get the admin-controlled allowlist of valid merchant compliance-category tags.
+    pub fn get_tag_allowlist(env: Env) -> Vec<Symbol> {
+        merchant::get_tag_allowlist(&env)
+    }
+
+    /// Replace the global merchant tag allowlist. Admin-only.
+    ///
+    /// # Errors
+    /// * [`Error::Unauthorized`] — caller is not the stored admin.
+    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+    pub fn set_tag_allowlist(env: Env, admin: Address, tags: Vec<Symbol>) -> Result<(), Error> {
+        merchant::set_tag_allowlist(&env, admin, tags)
+    }
+
+    /// Get the compliance-category tags currently assigned to `merchant`.
+    pub fn get_merchant_tags(env: Env, merchant: Address) -> Vec<Symbol> {
+        merchant::get_merchant_tags(&env, merchant)
+    }
+
+    /// Set (fully replacing) `merchant`'s compliance-category tags. Admin-only.
+    /// Pass an empty `tags` vector to clear all tags.
+    ///
+    /// # Errors
+    /// * [`Error::Unauthorized`] — caller is not the stored admin.
+    /// * [`Error::MerchantTagLimitExceeded`] — more than `MAX_MERCHANT_TAGS` tags supplied.
+    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+    /// * [`Error::UnknownMerchantTag`] — a tag is not present in the current allowlist.
+    pub fn set_merchant_tags(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        tags: Vec<Symbol>,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_tags(&env, admin, merchant, tags)
+    }
+
     /// Update merchant config.
     pub fn set_merchant_config(
         env: Env,
@@ -2855,3 +2892,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_merchant_whitelist;
+
+#[cfg(test)]
+mod test_merchant_tags;

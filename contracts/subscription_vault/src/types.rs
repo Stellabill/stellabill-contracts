@@ -3,7 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Vec};
+use soroban_sdk::{
+    contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
+};
 
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -19,6 +21,12 @@ pub const BATCH_MAX_SIZE: u32 = 100;
 /// Default cap on concurrent active subscriptions per subscriber (#578).
 /// Admins can override this per-subscriber via `DataKey::SubscriberActiveCapOverride`.
 pub const DEFAULT_SUBSCRIBER_ACTIVE_CAP: u32 = 10;
+
+/// Maximum number of compliance-category tags a single merchant may carry
+/// (#564). Bounds the size of `DataKey::MerchantTags(merchant)` so a
+/// misconfigured or adversarial admin call cannot grow a single merchant's
+/// tag list without bound.
+pub const MAX_MERCHANT_TAGS: u32 = 8;
 
 /// Threshold below which a persistent subscription record TTL is extended.
 /// If a subscription record is read or updated and its remaining TTL is less
@@ -231,6 +239,12 @@ pub enum DataKey {
     SubscriberActiveCount(Address),
     /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 68.
     SubscriberActiveCapOverride(Address),
+    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
+    /// global). Discriminant 69. See `merchant::set_tag_allowlist`.
+    TagAllowlist,
+    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
+    /// (instance). Discriminant 70. See `merchant::set_merchant_tags`.
+    MerchantTags(Address),
 }
 
 impl DataKey {
@@ -306,6 +320,8 @@ impl DataKey {
             DataKey::MerchantMultiSig(_) => 66,
             DataKey::SubscriberActiveCount(_) => 67,
             DataKey::SubscriberActiveCapOverride(_) => 68,
+            DataKey::TagAllowlist => 69,
+            DataKey::MerchantTags(_) => 70,
         }
     }
 
@@ -364,6 +380,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     66, // MerchantMultiSig(Address)
     67, // SubscriberActiveCount(Address)
     68, // SubscriberActiveCapOverride(Address)
+    69, // TagAllowlist
+    70, // MerchantTags(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -792,6 +810,8 @@ pub enum Error {
     SubscriberRateLimited = 6019,
     /// Usage limits are required for subscriptions with usage enabled.
     UsageLimitsRequired = 6020,
+    /// Requested tag set exceeds `MAX_MERCHANT_TAGS` for a single merchant.
+    MerchantTagLimitExceeded = 6021,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -802,6 +822,10 @@ pub enum Error {
     MustAllowChargeOperation = 7003,
     /// Merchant is not approved under whitelist mode.
     MerchantNotApproved = 7004,
+    /// Tag is not present in the admin-controlled tag allowlist.
+    UnknownMerchantTag = 7005,
+    /// The same tag appears more than once in a single `set_merchant_tags` call.
+    DuplicateMerchantTag = 7006,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -2097,6 +2121,29 @@ pub struct MerchantRevokedEvent {
     pub schema_version: u32,
 }
 
+/// Emitted when the admin replaces the global merchant tag allowlist
+/// (`merchant::set_tag_allowlist`).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TagAllowlistUpdatedEvent {
+    pub admin: Address,
+    pub tags: Vec<Symbol>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when the admin sets (or clears, with an empty `tags` vector) a
+/// merchant's compliance-category tags (`merchant::set_merchant_tags`).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantTagsUpdatedEvent {
+    pub merchant: Address,
+    pub admin: Address,
+    pub tags: Vec<Symbol>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantConfigInitializedEvent {
@@ -2278,6 +2325,8 @@ mod known_keys_tests {
             (DataKey::MerchantMultiSig(a.clone()), true),
             (DataKey::SubscriberActiveCount(a.clone()), true),
             (DataKey::SubscriberActiveCapOverride(a.clone()), true),
+            (DataKey::TagAllowlist, true),
+            (DataKey::MerchantTags(a.clone()), true),
         ]
     }
 
@@ -2377,7 +2426,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 69);
+        assert_eq!(variants.len(), 71);
     }
 }
 
