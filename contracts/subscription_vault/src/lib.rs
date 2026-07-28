@@ -41,6 +41,7 @@ mod reentrancy;
 mod oracle_adapter;
 mod validation;
 
+pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
     AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
@@ -346,6 +347,8 @@ pub mod oracle {
             return Err(Error::InvalidInput);
         }
 
+        crate::admin::enforce_config_cooldown(env, "Oracle")?;
+
         let cfg = OracleConfig {
             enabled,
             oracle: oracle.clone(),
@@ -439,6 +442,7 @@ pub mod operator {
         if operator == env.current_contract_address() {
             return Err(Error::InvalidInput);
         }
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::write_config(env, &DataKey::Operator, &operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_set"),),
@@ -454,6 +458,7 @@ pub mod operator {
 
     pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
         crate::admin::require_admin_auth(env, &admin)?;
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::remove_config(env, &DataKey::Operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_removed"),),
@@ -889,6 +894,7 @@ impl SubscriptionVault {
         if get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
@@ -907,6 +913,7 @@ impl SubscriptionVault {
         if !get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
@@ -2317,6 +2324,7 @@ impl SubscriptionVault {
     /// Set billing retention. Admin only.
     pub fn set_billing_retention(env: Env, admin: Address, keep_recent: u32) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
+        admin::enforce_config_cooldown(&env, "BillingRetention")?;
         statements::set_retention_config(&env, keep_recent);
         Ok(())
     }
@@ -2803,6 +2811,8 @@ mod test_usage_limits_required;
 
 #[cfg(test)]
 mod test_charge_invariants;
+#[cfg(test)]
+mod test_reentrancy_invariants;
 #[cfg(test)]
 mod test_metadata_signed;
 
