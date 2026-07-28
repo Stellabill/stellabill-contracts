@@ -41,3 +41,7 @@ path = "verification/nonce_verification.rs"
 [[test]]
 name = "channel_account_auth"
 path = "tests/channel_account_auth.rs"
+
+[[test]]
+name = "ttl_extension"
+path = "benches/ttl_extension.rs"
