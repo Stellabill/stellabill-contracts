@@ -5,14 +5,14 @@
 #![allow(dead_code)]
 
 use crate::types::{
-    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    AcceptedToken, AdminConfigChangedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error,
+    RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
     ChargeExecutionResult,
 };
-use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{token, Address, Bytes, Env, String, Symbol, Vec};
 
 pub fn get_schema_version(env: &Env) -> u32 {
     if let Some(v) = env
@@ -78,6 +78,70 @@ pub fn has_config(env: &Env, key: &DataKey) -> bool {
 pub fn remove_config(env: &Env, key: &DataKey) {
     env.storage().persistent().remove(key);
     env.storage().instance().remove(key);
+}
+
+// ── Admin-config cooldown ────────────────────────────────────────────────────
+
+/// Default per-key cooldown in seconds between protocol-wide admin config
+/// mutations.  Six hours (21 600 s) gives guardians time to detect and respond
+/// to a compromised admin key while keeping legitimate operations fast.
+pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
+
+/// Hash a human-readable `key_label` (e.g. `"MinTopup"`) into a
+/// collision-free `BytesN<32>` used as the persistent-storage key for the
+/// per-config-key cooldown timestamp.
+fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
+    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
+    env.crypto().sha256(&label_bytes)
+}
+
+/// Enforce a per-key cooldown on protocol-wide admin config mutations.
+///
+/// 1. Hashes `key_label` to derive the storage key.
+/// 2. Reads the previous mutation timestamp (0 if this is the first mutation).
+/// 3. If the current ledger timestamp is within [`CONFIG_COOLDOWN_SECS`] of
+///    `prev_ts`, returns [`Error::CooldownActive`].
+/// 4. Otherwise, records the current timestamp and emits
+///    [`AdminConfigChangedEvent`].
+///
+/// Call this **before** each config-mutating write.  Because Soroban
+/// transactions are atomic, if the subsequent mutation fails the entire
+/// transaction (including the timestamp write and event) reverts.
+///
+/// Governance proposals that execute through `do_execute_proposal` call
+/// `write_config` directly and intentionally **bypass** this guard, allowing
+/// guardians to override the cooldown when a supermajority agrees.
+pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error> {
+    let hash = hash_key_label(env, key_label);
+    let storage_key = DataKey::AdminConfigLastChangedAt(hash);
+
+    let prev_ts: u64 = env
+        .storage()
+        .persistent()
+        .get::<_, u64>(&storage_key)
+        .unwrap_or(0);
+
+    let now = env.ledger().timestamp();
+    if prev_ts > 0 && now.saturating_sub(prev_ts) < CONFIG_COOLDOWN_SECS {
+        return Err(Error::CooldownActive);
+    }
+
+    env.storage().persistent().set(&storage_key, &now);
+    env.storage()
+        .persistent()
+        .extend_ttl(&storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_config_changed"),),
+        AdminConfigChangedEvent {
+            key_label: String::from_str(env, key_label),
+            prev_ts,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(prev_ts)
 }
 
 fn accepted_tokens_key() -> DataKey {
@@ -188,6 +252,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     if min_topup <= 0 {
         return Err(Error::InvalidAmount);
     }
+    enforce_config_cooldown(env, "MinTopup")?;
     write_config(env, &DataKey::MinTopup, &min_topup);
     env.events()
         .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
@@ -200,6 +265,7 @@ pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
 
 pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "GracePeriod")?;
     env.storage()
         .instance()
         .set(&DataKey::GracePeriod, &grace_period);
@@ -212,6 +278,20 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
         .instance()
         .get(&DataKey::GracePeriod)
         .unwrap_or(0))
+}
+
+pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    write_config(env, &DataKey::SubscriberCreateCap, &cap);
+    env.events().publish(
+        (Symbol::new(env, "subscriber_create_cap_updated"),),
+        cap,
+    );
+    Ok(())
+}
+
+pub fn get_subscriber_create_cap(env: &Env) -> u32 {
+    read_config(env, &DataKey::SubscriberCreateCap).unwrap_or(50u32)
 }
 
 pub fn get_token(env: &Env) -> Result<Address, Error> {
@@ -241,6 +321,7 @@ pub fn add_accepted_token(
 
     let storage = env.storage().instance();
     if !storage.has(&accepted_token_decimals_key(&token)) {
+        enforce_config_cooldown(env, "AcceptedTokens")?;
         let mut tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
         tokens.push_back(token.clone());
         storage.set(&accepted_tokens_key(), &tokens);
@@ -256,6 +337,8 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     if token == default_token {
         return Err(Error::InvalidInput);
     }
+
+    enforce_config_cooldown(env, "AcceptedTokens")?;
 
     let storage = env.storage().instance();
     storage.remove(&accepted_token_decimals_key(&token));
@@ -310,6 +393,11 @@ pub(crate) fn execute_batch_charge(
                 error_code: Error::LifetimeCapReached.to_code(),
             },
             Ok(ChargeExecutionResult::ScheduledCancellation) => BatchChargeResult {
+                success: true,
+                error_code: 0,
+            },
+            // auto_renew=false and interval elapsed: silently skip without error.
+            Ok(ChargeExecutionResult::Skipped) => BatchChargeResult {
                 success: true,
                 error_code: 0,
             },
@@ -392,6 +480,8 @@ pub fn do_rotate_admin(
     if new_admin == env.current_contract_address() {
         return Err(Error::InvalidNewAdmin);
     }
+
+    enforce_config_cooldown(env, "Admin")?;
 
     // Atomic swap: write new admin before emitting the event so any indexer
     // that reads state on the event sees the already-updated value.
@@ -486,6 +576,7 @@ pub fn set_protocol_fee(
     if fee_bps > 10_000 {
         return Err(crate::types::Error::InvalidInput);
     }
+    enforce_config_cooldown(env, "ProtocolFee")?;
     write_config(env, &DataKey::FeeBps, &fee_bps);
     write_config(env, &DataKey::Treasury, &treasury);
     env.events().publish(
@@ -514,6 +605,24 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 /// Return the configured buyout premium in basis points, defaulting to 0.
 pub fn get_buyout_premium_bps(env: &Env) -> u32 {
     read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
+}
+
+/// Set the auto-pause threshold (number of consecutive InsufficientBalance failures
+/// before a subscription is automatically paused). `0` disables auto-pause.
+pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::AutoPauseThreshold, &threshold);
+    Ok(())
+}
+
+/// Return the configured auto-pause threshold. `0` means disabled.
+pub fn get_auto_pause_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AutoPauseThreshold)
+        .unwrap_or(0u32)
 }
 
 // ── Schema migration ──────────────────────────────────────────────────────────

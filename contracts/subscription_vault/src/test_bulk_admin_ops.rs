@@ -12,7 +12,7 @@
 use crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE;
 use crate::test_utils::setup::TestEnv;
 use crate::types::{BulkSubscriptionResult, Error, SubscriptionStatus, BATCH_MAX_SIZE};
-use soroban_sdk::{testutils::Address as _, vec, Address, Vec};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, vec, Address, Vec};
 
 const AMOUNT: i128 = 1_000;
 const INTERVAL: u64 = 24 * 60 * 60;
@@ -97,12 +97,69 @@ fn unauthorized_caller_rejected_for_bulk_pause() {
 // ── Bulk pause: edge cases ──────────────────────────────────────────────────
 
 #[test]
+fn bulk_pause_empty_vec_emits_no_events_and_no_storage_writes() {
+    let te = TestEnv::default();
+    let empty: Vec<u32> = Vec::new(&te.env);
+
+    let before_events = te.env.events().all().len();
+    let results = te.client.bulk_pause_subscriptions(&te.admin, &empty, &0u64);
+    let after_events = te.env.events().all().len();
+
+    assert_eq!(results.len(), 0);
+    assert_eq!(
+        before_events, after_events,
+        "empty bulk_pause must not emit any events"
+    );
+    assert_eq!(
+        te.client
+            .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE),
+        0u64,
+        "empty bulk_pause must not consume nonce"
+    );
+}
+
+#[test]
+fn bulk_pause_id_zero_reports_not_found() {
+    let te = TestEnv::default();
+
+    // No subscriptions exist, so id 0 is not found.
+    let results = te
+        .client
+        .bulk_pause_subscriptions(&te.admin, &vec![&te.env, 0u32], &0u64);
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).unwrap(),
+        BulkSubscriptionResult {
+            subscription_id: 0,
+            success: false,
+            changed: false,
+            error_code: Error::NotFound.to_code(),
+        }
+    );
+
+    // Nonce was consumed (batch was non-empty).
+    assert_eq!(
+        te.client
+            .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE),
+        1u64
+    );
+}
+
+#[test]
 fn empty_bulk_pause_is_a_noop_and_consumes_no_nonce() {
     let te = TestEnv::default();
 
+    let before_events = te.env.events().all().len();
     let empty: Vec<u32> = Vec::new(&te.env);
     let results = te.client.bulk_pause_subscriptions(&te.admin, &empty, &0u64);
     assert_eq!(results.len(), 0);
+
+    // No events were emitted — empty batch is a true no-op.
+    assert_eq!(
+        te.env.events().all().len(),
+        before_events,
+        "empty bulk_pause must not emit any events"
+    );
 
     // Nonce was NOT consumed — a real batch can still use nonce 0.
     assert_eq!(
@@ -378,6 +435,55 @@ fn unauthorized_caller_rejected_for_bulk_cancel() {
 // ── Bulk cancel: edge cases ─────────────────────────────────────────────────
 
 #[test]
+fn bulk_cancel_empty_vec_emits_no_events_and_no_storage_writes() {
+    let te = TestEnv::default();
+    let empty: Vec<u32> = Vec::new(&te.env);
+
+    let before_events = te.env.events().all().len();
+    let results = te
+        .client
+        .bulk_cancel_subscriptions(&te.admin, &empty, &0u64);
+    let after_events = te.env.events().all().len();
+
+    assert_eq!(results.len(), 0);
+    assert_eq!(
+        before_events, after_events,
+        "empty bulk_cancel must not emit any events"
+    );
+    assert_eq!(
+        te.client
+            .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE),
+        0u64,
+        "empty bulk_cancel must not consume nonce"
+    );
+}
+
+#[test]
+fn bulk_cancel_id_zero_reports_not_found() {
+    let te = TestEnv::default();
+
+    let results = te
+        .client
+        .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, 0u32], &0u64);
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.get(0).unwrap(),
+        BulkSubscriptionResult {
+            subscription_id: 0,
+            success: false,
+            changed: false,
+            error_code: Error::NotFound.to_code(),
+        }
+    );
+
+    assert_eq!(
+        te.client
+            .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE),
+        1u64
+    );
+}
+
+#[test]
 fn bulk_cancel_skips_already_cancelled_no_double_refund() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
@@ -460,11 +566,20 @@ fn bulk_cancel_mixed_valid_cancelled_missing() {
 #[test]
 fn empty_bulk_cancel_is_a_noop_and_consumes_no_nonce() {
     let te = TestEnv::default();
+    let before_events = te.env.events().all().len();
     let empty: Vec<u32> = Vec::new(&te.env);
     let results = te
         .client
         .bulk_cancel_subscriptions(&te.admin, &empty, &0u64);
     assert_eq!(results.len(), 0);
+
+    // No events were emitted — empty batch is a true no-op.
+    assert_eq!(
+        te.env.events().all().len(),
+        before_events,
+        "empty bulk_cancel must not emit any events"
+    );
+
     assert_eq!(
         te.client
             .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE),

@@ -45,12 +45,11 @@ use crate::types::{
     BillingChargeKind, DataKey, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
-    PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
-    SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, SubscriberCreateWindow,
+    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
+    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
+    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -61,6 +60,9 @@ const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// interval_seconds` overflow `u64` in practice, and keeps subscriptions
 /// semantically reasonable.
 pub const MAX_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 31_536_000;
+
+const SECONDS_IN_DAY: u64 = 86400;
+const DEFAULT_CREATE_CAP: u32 = 50;
 
 /// Validates that `interval_seconds` is within the allowed `[MIN, MAX]` range.
 ///
@@ -372,7 +374,7 @@ pub fn get_subscriber_active_cap(env: &Env, subscriber: &Address) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::SubscriberActiveCapOverride(subscriber.clone()))
-        .unwrap_or(DEFAULT_SUBSCRIBER_ACTIVE_CAP)
+        .unwrap_or(crate::types::DEFAULT_SUBSCRIBER_ACTIVE_CAP)
 }
 
 /// Sets (or clears, with `cap: None`) an admin override of a subscriber's
@@ -390,6 +392,68 @@ pub fn do_set_subscriber_active_cap(
         Some(c) => env.storage().instance().set(&key, &c),
         None => env.storage().instance().remove(&key),
     }
+    Ok(())
+}
+
+fn emit_rate_limit_tripped(env: &Env, subscriber: &Address) {
+    let topics = (Symbol::new(env, "rate_limit_tripped"), subscriber.clone());
+    
+    let event_data = RateLimitTrippedEvent {
+        subscriber: subscriber.clone(),
+        timestamp: env.ledger().timestamp(),
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+    };
+    
+    env.events().publish(topics, event_data);
+}
+
+fn enforce_creation_rate_limit(env: &Env, subscriber: &Address) -> Result<(), Error> {
+    if let Ok(admin) = crate::admin::do_get_admin(env) {
+        if subscriber == &admin {
+            return Ok(());
+        }
+    }
+
+    let cap: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::SubscriberCreateCap)
+        .unwrap_or(DEFAULT_CREATE_CAP);
+
+    let current_ts = env.ledger().timestamp();
+
+    if cap == 0 {
+        emit_rate_limit_tripped(env, subscriber);
+        return Err(Error::SubscriberRateLimited);
+    }
+
+    let window_key = DataKey::SubscriberCreateWindow(subscriber.clone());
+    let mut window: SubscriberCreateWindow = env
+        .storage()
+        .persistent()
+        .get(&window_key)
+        .unwrap_or(SubscriberCreateWindow {
+            start_ts: current_ts,
+            count: 0,
+        });
+
+    if current_ts >= window.start_ts + SECONDS_IN_DAY {
+        window.start_ts = current_ts;
+        window.count = 0;
+    }
+
+    if window.count >= cap {
+        emit_rate_limit_tripped(env, subscriber);
+        return Err(Error::SubscriberRateLimited);
+    }
+
+    window.count += 1;
+    env.storage().persistent().set(&window_key, &window);
+
+    env.storage()
+        .persistent()
+        .extend_ttl(&window_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+
     Ok(())
 }
 
@@ -438,6 +502,8 @@ pub fn do_create_subscription_with_token(
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
+    enforce_creation_rate_limit(env, &subscriber)?;
+
     // Enforce per-merchant active subscription limit.
     let active_count = crate::queries::get_merchant_subscription_count(env, merchant.clone());
     let max_subs = crate::queries::get_merchant_max_subs(env, merchant.clone());
@@ -451,7 +517,7 @@ pub fn do_create_subscription_with_token(
     if subscriber_active_count >= subscriber_cap {
         env.events().publish(
             (Symbol::new(env, "subscriber_cap_reached"), subscriber.clone()),
-            SubscriberCapReachedEvent {
+            crate::types::SubscriberCapReachedEvent {
                 subscriber: subscriber.clone(),
                 active_count: subscriber_active_count,
                 cap: subscriber_cap,
@@ -515,10 +581,23 @@ pub fn do_create_subscription_with_token(
         expires_at,
         grace_start_timestamp: None,
         cancel_at: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     // Allocate ID with overflow / limit guard.
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
+
+    if usage_enabled {
+        let limits_key = DataKey::UsageLimits(id);
+        if let Some(limits) = env.storage().instance().get::<_, crate::types::UsageLimits>(&limits_key) {
+            if limits.merchant != merchant {
+                return Err(Error::UsageLimitsRequired);
+            }
+        } else {
+            return Err(Error::UsageLimitsRequired);
+        }
+    }
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
@@ -550,7 +629,7 @@ pub fn do_create_subscription_with_token(
 
     env.events().publish(
         (Symbol::new(env, "subscription_created"), id),
-        crate::types::SubscriptionCreatedEvent {
+        SubscriptionCreatedEvent {
             subscription_id: id,
             subscriber,
             merchant,
@@ -666,6 +745,11 @@ pub fn do_deposit_funds(
 
     // EFFECTS
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Reset consecutive failure counter on fresh deposit so the clock starts
+    // clean if the subscriber tops up before the next charge attempt.
+    env.storage()
+        .instance()
+        .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
 
     // INTERACTIONS
@@ -863,6 +947,14 @@ pub fn do_grace_buyout(
             timestamp: now,
             period_start: now.saturating_sub(sub.interval_seconds),
             period_end: now,
+            salt: {
+                let mut salt_buf = [0u8; 20];
+                salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
+                salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
+                env.crypto().sha256(&salt_input).into()
+            },
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
@@ -1127,6 +1219,91 @@ pub fn do_unschedule_cancel(
     Ok(())
 }
 
+/// Toggle auto-renewal for a subscription.
+///
+/// When `enabled = false` the billing engine will **skip** interval charges
+/// once the interval has elapsed — halting billing at the next natural boundary.
+/// During the *renewal window* (one full interval after the flag was disabled)
+/// the subscriber or merchant may call `set_auto_renew(true)` to re-enable
+/// billing without re-creating the subscription, preserving all history and
+/// metadata. After the window closes the subscription must be cancelled and
+/// re-created to resume billing.
+///
+/// # Authorization
+/// Only the subscription's `subscriber` or `merchant` may toggle.
+/// Any other caller receives [`Error::Forbidden`].
+///
+/// # Guard
+/// Cancelled and expired subscriptions are rejected.
+///
+/// # Events
+/// Emits [`AutoRenewToggledEvent`] on every call (including re-enabling within
+/// the renewal window).
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    let now = env.ledger().timestamp();
+
+    // Reject on terminal states.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    if sub.is_expired(now) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    // Only the subscriber or merchant may change the flag.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // When re-enabling after a disable, enforce the renewal window.
+    if enabled {
+        if !sub.auto_renew {
+            // If the renewal window has closed, the subscription cannot be
+            // silently re-activated — it must be cancelled and re-created.
+            if !sub.is_in_renewal_window(now) {
+                return Err(Error::RenewalWindowClosed);
+            }
+            // Clear the disabled timestamp on successful re-enable.
+            sub.auto_renew_disabled_at = None;
+        }
+        // If already enabled, this is a no-op (idempotent).
+    } else {
+        // Disabling for the first time (or after a previous re-enable).
+        if sub.auto_renew {
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        // If already disabled, the disable timestamp is preserved — the
+        // window continues to count from the *first* disable.
+    }
+
+    sub.auto_renew = enabled;
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        crate::types::AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            enabled,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
 /// Pause a subscription (no charges until resumed).
 ///
 /// # Authorization
@@ -1187,10 +1364,8 @@ fn apply_pause(
 
     env.events().publish(
         (Symbol::new(env, "sub_paused"), subscription_id),
-        SubscriptionPausedEvent {
+        crate::types::SubscriptionPausedEvent {
             subscription_id,
-            subscriber: sub.subscriber.clone(),
-            merchant: sub.merchant.clone(),
             authorizer,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -1285,8 +1460,8 @@ pub fn do_resume_subscription(
 // authorization surface differs (admin/operator instead of subscriber/merchant).
 
 /// Build the per-id outcome for a hard failure (no state change).
-fn bulk_failed(subscription_id: u32, err: Error) -> BulkSubscriptionResult {
-    BulkSubscriptionResult {
+fn bulk_failed(subscription_id: u32, err: Error) -> crate::types::BulkSubscriptionResult {
+    crate::types::BulkSubscriptionResult {
         subscription_id,
         success: false,
         changed: false,
@@ -1296,8 +1471,8 @@ fn bulk_failed(subscription_id: u32, err: Error) -> BulkSubscriptionResult {
 
 /// Build the per-id outcome for an id that already sat in the target state
 /// (idempotent no-op — counted as a success but with `changed = false`).
-fn bulk_skipped(subscription_id: u32) -> BulkSubscriptionResult {
-    BulkSubscriptionResult {
+fn bulk_skipped(subscription_id: u32) -> crate::types::BulkSubscriptionResult {
+    crate::types::BulkSubscriptionResult {
         subscription_id,
         success: true,
         changed: false,
@@ -1306,8 +1481,8 @@ fn bulk_skipped(subscription_id: u32) -> BulkSubscriptionResult {
 }
 
 /// Build the per-id outcome for an id that was transitioned by this call.
-fn bulk_changed(subscription_id: u32) -> BulkSubscriptionResult {
-    BulkSubscriptionResult {
+fn bulk_changed(subscription_id: u32) -> crate::types::BulkSubscriptionResult {
+    crate::types::BulkSubscriptionResult {
         subscription_id,
         success: true,
         changed: true,
@@ -1320,7 +1495,11 @@ fn bulk_changed(subscription_id: u32) -> BulkSubscriptionResult {
 /// Never aborts: returns a [`BulkSubscriptionResult`] describing the outcome.
 /// Already-`Paused` ids are skipped as no-ops; missing/expired/non-transitionable
 /// ids are reported as failures.
-fn bulk_pause_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubscriptionResult {
+fn bulk_pause_one(
+    env: &Env,
+    subscription_id: u32,
+    caller: &Address,
+) -> crate::types::BulkSubscriptionResult {
     let sub = match get_subscription(env, subscription_id) {
         Ok(s) => s,
         Err(e) => return bulk_failed(subscription_id, e),
@@ -1346,7 +1525,11 @@ fn bulk_pause_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubs
 /// Never aborts: returns a [`BulkSubscriptionResult`] describing the outcome.
 /// Already-`Cancelled` ids are skipped as no-ops; missing/expired/non-transitionable
 /// ids are reported as failures.
-fn bulk_cancel_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubscriptionResult {
+fn bulk_cancel_one(
+    env: &Env,
+    subscription_id: u32,
+    caller: &Address,
+) -> crate::types::BulkSubscriptionResult {
     let sub = match get_subscription(env, subscription_id) {
         Ok(s) => s,
         Err(e) => return bulk_failed(subscription_id, e),
@@ -1416,7 +1599,7 @@ pub fn do_bulk_pause_subscriptions(
     caller: Address,
     ids: &Vec<u32>,
     nonce: u64,
-) -> Result<Vec<BulkSubscriptionResult>, Error> {
+) -> Result<Vec<crate::types::BulkSubscriptionResult>, Error> {
     if !bulk_precheck(env, &caller, ids, nonce)? {
         return Ok(Vec::new(env));
     }
@@ -1440,7 +1623,7 @@ pub fn do_bulk_pause_subscriptions(
 
     env.events().publish(
         (Symbol::new(env, "bulk_paused"), caller.clone()),
-        BulkPauseEvent {
+        crate::types::BulkPauseEvent {
             caller,
             requested: ids.len(),
             paused,
@@ -1471,7 +1654,7 @@ pub fn do_bulk_cancel_subscriptions(
     caller: Address,
     ids: &Vec<u32>,
     nonce: u64,
-) -> Result<Vec<BulkSubscriptionResult>, Error> {
+) -> Result<Vec<crate::types::BulkSubscriptionResult>, Error> {
     if !bulk_precheck(env, &caller, ids, nonce)? {
         return Ok(Vec::new(env));
     }
@@ -1495,7 +1678,7 @@ pub fn do_bulk_cancel_subscriptions(
 
     env.events().publish(
         (Symbol::new(env, "bulk_cancelled"), caller.clone()),
-        BulkCancelEvent {
+        crate::types::BulkCancelEvent {
             caller,
             requested: ids.len(),
             cancelled,
@@ -1636,7 +1819,7 @@ pub fn do_charge_one_off(
         merchant_amount,
         BillingChargeKind::OneOff,
     )?;
-    if fee_amount > 0 {
+    let should_emit_fee_event = if fee_amount > 0 {
         if let Some(ref treasury) = treasury_opt {
             crate::merchant::credit_merchant_balance_for_token(
                 env,
@@ -1645,24 +1828,38 @@ pub fn do_charge_one_off(
                 fee_amount,
                 BillingChargeKind::OneOff,
             )?;
-            env.events().publish(
-                (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                crate::types::ProtocolFeeChargedEvent {
-                    subscription_id,
-                    merchant: sub.merchant.clone(),
-                    token: sub.token.clone(),
-                    fee_amount,
-                    treasury: treasury.clone(),
-                    timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                },
-            );
+            Some((treasury.clone(), fee_amount))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+    }
 
+    write_subscription(env, subscription_id, &sub);
+
+    // Emit protocol fee event after state is written
+    if let Some((treasury, fee)) = should_emit_fee_event {
+        env.events().publish(
+            (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+            crate::types::ProtocolFeeChargedEvent {
+                subscription_id,
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                fee_amount: fee,
+                treasury,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
+
+    // Emit lifetime cap reached event after state is written
+    if cap_reached {
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
                 (symbol_short!("cap_reach"), subscription_id),
@@ -1676,8 +1873,6 @@ pub fn do_charge_one_off(
             );
         }
     }
-
-    write_subscription(env, subscription_id, &sub);
     append_statement(
         env,
         subscription_id,
@@ -2144,6 +2339,8 @@ pub fn do_create_subscription_from_plan(
     subscriber.require_auth();
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
 
+    enforce_creation_rate_limit(env, &subscriber)?;
+
     let plan = get_plan_template(env, plan_template_id)?;
 
     if plan.is_disabled {
@@ -2163,7 +2360,7 @@ pub fn do_create_subscription_from_plan(
     if subscriber_active_count >= subscriber_cap {
         env.events().publish(
             (Symbol::new(env, "subscriber_cap_reached"), subscriber.clone()),
-            SubscriberCapReachedEvent {
+            crate::types::SubscriberCapReachedEvent {
                 subscriber: subscriber.clone(),
                 active_count: subscriber_active_count,
                 cap: subscriber_cap,
@@ -2201,6 +2398,8 @@ pub fn do_create_subscription_from_plan(
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     write_subscription(env, id, &sub);
@@ -2551,12 +2750,22 @@ pub fn do_configure_usage_limits(
 ) -> Result<(), Error> {
     merchant.require_auth();
 
-    let sub = get_subscription(env, subscription_id)?;
-    if sub.merchant != merchant {
-        return Err(Error::Forbidden);
-    }
-    if !sub.usage_enabled {
-        return Err(Error::UsageNotEnabled);
+    let sub_result = get_subscription(env, subscription_id);
+    match sub_result {
+        Ok(sub) => {
+            if sub.merchant != merchant {
+                return Err(Error::Forbidden);
+            }
+            if !sub.usage_enabled {
+                return Err(Error::UsageNotEnabled);
+            }
+        },
+        Err(_) => {
+            let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
+            if subscription_id != next_id {
+                return Err(Error::NotFound);
+            }
+        }
     }
 
     if let Some(cap) = usage_cap_units {
@@ -2566,6 +2775,7 @@ pub fn do_configure_usage_limits(
     }
 
     let limits = UsageLimits {
+        merchant: merchant.clone(),
         rate_limit_max_calls,
         rate_window_secs,
         burst_min_interval_secs,
@@ -2681,7 +2891,7 @@ pub fn do_accept_transfer(
     // Remove from old subscriber's index
     let old_subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
     if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&old_subscriber_key) {
-        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
             let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
             ids.remove(idx_u32);
             env.storage().instance().set(&old_subscriber_key, &ids);
