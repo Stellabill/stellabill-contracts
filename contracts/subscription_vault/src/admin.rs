@@ -511,6 +511,11 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
     read_config(env, &DataKey::Treasury)
 }
 
+/// Return the configured buyout premium in basis points, defaulting to 0.
+pub fn get_buyout_premium_bps(env: &Env) -> u32 {
+    read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
+}
+
 // ── Schema migration ──────────────────────────────────────────────────────────
 
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {

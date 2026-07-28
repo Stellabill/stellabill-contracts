@@ -42,13 +42,15 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
-    PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
-    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
-    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
-    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
-    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
+    SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent,
+    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
+    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -731,6 +733,166 @@ pub fn do_deposit_funds(
     }
 
     Ok(())
+}
+
+/// Grace-period buyout: deposit enough to cover the missed charge plus a
+/// buyout premium and immediately return to Active.
+///
+/// Combines deposit + charge in one atomic call so the subscriber does not
+/// need to cancel and re-create when a payment method briefly fails.
+///
+/// # Arguments
+/// * `subscriber` - Must match the subscription's subscriber and provide auth.
+/// * `amount` - Tokens to deposit. Must be >= `charge_amount + premium`.
+/// * `idem_key` - Optional idempotency key for the charge portion.
+///
+/// # Errors
+/// * `Error::NotInGracePeriod` — subscription is not in GracePeriod.
+/// * `Error::InsufficientBalance` — deposit amount < charge + premium.
+/// * `Error::Overflow` — premium calculation overflowed.
+pub fn do_grace_buyout(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+    amount: i128,
+    idem_key: Option<soroban_sdk::BytesN<32>>,
+) -> Result<(i128, i128), Error> {
+    subscriber.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if sub.status != SubscriptionStatus::GracePeriod {
+        return Err(Error::NotInGracePeriod);
+    }
+
+    let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)?;
+    let premium_bps = crate::admin::get_buyout_premium_bps(env);
+
+    // premium = charge_amount * premium_bps / 10_000
+    let premium = if premium_bps > 0 {
+        let raw = (charge_amount as i128)
+            .checked_mul(premium_bps as i128)
+            .ok_or(Error::Overflow)?;
+        raw.checked_div(10_000i128).ok_or(Error::Overflow)?
+    } else {
+        0i128
+    };
+
+    let total_required = charge_amount
+        .checked_add(premium)
+        .ok_or(Error::Overflow)?;
+
+    if amount < total_required {
+        return Err(Error::InsufficientBalance);
+    }
+
+    // Effects: credit the deposit and immediately charge.
+    sub.prepaid_balance = sub
+        .prepaid_balance
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+
+    let new_balance = sub
+        .prepaid_balance
+        .checked_sub(charge_amount)
+        .ok_or(Error::InsufficientBalance)?;
+    sub.prepaid_balance = new_balance;
+
+    let now = env.ledger().timestamp();
+    sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
+    sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
+
+    // Recover from grace period on successful charge.
+    transition_to(&mut sub.status, SubscriptionStatus::Active)?;
+    sub.grace_start_timestamp = None;
+
+    write_subscription(env, subscription_id, &sub);
+
+    // Credit merchant for charge_amount + premium (premium is additional revenue).
+    let merchant_credit = safe_add(charge_amount, premium)?;
+    crate::merchant::credit_merchant_balance_for_token(
+        env,
+        &sub.merchant,
+        &sub.token,
+        merchant_credit,
+        BillingChargeKind::Interval,
+    )?;
+
+    // Record charged period to prevent replay.
+    let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
+    env.storage()
+        .instance()
+        .set(&DataKey::ChargedPeriod(subscription_id), &period_index);
+
+    append_statement(
+        env,
+        subscription_id,
+        charge_amount,
+        sub.merchant.clone(),
+        BillingChargeKind::Interval,
+        now.saturating_sub(sub.interval_seconds),
+        now,
+    )?;
+
+    // Emit buyout event.
+    env.events().publish(
+        (Symbol::new(env, "grace_buyout"), subscription_id),
+        GraceBuyoutEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
+            deposit_amount: amount,
+            charge_amount,
+            premium_paid: premium,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // Emit standard charged event for indexer compatibility.
+    env.events().publish(
+        (symbol_short!("charged"),),
+        crate::types::SubscriptionChargedEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
+            amount: charge_amount,
+            lifetime_charged: sub.lifetime_charged,
+            timestamp: now,
+            period_start: now.saturating_sub(sub.interval_seconds),
+            period_end: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // Emit resumption event.
+    env.events().publish(
+        (Symbol::new(env, "sub_resumed"), subscription_id),
+        crate::types::SubscriptionResumedEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            authorizer: subscriber,
+            previous_status: SubscriptionStatus::GracePeriod,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // Record idempotency key for the charge if provided.
+    if let Some(k) = idem_key {
+        let hashed = crate::idempotency::hash_idem_key(
+            env,
+            crate::nonce::DOMAIN_CHARGE_INTERVAL,
+            subscription_id,
+            &k,
+        );
+        crate::idempotency::push_key(env, subscription_id, &hashed);
+    }
+
+    Ok((charge_amount, premium))
 }
 
 pub fn do_cancel_subscription(
