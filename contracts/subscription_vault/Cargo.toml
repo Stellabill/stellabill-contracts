@@ -7,6 +7,29 @@ description = "Stellarbill prepaid subscription vault - recurring USDC billing o
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+# SECURITY: surface unchecked narrowing/sign-loss casts.
+#
+# The `as` keyword on numeric types silently truncates values outside the
+# destination range and silently flips the sign on negative inputs. In an
+# accounting contract an undetected truncation can permanently
+# mis-account funds.
+#
+# Scope note: enumeration casts (e.g. `Error::Overflow as u32`) and
+# size-of-slice casts are abundant in the existing audited code; the
+# stricter `#![deny(clippy::cast_possible_truncation,
+# clippy::cast_sign_loss)]` lint is therefore applied *module-locally*
+# inside `src/safe_math.rs` itself, the precise location where prorated
+# math is performed. The crate-level lints below are kept at `warn` so
+# future PRs that introduce unexpectedly truncating casts outside
+# `safe_math.rs` are surfaced in CI review without breaking the existing
+# build.
+[lints.clippy]
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
 [features]
 default = ["oracle-pricing"]
 oracle-pricing = []
@@ -15,4 +38,39 @@ oracle-pricing = []
 soroban-sdk = "22.0.0"
 
 [dev-dependencies]
+
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+proptest = "1"
+hex = "0.4"
+# Pure-Rust ed25519 signer used to forge signed metadata payloads in tests.
+# Major-minor pinned so a future dalek release cannot silently desync
+# off-chain signing wire format from the Soroban host verifier. 2.2 is
+# the version currently pulled in transitively by soroban-sdk 22.0.0.
+ed25519-dalek = "=2.2"
+rand = "0.8"
+
+
+[[test]]
+name = "safe_math_verification"
+path = "verification/safe_math_verification.rs"
+
+[[test]]
+name = "nonce_verification"
+path = "verification/nonce_verification.rs"
+
+[[test]]
+name = "channel_account_auth"
+path = "tests/channel_account_auth.rs"
+
+[[test]]
+name = "ttl_extension"
+path = "benches/ttl_extension.rs"
+
+[[test]]
+name = "idem_lookup"
+path = "benches/idem_lookup.rs"
+
+[[test]]
+name = "charge_cold_warm"
+path = "benches/charge_cold_warm.rs"
+

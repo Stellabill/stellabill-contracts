@@ -312,7 +312,7 @@ The contract includes comprehensive test coverage for the `usage_enabled` flag:
    - ✅ Flag is retrievable via `get_subscription()`
 
 3. **Immutability Tests**:
-   - ✅ Flag cannot change after creation
+   - ✅ Flag cannot change after creation (throws `Error::CannotChangeUsageMode`)
    - ✅ Operations don't accidentally modify flag
 
 4. **Independence Tests**:
@@ -493,7 +493,7 @@ client.create_subscription(
 
 ### Q: Can I change `usage_enabled` after creating a subscription?
 
-**A**: No, the flag is immutable. To change billing models, cancel the existing subscription and create a new one.
+**A**: No, the flag is immutable. Attempting to change it during plan template updates or migrations will result in `Error::CannotChangeUsageMode` (Code 1038). To change billing models, cancel the existing subscription and create a new one.
 
 ### Q: What happens if I set `usage_enabled = true` but never record usage?
 

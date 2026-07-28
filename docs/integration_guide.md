@@ -14,6 +14,23 @@ contract on the Stellar network.
 6. [Indexing & Event Sourcing](#indexing--event-sourcing)
 7. [Error Codes, Failure Modes & Retry Behavior](#error-codes-failure-modes--retry-behavior)
 8. [Security Notes](#security-notes)
+9. [Testing Auth with Channel Accounts](#testing-auth-with-channel-accounts)
+
+---
+
+## Testing Auth with Channel Accounts
+
+Testing smart contracts using `env.mock_all_auths()` is a convenient way to bypass authorization checks during early development. However, relying on it in integration tests hides critical real-world auth bugs. For instance:
+- Missing token transfer sub-invocations in the `InvokerContractAuthEntry`.
+- Passing the wrong signer to `require_auth()`.
+- Incorrect parameter ordering or values signed in the authorization payload.
+
+To ensure robust security, the `channel_account_auth` tests use a real `ChannelAccountContract` mock to drive entrypoints through the real Soroban auth stack. This contract uses `env.authorize_as_current_contract` to provide explicit authorization entries. By testing with this mock, we verify that BOTH subscriber and merchant auth stacks function correctly, preventing authorization replay attacks and mismatched signature payloads.
+
+To run the channel account auth tests along with the rest of the test suite:
+```bash
+cargo test --all
+```
 
 ---
 

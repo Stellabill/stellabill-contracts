@@ -20,12 +20,14 @@
 //! See `docs/reentrancy.md` and `docs/reentrancy_hardening.md` for full details on
 //! the reentrancy threat model and mitigation strategy.
 
-use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
+use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantPausedEvent,
-    MerchantUnpausedEvent, TokenEarnings, TokenReconciliationSnapshot,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
-use soroban_sdk::{token, Address, Env, Symbol, Vec};
+use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
 pub fn get_merchant_paused(env: &Env, merchant: Address) -> bool {
     // Check both legacy Pause state and new Config state if they overlap
@@ -57,6 +59,7 @@ pub fn pause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantPausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -77,10 +80,289 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantUnpausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
     Ok(())
+}
+
+// ── Whitelist mode ───────────────────────────────────────────────────────────
+
+/// Returns `true` if the global whitelist mode is enabled.
+pub fn get_whitelist_mode(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantWhitelistMode)
+        .unwrap_or(false)
+}
+
+/// Enable or disable the global merchant whitelist mode. Admin-only.
+pub fn set_whitelist_mode(env: &Env, admin: Address, enabled: bool) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantWhitelistMode;
+    env.storage().instance().set(&key, &enabled);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_whitelist_toggled"),),
+        MerchantWhitelistModeEvent {
+            enabled,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Returns `true` if `merchant` has been approved under whitelist mode.
+pub fn is_merchant_approved(env: &Env, merchant: &Address) -> bool {
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().get(&key).unwrap_or(false)
+}
+
+/// Approve a merchant under whitelist mode. Admin-only.
+///
+/// When whitelist mode is enabled, `initialize_merchant_config` will reject
+/// merchants that have not been approved. Existing approvals are preserved
+/// when whitelist mode is toggled on.
+pub fn approve_merchant(env: &Env, admin: Address, merchant: Address) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().set(&key, &true);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_approved"), merchant.clone()),
+        MerchantApprovedEvent {
+            merchant,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Revoke a merchant's approval under whitelist mode. Admin-only.
+pub fn revoke_merchant(env: &Env, admin: Address, merchant: Address) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().set(&key, &false);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_revoked"), merchant.clone()),
+        MerchantRevokedEvent {
+            merchant,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Gate check: returns `Ok(())` if whitelist is disabled or merchant is approved.
+fn require_whitelist_approval(env: &Env, merchant: &Address) -> Result<(), Error> {
+    if get_whitelist_mode(env) && !is_merchant_approved(env, merchant) {
+        return Err(Error::MerchantNotApproved);
+    }
+    Ok(())
+}
+
+// ── Merchant compliance-category tags (#564) ────────────────────────────────
+//
+// A small, admin-controlled allowlist (`DataKey::TagAllowlist`) defines the
+// set of tag symbols ("saas", "media", "nonprofit", ...) that may be assigned
+// to a merchant. Each merchant carries at most `MAX_MERCHANT_TAGS` tags
+// (`DataKey::MerchantTags(merchant)`), letting downstream indexers group
+// merchant activity by compliance category and letting admins efficiently
+// identify — and, via the existing blocklist/pause machinery, act on —
+// whole classes of merchants without maintaining an out-of-band mapping.
+//
+// Tags are purely descriptive metadata: setting or clearing them never
+// touches merchant balances, pause state, or approval status, and is
+// intentionally unrestricted by those states (an admin must be able to tag,
+// or clear the tags of, an already-paused/blocked merchant for reporting).
+
+/// Return the current admin-controlled tag allowlist, or an empty list if
+/// none has been configured yet.
+pub fn get_tag_allowlist(env: &Env) -> Vec<Symbol> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TagAllowlist)
+        .unwrap_or(Vec::new(env))
+}
+
+/// Replace the global tag allowlist. Admin-only.
+///
+/// The allowlist itself is not bounded by `MAX_MERCHANT_TAGS` — that limit
+/// applies per-merchant, not to the catalog of valid tags — but it must be
+/// duplicate-free so allowlist membership checks stay unambiguous.
+///
+/// Tags already assigned to a merchant are **not** retroactively revalidated
+/// against a shrunk allowlist: removing a tag from the allowlist only blocks
+/// *future* `set_merchant_tags` calls from reusing it, mirroring how
+/// `revoke_merchant` doesn't retroactively unwind past state elsewhere in
+/// this module. An admin who needs to fully retire a tag can follow up with
+/// `set_merchant_tags` calls to clear it from affected merchants.
+///
+/// # Errors
+/// * [`Error::Unauthorized`] — caller is not the stored admin.
+/// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+pub fn set_tag_allowlist(env: &Env, admin: Address, tags: Vec<Symbol>) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let mut seen = Vec::new(env);
+    for tag in tags.iter() {
+        if seen.contains(&tag) {
+            return Err(Error::DuplicateMerchantTag);
+        }
+        seen.push_back(tag);
+    }
+
+    env.storage().instance().set(&DataKey::TagAllowlist, &tags);
+
+    env.events().publish(
+        (Symbol::new(env, "tag_allowlist_updated"),),
+        crate::types::TagAllowlistUpdatedEvent {
+            admin,
+            tags,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Return the compliance-category tags currently assigned to `merchant`, or
+/// an empty list if none have been set.
+pub fn get_merchant_tags(env: &Env, merchant: Address) -> Vec<Symbol> {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantTags(merchant))
+        .unwrap_or(Vec::new(env))
+}
+
+/// Set (fully replacing) `merchant`'s compliance-category tags. Admin-only.
+///
+/// Pass an empty `tags` vector to clear all tags — this is always allowed,
+/// including for a merchant that is currently paused or blocklisted, since
+/// clearing compliance metadata must never be blocked by the very
+/// enforcement state that metadata may have informed.
+///
+/// # Errors
+/// * [`Error::Unauthorized`] — caller is not the stored admin.
+/// * [`Error::MerchantTagLimitExceeded`] — `tags.len() > MAX_MERCHANT_TAGS`.
+/// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+/// * [`Error::UnknownMerchantTag`] — a tag is not present in the current
+///   allowlist (`get_tag_allowlist`).
+pub fn set_merchant_tags(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    tags: Vec<Symbol>,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    if tags.len() > crate::types::MAX_MERCHANT_TAGS {
+        return Err(Error::MerchantTagLimitExceeded);
+    }
+
+    let allowlist = get_tag_allowlist(env);
+    let mut seen = Vec::new(env);
+    for tag in tags.iter() {
+        if seen.contains(&tag) {
+            return Err(Error::DuplicateMerchantTag);
+        }
+        if !allowlist.contains(&tag) {
+            return Err(Error::UnknownMerchantTag);
+        }
+        seen.push_back(tag);
+    }
+
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantTags(merchant.clone()), &tags);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_tags_updated"), merchant.clone()),
+        crate::types::MerchantTagsUpdatedEvent {
+            merchant,
+            admin,
+            tags,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+fn validate_merchant_config_input(
+    _payout_address: &Address,
+    fee_bips: i32,
+    allowed_operations: i32,
+) -> Result<(), Error> {
+    if fee_bips > MAX_FEE_BIPS {
+        return Err(Error::InvalidFeeBips);
+    }
+    if !is_valid_allowed_operations(allowed_operations) {
+        return Err(Error::InvalidOperations);
+    }
+    if allowed_operations & OP_CHARGE == 0 {
+        return Err(Error::MustAllowChargeOperation);
+    }
+    Ok(())
+}
+
+pub fn initialize_merchant_config(
+    env: &Env,
+    merchant: Address,
+    payout_address: Address,
+    fee_bips: i32,
+    allowed_operations: i32,
+    fee_address: Option<Address>,
+    redirect_url: String,
+) -> Result<MerchantConfig, Error> {
+    merchant.require_auth();
+    require_whitelist_approval(env, &merchant)?;
+    validate_merchant_config_input(&payout_address, fee_bips, allowed_operations)?;
+
+    let config = MerchantConfig {
+        version: 1,
+        payout_address,
+        fee_bips,
+        allowed_operations,
+        is_active: true,
+        fee_address,
+        redirect_url,
+        is_paused: false,
+        last_updated: env.ledger().timestamp(),
+    };
+
+    let key = DataKey::MerchantConfig(merchant.clone());
+    env.storage().instance().set(&key, &config);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_config_initialized"),),
+        MerchantConfigInitializedEvent {
+            merchant: merchant.clone(),
+            payout_address: config.payout_address.clone(),
+            fee_bips: config.fee_bips,
+            allowed_operations: config.allowed_operations,
+            timestamp: config.last_updated,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(config)
 }
 
 pub fn set_merchant_config(
@@ -89,8 +371,30 @@ pub fn set_merchant_config(
     config: MerchantConfig,
 ) -> Result<(), Error> {
     merchant.require_auth();
-    let key = DataKey::MerchantConfig(merchant);
-    env.storage().instance().set(&key, &config);
+    validate_merchant_config_input(
+        &config.payout_address,
+        config.fee_bips,
+        config.allowed_operations,
+    )?;
+
+    let key = DataKey::MerchantConfig(merchant.clone());
+    let timestamp = env.ledger().timestamp();
+    let mut updated_config = config;
+    updated_config.last_updated = timestamp;
+    env.storage().instance().set(&key, &updated_config);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_config_set"),),
+        MerchantConfigUpdatedEvent {
+            merchant: merchant.clone(),
+            payout_address: updated_config.payout_address.clone(),
+            fee_bips: updated_config.fee_bips,
+            allowed_operations: updated_config.allowed_operations,
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
     Ok(())
 }
 
@@ -99,16 +403,13 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-fn merchant_balance_key(
-    env: &Env,
-    merchant: &Address,
-    token: &Address,
-) -> (Symbol, Address, Address) {
-    (
-        Symbol::new(env, "merchant_balance"),
-        merchant.clone(),
-        token.clone(),
-    )
+pub fn get_merchant_multisig_config(env: &Env, merchant: Address) -> Option<MerchantMultiSigConfig> {
+    let key = DataKey::MerchantMultiSig(merchant);
+    env.storage().instance().get(&key)
+}
+
+fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
+    DataKey::MerchantBalance(merchant.clone(), token.clone())
 }
 
 pub fn get_merchant_token_earnings(
@@ -188,6 +489,8 @@ pub fn get_reconciliation_snapshot(
             total_withdrawals: earnings.withdrawals,
             total_refunds: earnings.refunds,
             computed_balance,
+            stored_balance: 0,              // Will be computed by caller
+            matches: computed_balance == 0, // Placeholder
         });
     }
     result
@@ -201,12 +504,12 @@ pub fn get_merchant_balance(env: &Env, merchant: &Address) -> i128 {
 }
 
 pub fn get_merchant_balance_by_token(env: &Env, merchant: &Address, token: &Address) -> i128 {
-    let key = merchant_balance_key(env, merchant, token);
+    let key = merchant_balance_key(merchant, token);
     env.storage().instance().get(&key).unwrap_or(0i128)
 }
 
-fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
-    let key = merchant_balance_key(env, merchant, token);
+pub fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
+    let key = merchant_balance_key(merchant, token);
     env.storage().instance().set(&key, balance);
 }
 
@@ -229,40 +532,90 @@ pub fn credit_merchant_balance_for_token(
     amount: i128,
     kind: BillingChargeKind,
 ) -> Result<(), Error> {
-    validate_non_negative(amount)?;
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
 
-    // Update simple balance
+    // ── EFFECTS: balance update
     let current = get_merchant_balance_by_token(env, merchant, token_addr);
     let new_balance = safe_add(current, amount)?;
     set_merchant_balance(env, merchant, token_addr, &new_balance);
 
-    // Update earnings struct
+    // ── EFFECTS: earnings update (SINGLE SOURCE OF TRUTH)
     let mut earnings = get_merchant_token_earnings(env, merchant, token_addr);
+
     match kind {
         BillingChargeKind::Interval => {
             earnings.accruals.interval = earnings
                 .accruals
                 .interval
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
         BillingChargeKind::Usage => {
             earnings.accruals.usage = earnings
                 .accruals
                 .usage
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
         BillingChargeKind::OneOff => {
             earnings.accruals.one_off = earnings
                 .accruals
                 .one_off
                 .checked_add(amount)
-                .ok_or(Error::Overflow)?
+                .ok_or(Error::Overflow)?;
         }
     }
+
     set_merchant_token_earnings(env, merchant, token_addr, &earnings);
+
+    // ── EFFECTS: register token
     add_merchant_token(env, merchant, token_addr);
+
+    // ── ACCOUNTING (invariant anchor)
+    crate::accounting::add_total_accounted(env, token_addr, amount)?;
+
+    // ── INVARIANT (test/CI only)
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, token_addr)?;
+
+    Ok(())
+}
+pub fn set_merchant_multisig(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    signers: Vec<Address>,
+    threshold: u32,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+    merchant.require_auth();
+
+    if threshold == 0 {
+        return Err(Error::InvalidInput);
+    }
+
+    if threshold > signers.len() {
+        return Err(Error::InvalidInput);
+    }
+
+    let mut seen = Vec::new(env);
+    for signer in signers.iter() {
+        if seen.contains(&signer) {
+            return Err(Error::InvalidInput);
+        }
+        seen.push_back(signer.clone());
+    }
+
+    let key = DataKey::MerchantMultiSig(merchant.clone());
+    env.storage().instance().set(
+        &key,
+        &MerchantMultiSigConfig {
+            signers: signers.clone(),
+            threshold,
+        },
+    );
 
     Ok(())
 }
@@ -279,44 +632,105 @@ pub fn withdraw_merchant_funds_for_token(
     amount: i128,
 ) -> Result<(), Error> {
     merchant.require_auth();
+
+    if let Some(config) = get_merchant_multisig_config(env, merchant.clone()) {
+        let required_signers = config.threshold.min(config.signers.len() as u32);
+        let mut iter = 0u32;
+        while iter < required_signers {
+            if let Some(signer) = config.signers.get(iter) {
+                signer.require_auth();
+            }
+            iter += 1;
+        }
+    }
+
+    crate::blocklist::require_not_blocklisted(env, &merchant)?;
+
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
+
     if !crate::admin::is_token_accepted(env, &token_addr) {
         return Err(Error::InvalidInput);
     }
 
+    // Ensure merchant config exists
+    let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+
     let current = get_merchant_balance_by_token(env, &merchant, &token_addr);
+
     if current == 0 {
         return Err(Error::NotFound);
     }
+
     if amount > current {
         return Err(Error::InsufficientBalance);
     }
 
-    // Explicitly check vault's actual token balance before attempting transfer
+    // Vault balance check
     let token_client = token::Client::new(env, &token_addr);
-    if token_client.balance(&env.current_contract_address()) < amount {
+    let contract = env.current_contract_address();
+
+    if token_client.balance(&contract) < amount {
         return Err(Error::InsufficientBalance);
     }
 
     let new_balance = safe_sub(current, amount)?;
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // EFFECTS: Update internal state before external interactions (CEI pattern)
-    // ──────────────────────────────────────────────────────────────────────────
+    // ─────────────── EFFECTS ───────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
-    env.events()
-        .publish((Symbol::new(env, "withdrawn"), merchant.clone()), amount);
+    // EFFECTS
+    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // INTERACTIONS: Only after internal state is consistent, call token contract
-    // INTERACTIONS: Only after internal state is consistent, call token contract
-    // ──────────────────────────────────────────────────────────────────────────
-    let token_client = token::Client::new(env, &token_addr);
-    let contract = env.current_contract_address();
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.refunds = earnings
+        .refunds
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.withdrawals = earnings
+        .withdrawals
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+
+    env.events().publish(
+        (
+            Symbol::new(env, "withdrawn"),
+            merchant.clone(),
+            token_addr.clone(),
+        ),
+        MerchantWithdrawalEvent {
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount,
+            remaining_balance: new_balance,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    env.events().publish(
+        (
+            Symbol::new(env, "merchant_balance_snapshot"),
+            merchant.clone(),
+            token_addr.clone(),
+        ),
+        MerchantBalanceSnapshotEvent {
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            balance: new_balance,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    // ─────────────── INTERACTION ───────────────
     token_client.transfer(&contract, &merchant, &amount);
+
+    // ─────────────── INVARIANT ───────────────
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
 
     Ok(())
 }
@@ -333,6 +747,9 @@ pub fn merchant_refund(
         return Err(Error::InvalidAmount);
     }
 
+    // Verify merchant config is initialized
+    let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+
     let current = get_merchant_balance_by_token(env, &merchant, &token_addr);
     if current == 0 {
         return Err(Error::NotFound);
@@ -341,10 +758,11 @@ pub fn merchant_refund(
         return Err(Error::InsufficientBalance);
     }
 
-    let new_balance = current.checked_sub(amount).ok_or(Error::Overflow)?;
+    let new_balance = current.checked_sub(amount).ok_or(Error::Underflow)?;
 
     // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.refunds = earnings
@@ -360,12 +778,502 @@ pub fn merchant_refund(
             subscriber: subscriber.clone(),
             token: token_addr.clone(),
             amount,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
     // INTERACTIONS
     let token_client = token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
+    Ok(())
+}
+
+pub fn get_payout_schedule(env: &Env, merchant: &Address) -> PayoutSchedule {
+    let key = DataKey::PayoutSchedule(merchant.clone());
+    env.storage()
+        .instance()
+        .get(&key)
+        .unwrap_or(PayoutSchedule {
+            cadence_seconds: 0,
+            min_payout: 0,
+            last_payout_at: 0,
+        })
+}
+
+fn set_payout_schedule(env: &Env, merchant: &Address, schedule: &PayoutSchedule) {
+    let key = DataKey::PayoutSchedule(merchant.clone());
+    env.storage().instance().set(&key, schedule);
+}
+
+/// Set or clear the payout schedule for a merchant.
+///
+/// When `cadence_seconds` is 0 and `min_payout` is 0 the schedule is cleared
+/// (equivalent to "no auto-payout").  The merchant must authorize this call.
+///
+/// Returns the previous schedule so callers can diff the change off-chain.
+pub fn do_set_payout_schedule(
+    env: &Env,
+    merchant: Address,
+    cadence_seconds: u64,
+    min_payout: i128,
+) -> Result<PayoutSchedule, Error> {
+    merchant.require_auth();
+
+    if min_payout < 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let previous = get_payout_schedule(env, &merchant);
+    let now = env.ledger().timestamp();
+
+    let schedule = PayoutSchedule {
+        cadence_seconds,
+        min_payout,
+        last_payout_at: if previous.last_payout_at == 0 {
+            0
+        } else {
+            previous.last_payout_at
+        },
+    };
+
+    set_payout_schedule(env, &merchant, &schedule);
+
+    env.events().publish(
+        (Symbol::new(env, "payout_schedule_set"), merchant.clone()),
+        (cadence_seconds, min_payout, now),
+    );
+
+    Ok(previous)
+}
+
+/// Execute a single per-token payout for a merchant during a flush.
+///
+/// Reads the merchant's balance for `token`.  If the balance is below
+/// `min_payout` the function returns 0 (no-op).  Otherwise it transfers
+/// the entire balance to the merchant's payout address, updates internal
+/// accounting, and returns the amount transferred.
+///
+/// # CEI
+///
+/// Effects (balance update, earnings update) are written *before* the
+/// external token transfer.
+fn flush_merchant_token(
+    env: &Env,
+    merchant: &Address,
+    token: &Address,
+    min_payout: i128,
+) -> Result<i128, Error> {
+    let balance = get_merchant_balance_by_token(env, merchant, token);
+    if balance < min_payout || balance <= 0 {
+        return Ok(0i128);
+    }
+
+    let config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+    let payout_address = config.payout_address;
+
+    // EFFECTS — update state before external call
+    set_merchant_balance(env, merchant, token, &0i128);
+
+    let mut earnings = get_merchant_token_earnings(env, merchant, token);
+    earnings.withdrawals = earnings
+        .withdrawals
+        .checked_add(balance)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, merchant, token, &earnings);
+    crate::accounting::sub_total_accounted(env, token, balance)?;
+
+    env.events().publish(
+        (
+            Symbol::new(env, "withdrawn"),
+            merchant.clone(),
+            token.clone(),
+        ),
+        MerchantWithdrawalEvent {
+            merchant: merchant.clone(),
+            token: token.clone(),
+            amount: balance,
+            remaining_balance: 0,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // INTERACTIONS
+    let token_client = token::Client::new(env, token);
+    token_client.transfer(&env.current_contract_address(), &payout_address, &balance);
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, token)?;
+    Ok(balance)
+}
+
+/// Process all scheduled payouts for a merchant.
+///
+/// Iterates every token the merchant has earnings in.  For each token that
+/// meets the configured `min_payout` threshold, the full balance is
+/// transferred to the merchant's payout address.
+///
+/// Anyone may call this function.  The cadence check is enforced here:
+/// if the configured `cadence_seconds` has not elapsed since the last flush,
+/// the call is a no-op (`Err(Error::IntervalNotElapsed)`).
+///
+/// Returns the number of token payouts actually executed.
+pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result<u32, Error> {
+    let schedule = get_payout_schedule(env, &merchant);
+
+    // No schedule configured — nothing to do.
+    if schedule.cadence_seconds == 0 && schedule.min_payout == 0 {
+        return Ok(0);
+    }
+
+    let now = env.ledger().timestamp();
+
+    // Enforce cadence: enough time since last flush?
+    if schedule.last_payout_at > 0
+        && now.saturating_sub(schedule.last_payout_at) < schedule.cadence_seconds
+    {
+        return Err(Error::IntervalNotElapsed);
+    }
+
+    // Iterate all tokens the merchant has earnings in.
+    let token_key = DataKey::MerchantTokens(merchant.clone());
+    let tokens: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&token_key)
+        .unwrap_or(Vec::new(env));
+
+    let mut tokens_paid: u32 = 0;
+    for token in tokens.iter() {
+        let amount = flush_merchant_token(env, &merchant, &token, schedule.min_payout)?;
+        if amount > 0 {
+            tokens_paid = tokens_paid.saturating_add(1);
+        }
+    }
+
+    // Update last_payout_at
+    let mut updated_schedule = schedule;
+    updated_schedule.last_payout_at = now;
+    set_payout_schedule(env, &merchant, &updated_schedule);
+
+    env.events().publish(
+        (Symbol::new(env, "scheduled_payout"), merchant.clone()),
+        ScheduledPayoutEvent {
+            merchant,
+            caller,
+            tokens_paid,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(tokens_paid)
+}
+
+pub fn update_merchant_config(
+    env: &Env,
+    merchant: Address,
+    new_payout_address: Option<Address>,
+    new_fee_bips: Option<i32>,
+    new_allowed_operations: Option<i32>,
+    new_is_active: Option<bool>,
+    new_fee_address: Option<Option<Address>>,
+    new_redirect_url: Option<soroban_sdk::String>,
+    new_is_paused: Option<bool>,
+) -> Result<MerchantConfig, Error> {
+    merchant.require_auth();
+
+    let key = DataKey::MerchantConfig(merchant.clone());
+    let mut config: MerchantConfig = env.storage().instance().get(&key).ok_or(Error::NotFound)?;
+
+    if let Some(payout) = new_payout_address {
+        config.payout_address = payout;
+    }
+    if let Some(bips) = new_fee_bips {
+        if bips > MAX_FEE_BIPS {
+            return Err(Error::InvalidFeeBips);
+        }
+        config.fee_bips = bips;
+    }
+    if let Some(ops) = new_allowed_operations {
+        if !is_valid_allowed_operations(ops) {
+            return Err(Error::InvalidOperations);
+        }
+        if ops & OP_CHARGE == 0 {
+            return Err(Error::MustAllowChargeOperation);
+        }
+        config.allowed_operations = ops;
+    }
+    if let Some(active) = new_is_active {
+        config.is_active = active;
+    }
+    if let Some(fee_addr) = new_fee_address {
+        config.fee_address = fee_addr;
+    }
+    if let Some(url) = new_redirect_url {
+        config.redirect_url = url;
+    }
+    if let Some(paused) = new_is_paused {
+        config.is_paused = paused;
+    }
+
+    config.last_updated = env.ledger().timestamp();
+    env.storage().instance().set(&key, &config);
+
+    env.events().publish(
+        (soroban_sdk::Symbol::new(env, "merchant_config_updated"),),
+        MerchantConfigUpdatedEvent {
+            merchant: merchant.clone(),
+            payout_address: config.payout_address.clone(),
+            fee_bips: config.fee_bips,
+            allowed_operations: config.allowed_operations,
+            timestamp: config.last_updated,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(config)
+}
+
+/// Migrate every per-merchant storage key from `old_merchant` to `new_merchant`
+/// and rewrite every `Subscription.merchant` field that points at the old address.
+///
+/// # Migrated keys
+/// * `MerchantBalance(old, token)` → `MerchantBalance(new, token)` for every token
+/// * `MerchantTokens(old)`         → `MerchantTokens(new)`
+/// * `MerchantEarnings(old, token)`→ `MerchantEarnings(new, token)` for every token
+/// * `MerchantConfig(old)`         → `MerchantConfig(new)`
+/// * `MerchantPaused(old)`         → `MerchantPaused(new)`
+/// * `MerchantSubs(old)`           → `MerchantSubs(new)` (index list)
+/// * Every `Sub(id).merchant` where `merchant == old` is rewritten to `new`
+///
+/// # Auth
+/// Admin-only. The `admin` argument must match the stored admin address.
+/// Nonce `nonce` is consumed in domain `DOMAIN_MERCHANT_ROTATION` to prevent replay.
+///
+/// # Errors
+/// * `Unauthorized`       — caller is not the stored admin
+/// * `NonceAlreadyUsed`   — nonce was already consumed
+/// * `SelfRotation`       — `old == new`
+pub fn do_rotate_merchant_address(
+    env: &Env,
+    admin: Address,
+    old_merchant: Address,
+    new_merchant: Address,
+    nonce: u64,
+) -> Result<(), crate::types::Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_MERCHANT_ROTATION, nonce)?;
+
+    let storage = env.storage().instance();
+
+    // ── 1. Migrate MerchantTokens list ────────────────────────────────────────
+    let tokens_key_old = DataKey::MerchantTokens(old_merchant.clone());
+    let tokens_key_new = DataKey::MerchantTokens(new_merchant.clone());
+    let tokens: soroban_sdk::Vec<Address> = storage
+        .get(&tokens_key_old)
+        .unwrap_or(soroban_sdk::Vec::new(env));
+
+    // ── 2. Migrate per-token balances and earnings ────────────────────────────
+    for token in tokens.iter() {
+        // MerchantBalance
+        let bal_key_old = DataKey::MerchantBalance(old_merchant.clone(), token.clone());
+        let bal: i128 = storage.get(&bal_key_old).unwrap_or(0i128);
+        if bal != 0 {
+            let bal_key_new = DataKey::MerchantBalance(new_merchant.clone(), token.clone());
+            let existing: i128 = storage.get(&bal_key_new).unwrap_or(0i128);
+            storage.set(&bal_key_new, &(existing + bal));
+        }
+        storage.remove(&bal_key_old);
+
+        // MerchantEarnings
+        let earn_key_old = DataKey::MerchantEarnings(old_merchant.clone(), token.clone());
+        if let Some(earnings) = storage.get::<_, crate::types::TokenEarnings>(&earn_key_old) {
+            let earn_key_new = DataKey::MerchantEarnings(new_merchant.clone(), token.clone());
+            storage.set(&earn_key_new, &earnings);
+            storage.remove(&earn_key_old);
+        }
+    }
+
+    // Write merged token list to new address (merge with any existing list)
+    if !tokens.is_empty() {
+        let mut new_tokens: soroban_sdk::Vec<Address> = storage
+            .get(&tokens_key_new)
+            .unwrap_or(soroban_sdk::Vec::new(env));
+        for token in tokens.iter() {
+            if !new_tokens.contains(&token) {
+                new_tokens.push_back(token);
+            }
+        }
+        storage.set(&tokens_key_new, &new_tokens);
+    }
+    storage.remove(&tokens_key_old);
+
+    // ── 3. Migrate MerchantConfig ─────────────────────────────────────────────
+    let cfg_key_old = DataKey::MerchantConfig(old_merchant.clone());
+    if let Some(config) = storage.get::<_, crate::types::MerchantConfig>(&cfg_key_old) {
+        let cfg_key_new = DataKey::MerchantConfig(new_merchant.clone());
+        storage.set(&cfg_key_new, &config);
+        storage.remove(&cfg_key_old);
+    }
+
+    // ── 4. Migrate MerchantPaused ─────────────────────────────────────────────
+    let pause_key_old = DataKey::MerchantPaused(old_merchant.clone());
+    if let Some(paused) = storage.get::<_, bool>(&pause_key_old) {
+        let pause_key_new = DataKey::MerchantPaused(new_merchant.clone());
+        storage.set(&pause_key_new, &paused);
+        storage.remove(&pause_key_old);
+    }
+
+    // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
+    let subs_key_old = DataKey::MerchantSubs(old_merchant.clone());
+    let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
+    let sub_ids: soroban_sdk::Vec<u32> = storage
+        .get(&subs_key_old)
+        .unwrap_or(soroban_sdk::Vec::new(env));
+
+    let mut subscriptions_updated: u32 = 0;
+    for sub_id in sub_ids.iter() {
+        let sub_key = DataKey::Sub(sub_id);
+        if let Some(mut sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&sub_key)
+        {
+            if sub.merchant == old_merchant {
+                sub.merchant = new_merchant.clone();
+                env.storage().persistent().set(&sub_key, &sub);
+                subscriptions_updated += 1;
+            }
+        }
+    }
+    storage.set(&subs_key_new, &sub_ids);
+    storage.remove(&subs_key_old);
+
+    // ── 6. Emit audit event after all state writes are complete ───────────────
+    env.events().publish(
+        (soroban_sdk::Symbol::new(env, "merchant_addr_rotated"),),
+        crate::types::MerchantAddressRotatedEvent {
+            admin,
+            old_merchant,
+            new_merchant,
+            subscriptions_updated,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(())
+}
+
+/// Emit a balance snapshot event for a single (merchant, token) pair.
+///
+/// Admin-only. Reads the current on-chain balance and accrued/withdrawn/refunded
+/// totals for the pair and publishes a `MerchantBalanceSnapshotEvent`. Safe to
+/// call even when nothing has been earned yet (emits a zero-valued snapshot).
+pub fn do_emit_merchant_balance_snapshot(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    token: Address,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let balance = get_merchant_balance_by_token(env, &merchant, &token);
+    let earnings = get_merchant_token_earnings(env, &merchant, &token);
+    let accrued = earnings
+        .accruals
+        .interval
+        .checked_add(earnings.accruals.usage)
+        .unwrap_or(0)
+        .checked_add(earnings.accruals.one_off)
+        .unwrap_or(0);
+    let withdrawn = earnings.withdrawals;
+    let refunded = earnings.refunds;
+    let ledger_sequence = env.ledger().sequence();
+    let timestamp = env.ledger().timestamp();
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        crate::types::MerchantBalanceSnapshotEvent {
+            merchant,
+            token,
+            balance,
+            accrued,
+            withdrawn,
+            refunded,
+            ledger_sequence,
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Emit balance snapshots for every distinct (merchant, token) pair referenced
+/// by subscriptions in `[start_id, end_id)`. Admin-only.
+///
+/// Each (merchant, token) pair is snapshotted only once, even if referenced by
+/// multiple subscriptions in the range. Returns the list of events emitted.
+pub fn do_emit_all_balances_snapshot(
+    env: &Env,
+    admin: Address,
+    start_id: u32,
+    end_id: u32,
+) -> Result<Vec<crate::types::MerchantBalanceSnapshotEvent>, Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let mut seen: Vec<(Address, Address)> = Vec::new(env);
+    let mut out: Vec<crate::types::MerchantBalanceSnapshotEvent> = Vec::new(env);
+
+    for sub_id in start_id..end_id {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        {
+            let pair = (sub.merchant.clone(), sub.token.clone());
+            let already = seen.contains(&pair);
+            if !already {
+                seen.push_back(pair.clone());
+
+                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let accrued = earnings
+                    .accruals
+                    .interval
+                    .checked_add(earnings.accruals.usage)
+                    .unwrap_or(0)
+                    .checked_add(earnings.accruals.one_off)
+                    .unwrap_or(0);
+                let withdrawn = earnings.withdrawals;
+                let refunded = earnings.refunds;
+                let ledger_sequence = env.ledger().sequence();
+                let timestamp = env.ledger().timestamp();
+
+                let ev = crate::types::MerchantBalanceSnapshotEvent {
+                    merchant: pair.0.clone(),
+                    token: pair.1.clone(),
+                    balance,
+                    accrued,
+                    withdrawn,
+                    refunded,
+                    ledger_sequence,
+                    timestamp,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                };
+
+                env.events().publish(
+                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    ev.clone(),
+                );
+                out.push_back(ev);
+            }
+        }
+    }
+
+    Ok(out)
 }
