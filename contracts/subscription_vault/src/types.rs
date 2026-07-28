@@ -215,6 +215,7 @@ pub enum DataKey {
     Credential(u32),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
+    ChargeSalt(u32),
 }
 
 impl DataKey {
@@ -282,6 +283,7 @@ impl DataKey {
             DataKey::Credential(_) => 58,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
+            DataKey::ChargeSalt(_) => 61,
         }
     }
 
@@ -333,6 +335,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
     59,
+    61, // ChargeSalt(u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -759,6 +762,8 @@ pub enum Error {
     // Error 6018 is already defined above in Limits, but kept here for schema matching, see 1006.
     /// Subscriber has exceeded the rolling 24-hour subscription creation limit.
     SubscriberRateLimited = 6019,
+    /// Usage limits are required for subscriptions with usage enabled.
+    UsageLimitsRequired = 6020,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -767,6 +772,8 @@ pub enum Error {
     InvalidOperations = 7002,
     /// Charge operation must be allowed for merchant.
     MustAllowChargeOperation = 7003,
+    /// Merchant is not approved under whitelist mode.
+    MerchantNotApproved = 7004,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -1474,6 +1481,7 @@ pub struct SubscriptionChargedEvent {
     pub timestamp: u64,
     pub period_start: u64,
     pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
     pub schema_version: u32,
 }
 
@@ -1870,6 +1878,7 @@ pub enum ChargeExecutionResult {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageLimits {
+    pub merchant: Address,
     pub rate_limit_max_calls: Option<u32>,
     pub rate_window_secs: u64,
     pub burst_min_interval_secs: u64,
@@ -2014,6 +2023,33 @@ pub struct MerchantPausedEvent {
 #[derive(Clone, Debug)]
 pub struct MerchantUnpausedEvent {
     pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantWhitelistModeEvent {
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantApprovedEvent {
+    pub merchant: Address,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantRevokedEvent {
+    pub merchant: Address,
+    pub admin: Address,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2316,6 +2352,7 @@ mod known_keys_tests {
             (DataKey::TransferIntent(1), true),
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
+            (DataKey::ChargeSalt(1), true),
         ]
     }
 
@@ -2415,7 +2452,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 53);
+        assert_eq!(variants.len(), 62);
     }
 }
 
@@ -2537,6 +2574,7 @@ pub struct SubscriptionChargedEvent {
     pub timestamp: u64,
     pub period_start: u64,
     pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
     pub schema_version: u32,
 }
 
