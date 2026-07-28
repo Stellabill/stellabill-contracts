@@ -9290,6 +9290,15 @@ fn setup_usage_sub(
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
+    // Pre-register usage limits
+    client.configure_usage_limits(
+        &merchant,
+        &0, // NextId is 0 initially for the first subscription, but wait, this might be called multiple times! 
+        &None::<u32>,
+        &0,
+        &0,
+        &None::<i128>,
+    );
     let id = client.create_subscription(
         &subscriber,
         &merchant,

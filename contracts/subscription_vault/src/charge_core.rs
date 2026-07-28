@@ -226,6 +226,31 @@ pub fn charge_one(
         .checked_add(sub.interval_seconds)
         .unwrap_or(u64::MAX);
 
+    // Anti-frontrunning salt
+    let seq = env.ledger().sequence();
+    let salt = {
+        let mut salt_buf = [0u8; 20];
+        salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+        salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
+        salt_buf[12..20].copy_from_slice(&seq.to_be_bytes());
+        let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
+        let hash: soroban_sdk::BytesN<32> = env.crypto().sha256(&salt_input).into();
+        hash
+    };
+
+    let salt_key = DataKey::ChargeSalt(subscription_id);
+    if let Some(last_salt) = env.storage().instance().get::<_, soroban_sdk::BytesN<32>>(&salt_key) {
+        if last_salt == salt {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::Replay,
+                charge_amount,
+                now,
+            ));
+        }
+    }
+
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
         let hashed = crate::idempotency::hash_idem_key(
@@ -404,6 +429,7 @@ pub fn charge_one(
 
             // Record charged period and optional idempotency key
             storage.set(&DataKey::ChargedPeriod(subscription_id), &period_index);
+            storage.set(&salt_key, &salt);
             if let Some(k) = idempotency_key {
                 let hashed = crate::idempotency::hash_idem_key(
                     env,
@@ -426,6 +452,7 @@ pub fn charge_one(
                     timestamp: now,
                     period_start,
                     period_end,
+                    salt: salt.clone(),
                     schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
