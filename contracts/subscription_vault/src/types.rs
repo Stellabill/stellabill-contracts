@@ -3,7 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Vec};
+use soroban_sdk::{
+    contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
+};
 
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -19,6 +21,12 @@ pub const BATCH_MAX_SIZE: u32 = 100;
 /// Default cap on concurrent active subscriptions per subscriber (#578).
 /// Admins can override this per-subscriber via `DataKey::SubscriberActiveCapOverride`.
 pub const DEFAULT_SUBSCRIBER_ACTIVE_CAP: u32 = 10;
+
+/// Maximum number of compliance-category tags a single merchant may carry
+/// (#564). Bounds the size of `DataKey::MerchantTags(merchant)` so a
+/// misconfigured or adversarial admin call cannot grow a single merchant's
+/// tag list without bound.
+pub const MAX_MERCHANT_TAGS: u32 = 8;
 
 /// Threshold below which a persistent subscription record TTL is extended.
 /// If a subscription record is read or updated and its remaining TTL is less
@@ -225,20 +233,22 @@ pub enum DataKey {
     MerchantApproved(Address),
     /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
     ChargeSalt(u32),
-    /// Per-subscriber active-subscription count (incremental counter). Discriminant 62.
-    SubscriberActiveCount(Address),
-    /// Admin override of a subscriber's active-subscription cap. Discriminant 63.
-    SubscriberActiveCapOverride(Address),
-    /// Coupon code bound to a subscription. Discriminant 64.
-    SubCoupon(u32),
-    /// Merchant approval record for whitelist mode. Discriminant 65.
-    MerchantApproved(Address),
-    /// Global merchant whitelist mode flag. Discriminant 66.
-    MerchantWhitelistMode,
-    /// Per-merchant multi-sig configuration. Discriminant 67.
-    MerchantMultiSig(Address),
-    /// Grace-period buyout premium in basis points (instance, global config). Discriminant 68.
+    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 64.
     BuyoutPremiumBps,
+    /// Coupon code bound to a subscription (persistent). Discriminant 65.
+    SubCoupon(u32),
+    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 66.
+    MerchantMultiSig(Address),
+    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 67.
+    SubscriberActiveCount(Address),
+    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 68.
+    SubscriberActiveCapOverride(Address),
+    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
+    /// global). Discriminant 69. See `merchant::set_tag_allowlist`.
+    TagAllowlist,
+    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
+    /// (instance). Discriminant 70. See `merchant::set_merchant_tags`.
+    MerchantTags(Address),
 }
 
 impl DataKey {
@@ -307,14 +317,16 @@ impl DataKey {
             DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::ChargeSalt(_) => 61,
-            DataKey::SubscriberActiveCount(_) => 62,
-            DataKey::SubscriberActiveCapOverride(_) => 63,
-            DataKey::SubCoupon(_) => 64,
-            DataKey::MerchantApproved(_) => 65,
-            DataKey::MerchantWhitelistMode => 66,
-            DataKey::MerchantMultiSig(_) => 67,
-            DataKey::BuyoutPremiumBps => 68,
+            DataKey::MerchantWhitelistMode => 61,
+            DataKey::MerchantApproved(_) => 62,
+            DataKey::ChargeSalt(_) => 63,
+            DataKey::BuyoutPremiumBps => 64,
+            DataKey::SubCoupon(_) => 65,
+            DataKey::MerchantMultiSig(_) => 66,
+            DataKey::SubscriberActiveCount(_) => 67,
+            DataKey::SubscriberActiveCapOverride(_) => 68,
+            DataKey::TagAllowlist => 69,
+            DataKey::MerchantTags(_) => 70,
         }
     }
 
@@ -365,15 +377,16 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
-    59, // SubscriberCreateCap
-    61, // ChargeSalt(u32)
-    62, // SubscriberActiveCount(Address)
-    63, // SubscriberActiveCapOverride(Address)
-    64, // SubCoupon(u32)
-    65, // MerchantApproved(Address)
-    66, // MerchantWhitelistMode
-    67, // MerchantMultiSig(Address)
-    68, // BuyoutPremiumBps
+    59,
+    61, // MerchantWhitelistMode
+    62, // MerchantApproved(Address)
+    63, // ChargeSalt(u32)
+    64, // BuyoutPremiumBps
+    66, // MerchantMultiSig(Address)
+    67, // SubscriberActiveCount(Address)
+    68, // SubscriberActiveCapOverride(Address)
+    69, // TagAllowlist
+    70, // MerchantTags(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -878,6 +891,8 @@ pub enum Error {
     SubscriberRateLimited = 6019,
     /// Usage limits are required for subscriptions with usage enabled.
     UsageLimitsRequired = 6020,
+    /// Requested tag set exceeds `MAX_MERCHANT_TAGS` for a single merchant.
+    MerchantTagLimitExceeded = 6021,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -888,6 +903,10 @@ pub enum Error {
     MustAllowChargeOperation = 7003,
     /// Merchant is not approved under whitelist mode.
     MerchantNotApproved = 7004,
+    /// Tag is not present in the admin-controlled tag allowlist.
+    UnknownMerchantTag = 7005,
+    /// The same tag appears more than once in a single `set_merchant_tags` call.
+    DuplicateMerchantTag = 7006,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -2216,6 +2235,29 @@ pub struct MerchantRevokedEvent {
     pub schema_version: u32,
 }
 
+/// Emitted when the admin replaces the global merchant tag allowlist
+/// (`merchant::set_tag_allowlist`).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TagAllowlistUpdatedEvent {
+    pub admin: Address,
+    pub tags: Vec<Symbol>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when the admin sets (or clears, with an empty `tags` vector) a
+/// merchant's compliance-category tags (`merchant::set_merchant_tags`).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantTagsUpdatedEvent {
+    pub merchant: Address,
+    pub admin: Address,
+    pub tags: Vec<Symbol>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantConfigInitializedEvent {
@@ -2317,92 +2359,6 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
-/// Normalize a raw token amount to 6-decimal USDC representation.
-///
-/// Reads the stored decimal count for `token` and scales `amount` accordingly.
-/// Returns the original `amount` unchanged when no decimal record is found
-/// (safe fallback: avoids panicking on missing config).
-pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Option<i128> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .unwrap_or(6u32);
-    let scale = 10i128.checked_pow(decimals)?;
-    Some(amount / scale)
-}
-
-/// Event emitted when a subscription charge fails.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ChargeFailureEvent {
-    pub subscription_id: u32,
-    pub error_code: u32,
-    pub attempted_amount: i128,
-    pub ledger: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Subscription-scoped transfer intent.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-/// Event emitted when a subscription transfer is accepted.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a merchant vetoes a transfer intent.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// KYC storage key discriminator.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum KycKey {
-    Required,
-    Merchant(Address),
-}
 
 #[cfg(test)]
 mod known_keys_tests {
@@ -2478,14 +2434,13 @@ mod known_keys_tests {
             (DataKey::MerchantWhitelistMode, true),
             (DataKey::MerchantApproved(a.clone()), true),
             (DataKey::ChargeSalt(1), true),
-            // New variants added in #562 and related pre-existing gaps:
+            (DataKey::BuyoutPremiumBps, true),
+            (DataKey::SubCoupon(1), false),
+            (DataKey::MerchantMultiSig(a.clone()), true),
             (DataKey::SubscriberActiveCount(a.clone()), true),
             (DataKey::SubscriberActiveCapOverride(a.clone()), true),
-            (DataKey::SubCoupon(1), true),
-            (DataKey::MerchantApproved(a.clone()), true),
-            (DataKey::MerchantWhitelistMode, true),
-            (DataKey::MerchantMultiSig(a.clone()), true),
-            (DataKey::BuyoutPremiumBps, true),
+            (DataKey::TagAllowlist, true),
+            (DataKey::MerchantTags(a.clone()), true),
         ]
     }
 
@@ -2568,5 +2523,126 @@ mod known_keys_tests {
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
+        
+        let variants = all_variants(&env);
+        assert_eq!(variants.len(), 71);
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Common scale used to compare amounts across tokens with differing decimal
+/// precision in cross-token reconciliation reports (see `queries::get_token_reconciliation`).
+pub const RECONCILIATION_DECIMALS: u32 = 9;
+
+/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
+/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
+///
+/// # Errors
+/// - `Error::InvalidToken` if the token has no registered decimals.
+/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
+/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
+/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
+///   decimals and `raw` carries precision that cannot be represented exactly
+///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
+        raw.checked_mul(scale).ok_or(Error::Overflow)
+    } else {
+        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
+        if raw % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(raw / scale)
+    }
+}
+
+/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
+/// amount back to the token's own base-unit precision.
+///
+/// # Errors
+/// Same error conditions as [`normalize_amount`], mirrored for the reverse
+/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
+/// the common scale and `normalized` cannot be represented exactly).
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
+        if normalized % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(normalized / scale)
+    } else {
+        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
+        normalized.checked_mul(scale).ok_or(Error::Overflow)
     }
 }

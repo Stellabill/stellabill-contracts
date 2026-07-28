@@ -120,13 +120,13 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "RateLimitExceeded":              ("Retry after the rate window resets (see configure_usage_limits).", "UsageLimitsConfiguredEvent", False),
     "UsageCapExceeded":               ("Retry only after new billing period begins or cap is raised.", "UsageLimitsConfiguredEvent", False),
     "BurstLimitExceeded":             ("Retry after burst_min_interval_secs elapses.", "UsageLimitsConfiguredEvent", False),
-    "SubscriberRateLimited":          ("Subscriber exceeded 24h subscription creation limit; retry after window resets.", "RateLimitTrippedEvent", False),
-    "UsageLimitsRequired":            ("Configure usage limits via configure_usage_limits before creating usage-enabled subscriptions.", "UsageLimitsConfiguredEvent", False),
+    "MerchantTagLimitExceeded":       ("Reduce the tag list to at most MAX_MERCHANT_TAGS and retry.", "—", False),
     # Merchant config
     "InvalidFeeBips":                 ("Fix fee_bips to be in range [0, 10000].", "MerchantConfigUpdatedEvent", False),
     "InvalidOperations":              ("Fix allowed_operations bitmap to use only valid OP_* bits.", "MerchantConfigUpdatedEvent", False),
     "MustAllowChargeOperation":       ("Set OP_CHARGE bit in allowed_operations; merchants must accept charges.", "MerchantConfigUpdatedEvent", False),
-    "MerchantNotApproved":            ("Admin must approve merchant via approve_merchant before subscription creation, or disable whitelist_mode before retrying.", "—", False),
+    "UnknownMerchantTag":             ("Fix input; call get_tag_allowlist and use only listed tags.", "—", False),
+    "DuplicateMerchantTag":           ("Remove the repeated tag from the request and retry.", "—", False),
     # Token
     "InvalidTokenDecimals":           ("Fix token_decimals; must be in [1, 19].", "—", False),
     "InvalidToken":                   ("Provide an accepted token address from list_accepted_tokens.", "—", False),
