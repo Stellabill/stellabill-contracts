@@ -47,5 +47,5 @@ name = "ttl_extension"
 path = "benches/ttl_extension.rs"
 
 [[test]]
-name = "batch_charge_scaling"
-path = "benches/batch_charge_scaling.rs"
+name = "idem_lookup"
+path = "benches/idem_lookup.rs"
