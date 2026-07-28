@@ -42,9 +42,9 @@ mod validation;
 pub use safe_math::*;
 pub use types::{
     EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
-    DisputeResolvedEvent, DisputeStatus, Error, OracleLivenessEvent, ProtocolFeeConfiguredEvent,
-    Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
-    ProposalSubmittedEvent, ProposalVotedEvent,
+    DisputeResolvedEvent, DisputeStatus, Error, OracleKind, OracleLivenessEvent,
+    ProtocolFeeConfiguredEvent, Proposal, ProposalCancelledEvent, ProposalExecutedEvent,
+    ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -1969,6 +1969,9 @@ mod test_coupon;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
+
+#[cfg(test)]
+mod test_dispute_matrix;
 
 #[cfg(test)]
 mod test {
