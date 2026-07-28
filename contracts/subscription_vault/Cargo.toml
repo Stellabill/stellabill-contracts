@@ -45,3 +45,7 @@ path = "tests/channel_account_auth.rs"
 [[test]]
 name = "ttl_extension"
 path = "benches/ttl_extension.rs"
+
+[[test]]
+name = "batch_charge_scaling"
+path = "benches/batch_charge_scaling.rs"
