@@ -56,9 +56,9 @@ pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
     AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
-    DisputeStatus, Error, OracleLivenessEvent, Proposal, ProposalCancelledEvent,
+    DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, VoteLockedEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -565,7 +565,8 @@ pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
     DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
+    CapInfo, Coupon, OracleKind,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
