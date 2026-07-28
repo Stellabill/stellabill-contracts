@@ -45,6 +45,21 @@ use crate::types::{
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
+/// Resolve the effective fee rate in basis points for a charge to `merchant`.
+///
+/// Priority:
+/// 1. If a per-merchant override is set (`DataKey::MerchantFeeBps`), use it.
+/// 2. Otherwise fall back to the global `DataKey::FeeBps`.
+///
+/// A zero return value means no fee is collected.
+#[inline(always)]
+fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
+    if let Some(override_bps) = crate::merchant::get_merchant_fee_override_bps(env, merchant) {
+        return override_bps;
+    }
+    crate::admin::get_protocol_fee_bps(env)
+}
+
 /// Emits a [`ChargeFailureEvent`] and returns `err` unchanged.
 ///
 /// Call as `return Err(charge_fail(env, id, err, attempted, now))` on every
@@ -340,7 +355,7 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
@@ -868,7 +883,7 @@ pub fn charge_usage_one(
     match crate::safe_math::safe_sub_balance(sub.prepaid_balance, usage_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
