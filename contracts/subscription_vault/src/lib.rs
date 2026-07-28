@@ -10,6 +10,17 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 //!
+//! # Feature-grouped API Navigation
+//! Three documentation and re-export modules group the `#[contractimpl]`
+//! entrypoints by audience without changing the compiled ABI:
+//! - [`subscription_api`] — subscriber lifecycle, plans, coupons, charging,
+//!   billing statements, caps, metadata, and subscriber-initiated disputes
+//! - [`merchant_api`] — withdrawals, configuration, payout schedules,
+//!   reconciliation, and dispute resolution
+//! - [`admin_api`] — initialisation, operator management, emergency stop,
+//!   token allowlist, protocol fees, oracle, migration/export, governance,
+//!   and blocklist
+//!
 //! # Storage Lifecycle
 //! The contract uses a mix of Instance and Persistent storage tiers. Instance storage is
 //! used for global configuration and merchant-level metadata. Persistent storage is used
@@ -41,12 +52,13 @@ mod reentrancy;
 mod oracle_adapter;
 mod validation;
 
+pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
     AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
-    DisputeStatus, Error, OracleLivenessEvent, Proposal, ProposalCancelledEvent,
+    DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -56,6 +68,24 @@ pub mod state_machine;
 
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;
+
+// ── Feature-grouped API navigation modules ────────────────────────────────────
+// These modules do NOT define new ABI entrypoints. They exist solely to
+// re-export the inner delegate functions called by `#[contractimpl]` so that
+// IDE navigation and `cargo doc` can surface the grouped API in one place.
+
+/// Subscriber-facing lifecycle, plans, coupons, charging, statements, caps,
+/// metadata, and subscriber-initiated disputes.
+pub mod subscription_api;
+
+/// Merchant-facing withdrawals, configuration, payout schedules, reconciliation,
+/// and dispute resolution.
+pub mod merchant_api;
+
+/// Admin and protocol-governance: initialisation, operators, emergency stop,
+/// token allowlist, protocol fees, oracle, migration/export, governance,
+/// and blocklist.
+pub mod admin_api;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
@@ -346,6 +376,8 @@ pub mod oracle {
             return Err(Error::InvalidInput);
         }
 
+        crate::admin::enforce_config_cooldown(env, "Oracle")?;
+
         let cfg = OracleConfig {
             enabled,
             oracle: oracle.clone(),
@@ -439,6 +471,7 @@ pub mod operator {
         if operator == env.current_contract_address() {
             return Err(Error::InvalidInput);
         }
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::write_config(env, &DataKey::Operator, &operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_set"),),
@@ -454,6 +487,7 @@ pub mod operator {
 
     pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
         crate::admin::require_admin_auth(env, &admin)?;
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::remove_config(env, &DataKey::Operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_removed"),),
@@ -529,6 +563,7 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
+    DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
     CapInfo, ChargeExecutionResult, ContractSnapshot, Coupon, DataKey, EmergencyStopDisabledEvent,
@@ -889,6 +924,7 @@ impl SubscriptionVault {
         if get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
@@ -907,6 +943,7 @@ impl SubscriptionVault {
         if !get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
@@ -2354,6 +2391,7 @@ impl SubscriptionVault {
     /// Set billing retention. Admin only.
     pub fn set_billing_retention(env: Env, admin: Address, keep_recent: u32) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
+        admin::enforce_config_cooldown(&env, "BillingRetention")?;
         statements::set_retention_config(&env, keep_recent);
         Ok(())
     }
@@ -2841,6 +2879,8 @@ mod test_usage_limits_required;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
+mod test_charge_event_exclusivity;
+#[cfg(test)]
 mod test_metadata_signed;
 
 #[cfg(test)]
@@ -2889,6 +2929,16 @@ mod test {
 #[cfg(test)]
 mod test_subscription_transfer;
 
+/// ABI-hash regression guard.
+///
+/// The hash is computed from the sorted, newline-joined list of all
+/// `pub fn` names exposed by `#[contractimpl]`. Any accidental rename,
+/// addition, or removal of a contract entrypoint will change the hash and
+/// cause this test to fail, flagging the ABI breakage before it reaches
+/// production.
+///
+/// **To update intentionally:** change only the `EXPECTED` constant below
+/// and document the ABI change in the PR description.
 #[cfg(test)]
 mod test_merchant_whitelist;
 

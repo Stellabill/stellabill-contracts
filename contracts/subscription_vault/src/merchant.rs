@@ -742,6 +742,7 @@ fn flush_merchant_token(
         .checked_add(balance)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, merchant, token, &earnings);
+    crate::accounting::sub_total_accounted(env, token, balance)?;
 
     env.events().publish(
         (

@@ -213,8 +213,17 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    /// Timestamp of the most recent admin-config mutation for a given key label,
+    /// hashed to `BytesN<32>` for collision-free per-key cooldown tracking.
+    /// Discriminant 59.
+    AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
+    /// Global whitelist mode toggle. When true, merchants must be approved before registering. Discriminant 61.
+    MerchantWhitelistMode,
+    /// Per-merchant approval status under whitelist mode. Discriminant 62.
+    MerchantApproved(Address),
+    /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
     ChargeSalt(u32),
     /// Per-subscriber active-subscription count (incremental counter). Discriminant 62.
     SubscriberActiveCount(Address),
@@ -295,6 +304,7 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
             DataKey::ChargeSalt(_) => 61,
@@ -622,6 +632,21 @@ pub struct DisputeRespondedEvent {
     pub schema_version: u32,
 }
 
+/// Cumulative escrow ledger for a dispute.
+///
+/// Tracks the original escrowed amount and the cumulative amount disbursed
+/// across one or more resolution steps. Every resolution is checked against
+/// this ledger so that `total_disbursed <= original_amount` at all times,
+/// preventing overpay even if partial-resolution logic is added later.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeEscrowLedger {
+    /// The total amount escrowed when the dispute was opened.
+    pub original_amount: i128,
+    /// Cumulative amount already disbursed via resolutions.
+    pub total_disbursed: i128,
+}
+
 /// Event emitted when a dispute is resolved.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -688,6 +713,19 @@ pub struct ProposalVotedEvent {
     pub guardian: Address,
     pub voted_yes: bool,
     pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a vote is rejected because the proposal's ETA has passed
+/// and votes are locked. The ETA (timelock) marks the earliest moment a proposal
+/// may be executed; after it, no votes can be added or changed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VoteLockedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub eta: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -878,6 +916,8 @@ pub enum Error {
     DisputeAlreadyOpen = 10005,
     /// The dispute has already been responded to by the admin.
     DisputeAlreadyResponded = 10006,
+    /// Dispute resolution would overpay — total disbursed cannot exceed escrowed amount.
+    DisputeOverpay = 10007,
 
     // --- Subscription Transfer (11000-11099) ---
     /// The transfer intent was not found or has expired.
@@ -1488,6 +1528,19 @@ pub struct OperatorRemovedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a protocol-wide admin config key is mutated (after the
+/// cooldown check passes).  `key_label` is the human-readable label (e.g.
+/// `"MinTopup"`) and `prev_ts` is the timestamp of the *previous* mutation
+/// for that same key (0 if this is the first mutation).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminConfigChangedEvent {
+    pub key_label: soroban_sdk::String,
+    pub prev_ts: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryReason {
@@ -1563,6 +1616,21 @@ pub struct SubscriptionChargedEvent {
     pub period_start: u64,
     pub period_end: u64,
     pub salt: soroban_sdk::BytesN<32>,
+    pub schema_version: u32,
+}
+
+/// Generic, catch-all failure event emitted by [`crate::charge_core::charge_fail`]
+/// on every charge error path (topic `"charge_failed_v2"`), regardless of the
+/// specific [`Error`] variant. Distinct from [`SubscriptionChargeFailedEvent`],
+/// which carries richer balance-shortfall detail for the insufficient-balance
+/// case specifically.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ChargeFailureEvent {
+    pub subscription_id: u32,
+    pub error_code: u32,
+    pub attempted_amount: i128,
+    pub ledger: u64,
     pub schema_version: u32,
 }
 
@@ -2347,6 +2415,8 @@ mod known_keys_tests {
             (DataKey::EmergencyStop, true),
             (DataKey::MerchantPaused(a.clone()), true),
             (DataKey::BillingStatement(1, 2), false),
+            (DataKey::BillingStatementsBySubscription(1), false),
+            (DataKey::BillingStatementsByMerchant(a.clone()), false),
             (DataKey::TotalAccounted(a.clone()), true),
             (DataKey::Recovery(s.clone()), false),
             (DataKey::MerchantConfig(a.clone()), true),
@@ -2376,6 +2446,8 @@ mod known_keys_tests {
             (DataKey::MetadataKeys(1), false),
             (DataKey::Operator, true),
             (DataKey::BillingRetentionConfig, true),
+            (DataKey::BillingStatementSequence(1), false),
+            (DataKey::BillingStatementAggregate(1), false),
             (DataKey::MerchantMaxSubs(a.clone()), true),
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
@@ -2386,8 +2458,14 @@ mod known_keys_tests {
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
             (DataKey::TransferIntent(1), true),
+            (DataKey::Kyc(KycKey::Required), false),
+            (DataKey::Coupon(soroban_sdk::Symbol::new(env, "c")), false),
+            (DataKey::CouponRedemptions(soroban_sdk::Symbol::new(env, "c")), false),
+            (DataKey::Credential(1), false),
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
+            (DataKey::MerchantWhitelistMode, true),
+            (DataKey::MerchantApproved(a.clone()), true),
             (DataKey::ChargeSalt(1), true),
             // New variants added in #562 and related pre-existing gaps:
             (DataKey::SubscriberActiveCount(a.clone()), true),
@@ -2457,8 +2535,9 @@ mod known_keys_tests {
     #[test]
     fn allowlist_matches_instance_classification() {
         let env = Env::default();
-        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
-            .into_iter()
+        let variants = all_variants(&env);
+        let expected_instance: std::vec::Vec<u32> = variants
+            .iter()
             .filter(|(_, is_instance)| *is_instance)
             .map(|(key, _)| key.canonical_discriminant())
             .collect();

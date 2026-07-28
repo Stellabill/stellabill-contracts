@@ -73,6 +73,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "SubscriberBlocklisted":          ("Escalate to admin/support flow; stop retrying.", "BlocklistAddedEvent", False),
     "SelfRotation":                   ("Fix request payload — new_admin must differ from current_admin.", "—", False),
     "NonceAlreadyUsed":               ("Re-fetch nonce via get_admin_nonce / get_operator_nonce, then retry.", "NonceConsumedEvent", False),
+    "BatchTooLarge":                  ("Reduce batch size and retry; check BATCH_MAX_SIZE.", "—", False),
     # Not found
     "NotFound":                       ("Verify identifiers before retrying.", "—", False),
     "NotInitialized":                 ("Admin must call init before any other operation.", "—", False),
@@ -84,6 +85,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "MetadataKeyTooLong":             ("Trim key to ≤ MAX_METADATA_KEY_LENGTH bytes and retry.", "—", False),
     "MetadataValueTooLong":           ("Trim value to ≤ MAX_METADATA_VALUE_LENGTH bytes and retry.", "—", False),
     "OraclePriceInvalid":             ("Treat as terminal for this request; investigate oracle data feed.", "OracleConfigUpdatedEvent", False),
+    "InvalidExpiration":              ("Fix expiration timestamp; must be strictly in the future.", "—", False),
     # State transition
     "InvalidStatusTransition":        ("Refresh subscription state before presenting the next action.", "—", False),
     "NotActive":                      ("Refresh state; do not blindly retry.", "—", False),
@@ -95,6 +97,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "AlreadyInitialized":             ("Do not retry; contract is already set up.", "—", False),
     "MerchantPaused":                 ("Retry only after merchant pause is removed (unpause_merchant).", "MerchantUnpausedEvent", False),
     "Reentrancy":                     ("Treat as a security failure; investigate calling path immediately.", "—", False),
+    "NotInGracePeriod":               ("Only subscriptions in GracePeriod can use this operation; resume or wait for grace.", "SubscriptionResumedEvent", False),
     # Accounting
     "InsufficientBalance":            ("Retry only after subscriber deposits funds via deposit_funds.", "FundsDepositedEvent", False),
     "InsufficientPrepaidBalance":     ("Top up subscription via deposit_funds, then retry.", "FundsDepositedEvent", False),
@@ -115,10 +118,13 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "RateLimitExceeded":              ("Retry after the rate window resets (see configure_usage_limits).", "UsageLimitsConfiguredEvent", False),
     "UsageCapExceeded":               ("Retry only after new billing period begins or cap is raised.", "UsageLimitsConfiguredEvent", False),
     "BurstLimitExceeded":             ("Retry after burst_min_interval_secs elapses.", "UsageLimitsConfiguredEvent", False),
+    "SubscriberRateLimited":          ("Subscriber exceeded 24h subscription creation limit; retry after window resets.", "RateLimitTrippedEvent", False),
+    "UsageLimitsRequired":            ("Configure usage limits via configure_usage_limits before creating usage-enabled subscriptions.", "UsageLimitsConfiguredEvent", False),
     # Merchant config
     "InvalidFeeBips":                 ("Fix fee_bips to be in range [0, 10000].", "MerchantConfigUpdatedEvent", False),
     "InvalidOperations":              ("Fix allowed_operations bitmap to use only valid OP_* bits.", "MerchantConfigUpdatedEvent", False),
     "MustAllowChargeOperation":       ("Set OP_CHARGE bit in allowed_operations; merchants must accept charges.", "MerchantConfigUpdatedEvent", False),
+    "MerchantNotApproved":            ("Merchant is not whitelisted; admin must approve via merchant config.", "MerchantConfigInitializedEvent", False),
     # Token
     "InvalidTokenDecimals":           ("Fix token_decimals; must be in [1, 19].", "—", False),
     "InvalidToken":                   ("Provide an accepted token address from list_accepted_tokens.", "—", False),
@@ -133,6 +139,14 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "DisputeWindowElapsed":           ("Check auto-resolution rules; dispute can now be resolved.", "—", False),
     "DisputeAlreadyOpen":             ("A dispute is already open for this subscription; wait for resolution.", "DisputeOpenedEvent", False),
     "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
+    # Coupon
+    "CouponNotFound":                 ("Verify the coupon code before retrying.", "—", False),
+    "CouponExpired":                  ("Coupon has expired; request a new coupon from the merchant.", "CouponCreatedEvent", False),
+    "CouponRedemptionLimitReached":   ("Coupon has reached its global redemption limit; merchant may create a new coupon.", "CouponCreatedEvent", False),
+    "CouponRevoked":                  ("Coupon was revoked by the merchant; choose a different coupon.", "CouponRevokedEvent", False),
+    "CouponAlreadyExists":            ("Choose a different coupon code and retry.", "CouponCreatedEvent", False),
+    "CouponAlreadyApplied":           ("Subscription already has a coupon bound; only one coupon per subscription.", "CouponAppliedEvent", False),
+    "CouponTokenMismatch":            ("Use a coupon whose token matches the subscription's settlement token.", "—", False),
     # Subscription Transfer
     "TransferIntentNotFound":         ("Verify transfer initiation or expiry before retrying.", "—", False),
     "TransferIntentExpired":          ("Transfer intent has expired; initiate a new transfer.", "—", False),
