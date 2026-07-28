@@ -581,6 +581,8 @@ pub fn do_create_subscription_with_token(
         expires_at,
         grace_start_timestamp: None,
         cancel_at: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -1209,6 +1211,91 @@ pub fn do_unschedule_cancel(
             timestamp: env.ledger().timestamp(),
         },
     );
+    Ok(())
+}
+
+/// Toggle auto-renewal for a subscription.
+///
+/// When `enabled = false` the billing engine will **skip** interval charges
+/// once the interval has elapsed — halting billing at the next natural boundary.
+/// During the *renewal window* (one full interval after the flag was disabled)
+/// the subscriber or merchant may call `set_auto_renew(true)` to re-enable
+/// billing without re-creating the subscription, preserving all history and
+/// metadata. After the window closes the subscription must be cancelled and
+/// re-created to resume billing.
+///
+/// # Authorization
+/// Only the subscription's `subscriber` or `merchant` may toggle.
+/// Any other caller receives [`Error::Forbidden`].
+///
+/// # Guard
+/// Cancelled and expired subscriptions are rejected.
+///
+/// # Events
+/// Emits [`AutoRenewToggledEvent`] on every call (including re-enabling within
+/// the renewal window).
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    let now = env.ledger().timestamp();
+
+    // Reject on terminal states.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    if sub.is_expired(now) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    // Only the subscriber or merchant may change the flag.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // When re-enabling after a disable, enforce the renewal window.
+    if enabled {
+        if !sub.auto_renew {
+            // If the renewal window has closed, the subscription cannot be
+            // silently re-activated — it must be cancelled and re-created.
+            if !sub.is_in_renewal_window(now) {
+                return Err(Error::RenewalWindowClosed);
+            }
+            // Clear the disabled timestamp on successful re-enable.
+            sub.auto_renew_disabled_at = None;
+        }
+        // If already enabled, this is a no-op (idempotent).
+    } else {
+        // Disabling for the first time (or after a previous re-enable).
+        if sub.auto_renew {
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        // If already disabled, the disable timestamp is preserved — the
+        // window continues to count from the *first* disable.
+    }
+
+    sub.auto_renew = enabled;
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        crate::types::AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            enabled,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
     Ok(())
 }
 
@@ -2306,6 +2393,8 @@ pub fn do_create_subscription_from_plan(
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     write_subscription(env, id, &sub);

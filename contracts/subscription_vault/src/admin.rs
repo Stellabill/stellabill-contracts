@@ -396,6 +396,11 @@ pub(crate) fn execute_batch_charge(
                 success: true,
                 error_code: 0,
             },
+            // auto_renew=false and interval elapsed: silently skip without error.
+            Ok(ChargeExecutionResult::Skipped) => BatchChargeResult {
+                success: true,
+                error_code: 0,
+            },
             Err(e) => BatchChargeResult {
                 success: false,
                 error_code: e.to_code(),

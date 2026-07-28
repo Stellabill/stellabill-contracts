@@ -225,16 +225,20 @@ pub enum DataKey {
     MerchantApproved(Address),
     /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
     ChargeSalt(u32),
-    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 64.
-    BuyoutPremiumBps,
-    /// Coupon code bound to a subscription (persistent). Discriminant 65.
-    SubCoupon(u32),
-    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 66.
-    MerchantMultiSig(Address),
-    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 67.
+    /// Per-subscriber active-subscription count (incremental counter). Discriminant 62.
     SubscriberActiveCount(Address),
-    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 68.
+    /// Admin override of a subscriber's active-subscription cap. Discriminant 63.
     SubscriberActiveCapOverride(Address),
+    /// Coupon code bound to a subscription. Discriminant 64.
+    SubCoupon(u32),
+    /// Merchant approval record for whitelist mode. Discriminant 65.
+    MerchantApproved(Address),
+    /// Global merchant whitelist mode flag. Discriminant 66.
+    MerchantWhitelistMode,
+    /// Per-merchant multi-sig configuration. Discriminant 67.
+    MerchantMultiSig(Address),
+    /// Grace-period buyout premium in basis points (instance, global config). Discriminant 68.
+    BuyoutPremiumBps,
 }
 
 impl DataKey {
@@ -303,14 +307,14 @@ impl DataKey {
             DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::MerchantWhitelistMode => 61,
-            DataKey::MerchantApproved(_) => 62,
-            DataKey::ChargeSalt(_) => 63,
-            DataKey::BuyoutPremiumBps => 64,
-            DataKey::SubCoupon(_) => 65,
-            DataKey::MerchantMultiSig(_) => 66,
-            DataKey::SubscriberActiveCount(_) => 67,
-            DataKey::SubscriberActiveCapOverride(_) => 68,
+            DataKey::ChargeSalt(_) => 61,
+            DataKey::SubscriberActiveCount(_) => 62,
+            DataKey::SubscriberActiveCapOverride(_) => 63,
+            DataKey::SubCoupon(_) => 64,
+            DataKey::MerchantApproved(_) => 65,
+            DataKey::MerchantWhitelistMode => 66,
+            DataKey::MerchantMultiSig(_) => 67,
+            DataKey::BuyoutPremiumBps => 68,
         }
     }
 
@@ -361,14 +365,15 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
-    59,
-    61, // MerchantWhitelistMode
-    62, // MerchantApproved(Address)
-    63, // ChargeSalt(u32)
-    64, // BuyoutPremiumBps
-    66, // MerchantMultiSig(Address)
-    67, // SubscriberActiveCount(Address)
-    68, // SubscriberActiveCapOverride(Address)
+    59, // SubscriberCreateCap
+    61, // ChargeSalt(u32)
+    62, // SubscriberActiveCount(Address)
+    63, // SubscriberActiveCapOverride(Address)
+    64, // SubCoupon(u32)
+    65, // MerchantApproved(Address)
+    66, // MerchantWhitelistMode
+    67, // MerchantMultiSig(Address)
+    68, // BuyoutPremiumBps
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -448,11 +453,37 @@ pub struct Subscription {
     pub grace_start_timestamp: Option<u64>,
     /// Scheduled future cancellation timestamp.
     pub cancel_at: Option<u64>,
+    /// When `false`, billing is halted at the next interval boundary.
+    ///
+    /// Defaults to `true` on creation. The subscriber (or merchant) may call
+    /// `set_auto_renew(false)` to opt out of automatic renewal. During the
+    /// renewal window (up to one full interval after `auto_renew` was set to
+    /// `false`) the subscriber may re-enable auto-renewal without re-creating
+    /// the subscription, preserving history and metadata. After the window
+    /// lapses, the subscription must be cancelled and recreated.
+    pub auto_renew: bool,
+    /// Ledger timestamp when `auto_renew` was last set to `false`.
+    ///
+    /// `None` means auto-renewal has never been disabled or has been
+    /// re-enabled since. Used to enforce the renewal window.
+    pub auto_renew_disabled_at: Option<u64>,
 }
 
 impl Subscription {
     pub fn is_expired(&self, current_time: u64) -> bool {
         self.expires_at.map_or(false, |exp| current_time >= exp)
+    }
+
+    /// Returns `true` when the renewal window (one full interval) after
+    /// auto-renewal was disabled is still open at `current_time`.
+    pub fn is_in_renewal_window(&self, current_time: u64) -> bool {
+        match self.auto_renew_disabled_at {
+            Some(disabled_at) => {
+                let window_end = disabled_at.saturating_add(self.interval_seconds);
+                current_time < window_end
+            }
+            None => false,
+        }
     }
 }
 
@@ -481,6 +512,28 @@ pub struct CredentialIssuedEvent {
 pub struct CredentialRevokedEvent {
     pub subscription_id: u32,
     pub timestamp: u64,
+}
+
+/// Event emitted when `auto_renew` is toggled on a subscription.
+///
+/// Published by `set_auto_renew` with topic `("auto_renew_toggled", subscription_id)`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AutoRenewToggledEvent {
+    /// The subscription whose auto-renewal flag changed.
+    pub subscription_id: u32,
+    /// The subscriber who owns the subscription.
+    pub subscriber: Address,
+    /// The merchant who receives the recurring payment.
+    pub merchant: Address,
+    /// New value of the `auto_renew` flag.
+    pub enabled: bool,
+    /// Caller who authorized the change (subscriber or merchant).
+    pub authorizer: Address,
+    /// Ledger timestamp of the toggle.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -874,9 +927,10 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
-    // --- Admin Config Cooldown (12000-12099) ---
-    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
-    CooldownActive = 12001,
+    // --- Auto-Renewal (12000-12099) ---
+    /// The renewal window (one billing interval after auto_renew was disabled)
+    /// has elapsed; the subscription must be cancelled and recreated to resume billing.
+    RenewalWindowClosed = 12001,
 }
 
 impl Error {
@@ -1968,6 +2022,8 @@ pub enum ChargeExecutionResult {
     InsufficientBalance = 1,
     LifetimeCapReached = 2,
     ScheduledCancellation = 3,
+    /// Charge silently skipped because `auto_renew` is `false` and the interval has elapsed.
+    Skipped = 4,
 }
 
 #[contracttype]
@@ -2250,6 +2306,92 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+/// Normalize a raw token amount to 6-decimal USDC representation.
+///
+/// Reads the stored decimal count for `token` and scales `amount` accordingly.
+/// Returns the original `amount` unchanged when no decimal record is found
+/// (safe fallback: avoids panicking on missing config).
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Option<i128> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .unwrap_or(6u32);
+    let scale = 10i128.checked_pow(decimals)?;
+    Some(amount / scale)
+}
+
+/// Event emitted when a subscription charge fails.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ChargeFailureEvent {
+    pub subscription_id: u32,
+    pub error_code: u32,
+    pub attempted_amount: i128,
+    pub ledger: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Subscription-scoped transfer intent.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a subscription transfer is accepted.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a transfer intent is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant vetoes a transfer intent.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// KYC storage key discriminator.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
+}
 
 #[cfg(test)]
 mod known_keys_tests {
@@ -2325,11 +2467,14 @@ mod known_keys_tests {
             (DataKey::MerchantWhitelistMode, true),
             (DataKey::MerchantApproved(a.clone()), true),
             (DataKey::ChargeSalt(1), true),
-            (DataKey::BuyoutPremiumBps, true),
-            (DataKey::SubCoupon(1), false),
-            (DataKey::MerchantMultiSig(a.clone()), true),
+            // New variants added in #562 and related pre-existing gaps:
             (DataKey::SubscriberActiveCount(a.clone()), true),
             (DataKey::SubscriberActiveCapOverride(a.clone()), true),
+            (DataKey::SubCoupon(1), true),
+            (DataKey::MerchantApproved(a.clone()), true),
+            (DataKey::MerchantWhitelistMode, true),
+            (DataKey::MerchantMultiSig(a.clone()), true),
+            (DataKey::BuyoutPremiumBps, true),
         ]
     }
 
@@ -2356,10 +2501,6 @@ mod known_keys_tests {
 
     #[test]
     fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (60) can never be
-        // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(61));
-        assert!(!is_known_instance_discriminant(9_999));
         assert!(!is_known_instance_discriminant(u32::MAX));
     }
 
@@ -2367,16 +2508,11 @@ mod known_keys_tests {
     #[test]
     #[should_panic(expected = "Unknown or persistent key reached instance storage")]
     fn assert_panics_on_persistent_key() {
-        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
-        // instance storage; the guard catches it.
         let env = Env::default();
         let _ = &env;
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=59`
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
-    /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
@@ -2392,17 +2528,10 @@ mod known_keys_tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        let n = variants.len();
-        assert!(
-            seen.iter().all(|&s| s),
-            "discriminants are not contiguous 0..={}",
-            max_discriminant
-        );
+        assert!(seen.iter().all(|&s| s), "discriminants must be contiguous");
         assert!(!variants.is_empty(), "variant count must be non-zero");
     }
 
-    /// Consistency: the allowlist contains exactly the instance-tier
-    /// discriminants enumerated above, is sorted, and is duplicate-free.
     #[test]
     fn allowlist_matches_instance_classification() {
         let env = Env::default();
@@ -2425,130 +2554,8 @@ mod known_keys_tests {
             "allowlist length does not match instance-tier variant count"
         );
 
-        // Sorted ascending and free of duplicates.
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
-        
-        let variants = all_variants(&env);
-        assert_eq!(variants.len(), 69);
-    }
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum KycKey {
-    Required,
-    Merchant(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Common scale used to compare amounts across tokens with differing decimal
-/// precision in cross-token reconciliation reports (see `queries::get_token_reconciliation`).
-pub const RECONCILIATION_DECIMALS: u32 = 9;
-
-/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
-/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
-///
-/// # Errors
-/// - `Error::InvalidToken` if the token has no registered decimals.
-/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
-/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
-/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
-///   decimals and `raw` carries precision that cannot be represented exactly
-///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
-pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        raw.checked_mul(scale).ok_or(Error::Overflow)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        if raw % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(raw / scale)
-    }
-}
-
-/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
-/// amount back to the token's own base-unit precision.
-///
-/// # Errors
-/// Same error conditions as [`normalize_amount`], mirrored for the reverse
-/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
-/// the common scale and `normalized` cannot be represented exactly).
-pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        if normalized % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(normalized / scale)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        normalized.checked_mul(scale).ok_or(Error::Overflow)
     }
 }

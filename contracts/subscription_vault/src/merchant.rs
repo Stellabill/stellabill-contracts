@@ -22,7 +22,8 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent,
+    MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
@@ -467,7 +468,7 @@ pub fn set_merchant_multisig(
         return Err(Error::InvalidInput);
     }
 
-    if threshold > signers.len() {
+    if threshold as usize > signers.len() as usize {
         return Err(Error::InvalidInput);
     }
 
