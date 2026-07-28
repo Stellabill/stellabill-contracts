@@ -133,6 +133,7 @@ fn setup_env<'a>() -> (
 
     for token in &tokens {
         vault.add_accepted_token(&admin, token, &7u32);
+        env.ledger().with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
     }
 
     // Create subscriptions using some tokens to exercise subscription count path
@@ -169,6 +170,7 @@ proptest! {
         let (env, vault, admin, contract_id, tokens) = setup_env();
 
         for op in ops {
+            env.ledger().with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
             match op {
                 Op::AddToken(idx) => {
                     let token = &tokens[idx];
