@@ -621,6 +621,19 @@ pub struct ProposalVotedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a vote is rejected because the proposal's ETA has passed
+/// and votes are locked. The ETA (timelock) marks the earliest moment a proposal
+/// may be executed; after it, no votes can be added or changed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VoteLockedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub eta: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 /// Event emitted when a proposal is executed after reaching quorum.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2228,6 +2241,19 @@ pub struct ProposalVotedEvent {
     pub guardian: Address,
     pub voted_yes: bool,
     pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a vote is rejected because the proposal's ETA has passed
+/// and votes are locked. The ETA (timelock) marks the earliest moment a proposal
+/// may be executed; after it, no votes can be added or changed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VoteLockedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub eta: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }

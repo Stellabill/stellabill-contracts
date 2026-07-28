@@ -44,10 +44,10 @@ mod validation;
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
-    AdminConfigChangedEvent, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent,
-    DisputeRespondedEvent, DisputeStatus, Error, OracleLivenessEvent, Proposal,
-    ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent,
-    ProposalVotedEvent, ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
+    DisputeStatus, Error, OracleLivenessEvent, Proposal, ProposalCancelledEvent,
+    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+    ProtocolFeeConfiguredEvent, VoteLockedEvent, EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
