@@ -10,6 +10,17 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 //!
+//! # Feature-grouped API Navigation
+//! Three documentation and re-export modules group the `#[contractimpl]`
+//! entrypoints by audience without changing the compiled ABI:
+//! - [`subscription_api`] — subscriber lifecycle, plans, coupons, charging,
+//!   billing statements, caps, metadata, and subscriber-initiated disputes
+//! - [`merchant_api`] — withdrawals, configuration, payout schedules,
+//!   reconciliation, and dispute resolution
+//! - [`admin_api`] — initialisation, operator management, emergency stop,
+//!   token allowlist, protocol fees, oracle, migration/export, governance,
+//!   and blocklist
+//!
 //! # Storage Lifecycle
 //! The contract uses a mix of Instance and Persistent storage tiers. Instance storage is
 //! used for global configuration and merchant-level metadata. Persistent storage is used
@@ -57,6 +68,24 @@ pub mod state_machine;
 
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;
+
+// ── Feature-grouped API navigation modules ────────────────────────────────────
+// These modules do NOT define new ABI entrypoints. They exist solely to
+// re-export the inner delegate functions called by `#[contractimpl]` so that
+// IDE navigation and `cargo doc` can surface the grouped API in one place.
+
+/// Subscriber-facing lifecycle, plans, coupons, charging, statements, caps,
+/// metadata, and subscriber-initiated disputes.
+pub mod subscription_api;
+
+/// Merchant-facing withdrawals, configuration, payout schedules, reconciliation,
+/// and dispute resolution.
+pub mod merchant_api;
+
+/// Admin and protocol-governance: initialisation, operators, emergency stop,
+/// token allowlist, protocol fees, oracle, migration/export, governance,
+/// and blocklist.
+pub mod admin_api;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
