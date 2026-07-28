@@ -19,6 +19,13 @@ use soroban_sdk::{Address, Env, Vec};
 /// Oracle prices are represented with 7 decimal places (e.g. Stellar asset precision).
 pub const PRICE_SCALE: u128 = 10_000_000; // 10^7
 
+/// Conservative minimum TWAP window for manipulation-resistant pricing.
+///
+/// A one-block flash-loan attacker can only be neutralized if the window is long
+/// enough to include multiple observations. A 60-second window is the minimum we
+/// enforce here; for mainnet deployments we recommend a 5-minute default.
+pub const MIN_TWAP_WINDOW_SECS: u64 = 60;
+
 // ── OracleAdapter trait ───────────────────────────────────────────────────────
 
 /// Generic pricing source abstraction.
@@ -99,6 +106,8 @@ impl OracleAdapter for TwapAdapter {
         _base: &Address,
         _quote: &Address,
     ) -> Result<u128, Error> {
+        validate_twap_config(config)?;
+
         let oracle_addr = config.oracle.clone().ok_or(Error::OracleNotConfigured)?;
         let now = env.ledger().timestamp();
         let window_start = now.saturating_sub(config.window_secs);
@@ -135,6 +144,13 @@ impl OracleAdapter for TwapAdapter {
 
         Ok(median(&mut prices))
     }
+}
+
+fn validate_twap_config(config: &OracleConfig) -> Result<(), Error> {
+    if config.window_secs < MIN_TWAP_WINDOW_SECS {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
 }
 
 /// Compute the median of a non-empty slice (sorts in-place, allocator-free).

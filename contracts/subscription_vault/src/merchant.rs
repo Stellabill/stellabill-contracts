@@ -23,9 +23,9 @@
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
-    PayoutSchedule, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
-    MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
+    MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent, TokenEarnings,
+    TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -152,7 +152,11 @@ pub fn set_merchant_config(
     config: MerchantConfig,
 ) -> Result<(), Error> {
     merchant.require_auth();
-    validate_merchant_config_input(&config.payout_address, config.fee_bips, config.allowed_operations)?;
+    validate_merchant_config_input(
+        &config.payout_address,
+        config.fee_bips,
+        config.allowed_operations,
+    )?;
 
     let key = DataKey::MerchantConfig(merchant.clone());
     let timestamp = env.ledger().timestamp();
@@ -180,7 +184,10 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-
+pub fn get_merchant_multisig_config(env: &Env, merchant: Address) -> Option<MerchantMultiSigConfig> {
+    let key = DataKey::MerchantMultiSig(merchant);
+    env.storage().instance().get(&key)
+}
 
 fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
     DataKey::MerchantBalance(merchant.clone(), token.clone())
@@ -263,7 +270,7 @@ pub fn get_reconciliation_snapshot(
             total_withdrawals: earnings.withdrawals,
             total_refunds: earnings.refunds,
             computed_balance,
-            stored_balance: 0, // Will be computed by caller
+            stored_balance: 0,              // Will be computed by caller
             matches: computed_balance == 0, // Placeholder
         });
     }
@@ -356,6 +363,44 @@ pub fn credit_merchant_balance_for_token(
 
     Ok(())
 }
+pub fn set_merchant_multisig(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    signers: Vec<Address>,
+    threshold: u32,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+    merchant.require_auth();
+
+    if threshold == 0 {
+        return Err(Error::InvalidInput);
+    }
+
+    if threshold as usize > signers.len() {
+        return Err(Error::InvalidInput);
+    }
+
+    let mut seen = Vec::new(env);
+    for signer in signers.iter() {
+        if seen.contains(&signer) {
+            return Err(Error::InvalidInput);
+        }
+        seen.push_back(signer.clone());
+    }
+
+    let key = DataKey::MerchantMultiSig(merchant.clone());
+    env.storage().instance().set(
+        &key,
+        &MerchantMultiSigConfig {
+            signers: signers.clone(),
+            threshold,
+        },
+    );
+
+    Ok(())
+}
+
 pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Result<(), Error> {
     let token_addr = crate::admin::get_token(env)?;
     withdraw_merchant_funds_for_token(env, merchant, token_addr, amount)
@@ -368,6 +413,17 @@ pub fn withdraw_merchant_funds_for_token(
     amount: i128,
 ) -> Result<(), Error> {
     merchant.require_auth();
+
+    if let Some(config) = get_merchant_multisig_config(env, merchant.clone()) {
+        let required_signers = config.threshold.min(config.signers.len() as u32);
+        let mut iter = 0u32;
+        while iter < required_signers {
+            let signer = config.signers.get(iter).unwrap_or_default();
+            signer.require_auth();
+            iter += 1;
+        }
+    }
+
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
     if amount <= 0 {
@@ -379,8 +435,7 @@ pub fn withdraw_merchant_funds_for_token(
     }
 
     // Ensure merchant config exists
-    let _config = get_merchant_config(env, merchant.clone())
-        .ok_or(Error::NotFound)?;
+    let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
 
     let current = get_merchant_balance_by_token(env, &merchant, &token_addr);
 
@@ -404,7 +459,7 @@ pub fn withdraw_merchant_funds_for_token(
 
     // ─────────────── EFFECTS ───────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
- // EFFECTS
+    // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
@@ -413,7 +468,7 @@ pub fn withdraw_merchant_funds_for_token(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
@@ -421,10 +476,12 @@ crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
 
-
-
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
+        (
+            Symbol::new(env, "withdrawn"),
+            merchant.clone(),
+            token_addr.clone(),
+        ),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
@@ -480,7 +537,6 @@ pub fn merchant_refund(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
- 
 
     env.events().publish(
         (Symbol::new(env, "merchant_refund"), merchant.clone()),
@@ -497,18 +553,21 @@ pub fn merchant_refund(
     // INTERACTIONS
     let token_client = token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-#[cfg(any(test, feature = "invariants"))]
-crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
     Ok(())
 }
 
 pub fn get_payout_schedule(env: &Env, merchant: &Address) -> PayoutSchedule {
     let key = DataKey::PayoutSchedule(merchant.clone());
-    env.storage().instance().get(&key).unwrap_or(PayoutSchedule {
-        cadence_seconds: 0,
-        min_payout: 0,
-        last_payout_at: 0,
-    })
+    env.storage()
+        .instance()
+        .get(&key)
+        .unwrap_or(PayoutSchedule {
+            cadence_seconds: 0,
+            min_payout: 0,
+            last_payout_at: 0,
+        })
 }
 
 fn set_payout_schedule(env: &Env, merchant: &Address, schedule: &PayoutSchedule) {
@@ -579,13 +638,12 @@ fn flush_merchant_token(
         return Ok(0i128);
     }
 
-    let config = get_merchant_config(env, merchant.clone())
-        .ok_or(Error::NotFound)?;
+    let config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
     let payout_address = config.payout_address;
 
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
- // EFFECTS
+    // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
@@ -594,7 +652,7 @@ fn flush_merchant_token(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, merchant, token);
     earnings.withdrawals = earnings
         .withdrawals
@@ -602,10 +660,12 @@ crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, merchant, token, &earnings);
 
-    
-
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone(), token.clone()),
+        (
+            Symbol::new(env, "withdrawn"),
+            merchant.clone(),
+            token.clone(),
+        ),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token.clone(),
@@ -619,8 +679,8 @@ crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     // INTERACTIONS
     let token_client = token::Client::new(env, token);
     token_client.transfer(&env.current_contract_address(), &payout_address, &balance);
-#[cfg(any(test, feature = "invariants"))]
-crate::invariants::assert_token_balance_invariant(env, token)?;
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, token)?;
     Ok(balance)
 }
 
@@ -635,11 +695,7 @@ crate::invariants::assert_token_balance_invariant(env, token)?;
 /// the call is a no-op (`Err(Error::IntervalNotElapsed)`).
 ///
 /// Returns the number of token payouts actually executed.
-pub fn do_flush_payouts(
-    env: &Env,
-    merchant: Address,
-    caller: Address,
-) -> Result<u32, Error> {
+pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result<u32, Error> {
     let schedule = get_payout_schedule(env, &merchant);
 
     // No schedule configured — nothing to do.
@@ -658,7 +714,11 @@ pub fn do_flush_payouts(
 
     // Iterate all tokens the merchant has earnings in.
     let token_key = DataKey::MerchantTokens(merchant.clone());
-    let tokens: Vec<Address> = env.storage().instance().get(&token_key).unwrap_or(Vec::new(env));
+    let tokens: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&token_key)
+        .unwrap_or(Vec::new(env));
 
     let mut tokens_paid: u32 = 0;
     for token in tokens.iter() {
@@ -701,11 +761,7 @@ pub fn update_merchant_config(
     merchant.require_auth();
 
     let key = DataKey::MerchantConfig(merchant.clone());
-    let mut config: MerchantConfig = env
-        .storage()
-        .instance()
-        .get(&key)
-        .ok_or(Error::NotFound)?;
+    let mut config: MerchantConfig = env.storage().instance().get(&key).ok_or(Error::NotFound)?;
 
     if let Some(payout) = new_payout_address {
         config.payout_address = payout;
@@ -785,15 +841,14 @@ pub fn do_rotate_merchant_address(
 ) -> Result<(), crate::types::Error> {
     crate::admin::require_admin_auth(env, &admin)?;
 
-    crate::nonce::check_and_advance(
-        env,
-        &admin,
-        crate::nonce::DOMAIN_MERCHANT_ROTATION,
-        nonce,
-    )?;
+    crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_MERCHANT_ROTATION, nonce)?;
 
     env.events().publish(
-        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        (
+            Symbol::new(env, "merchant_balance_snapshot"),
+            merchant.clone(),
+            token.clone(),
+        ),
         MerchantBalanceSnapshotEvent {
             merchant: merchant.clone(),
             token: token.clone(),
@@ -869,6 +924,7 @@ pub fn do_rotate_merchant_address(
 
     // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
     let subs_key_old = DataKey::MerchantSubs(old_merchant.clone());
+    let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
     let sub_ids: soroban_sdk::Vec<u32> = storage
         .get(&subs_key_old)
         .unwrap_or(soroban_sdk::Vec::new(env));
@@ -886,8 +942,8 @@ pub fn do_rotate_merchant_address(
                 env.storage().persistent().set(&sub_key, &sub);
                 subscriptions_updated += 1;
             }
-            if !already {
-                seen.push_back(pair.clone());
+        }
+    }
 
                 let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
                 let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
@@ -916,7 +972,11 @@ pub fn do_rotate_merchant_address(
                 };
 
                 env.events().publish(
-                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    (
+                        Symbol::new(env, "merchant_balance_snapshot"),
+                        pair.0.clone(),
+                        pair.1.clone(),
+                    ),
                     ev.clone(),
                 );
                 out.push_back(ev);
@@ -939,4 +999,114 @@ pub fn do_rotate_merchant_address(
     );
 
     Ok(())
+}
+
+/// Emit a balance snapshot event for a single (merchant, token) pair.
+///
+/// Admin-only. Reads the current on-chain balance and accrued/withdrawn/refunded
+/// totals for the pair and publishes a `MerchantBalanceSnapshotEvent`. Safe to
+/// call even when nothing has been earned yet (emits a zero-valued snapshot).
+pub fn do_emit_merchant_balance_snapshot(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    token: Address,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let balance = get_merchant_balance_by_token(env, &merchant, &token);
+    let earnings = get_merchant_token_earnings(env, &merchant, &token);
+    let accrued = earnings
+        .accruals
+        .interval
+        .checked_add(earnings.accruals.usage)
+        .unwrap_or(0)
+        .checked_add(earnings.accruals.one_off)
+        .unwrap_or(0);
+    let withdrawn = earnings.withdrawals;
+    let refunded = earnings.refunds;
+    let ledger_sequence = env.ledger().sequence();
+    let timestamp = env.ledger().timestamp();
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        crate::types::MerchantBalanceSnapshotEvent {
+            merchant,
+            token,
+            balance,
+            accrued,
+            withdrawn,
+            refunded,
+            ledger_sequence,
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Emit balance snapshots for every distinct (merchant, token) pair referenced
+/// by subscriptions in `[start_id, end_id)`. Admin-only.
+///
+/// Each (merchant, token) pair is snapshotted only once, even if referenced by
+/// multiple subscriptions in the range. Returns the list of events emitted.
+pub fn do_emit_all_balances_snapshot(
+    env: &Env,
+    admin: Address,
+    start_id: u32,
+    end_id: u32,
+) -> Result<Vec<crate::types::MerchantBalanceSnapshotEvent>, Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let mut seen: Vec<(Address, Address)> = Vec::new(env);
+    let mut out: Vec<crate::types::MerchantBalanceSnapshotEvent> = Vec::new(env);
+
+    for sub_id in start_id..end_id {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        {
+            let pair = (sub.merchant.clone(), sub.token.clone());
+            let already = seen.contains(&pair);
+            if !already {
+                seen.push_back(pair.clone());
+
+                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let accrued = earnings
+                    .accruals
+                    .interval
+                    .checked_add(earnings.accruals.usage)
+                    .unwrap_or(0)
+                    .checked_add(earnings.accruals.one_off)
+                    .unwrap_or(0);
+                let withdrawn = earnings.withdrawals;
+                let refunded = earnings.refunds;
+                let ledger_sequence = env.ledger().sequence();
+                let timestamp = env.ledger().timestamp();
+
+                let ev = crate::types::MerchantBalanceSnapshotEvent {
+                    merchant: pair.0.clone(),
+                    token: pair.1.clone(),
+                    balance,
+                    accrued,
+                    withdrawn,
+                    refunded,
+                    ledger_sequence,
+                    timestamp,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                };
+
+                env.events().publish(
+                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    ev.clone(),
+                );
+                out.push_back(ev);
+            }
+        }
+    }
+
+    Ok(out)
 }

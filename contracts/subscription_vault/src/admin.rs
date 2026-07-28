@@ -8,13 +8,24 @@ use crate::types::{
     AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
     RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
-use crate::{charge_core::{charge_one, charge_usage_one}, ChargeExecutionResult};
+use crate::{
+    charge_core::{charge_one, charge_usage_one},
+    ChargeExecutionResult,
+};
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
 pub fn get_schema_version(env: &Env) -> u32 {
-    if let Some(v) = env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion) {
+    if let Some(v) = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::SchemaVersion)
+    {
         v
-    } else if let Some(v) = env.storage().instance().get::<_, u32>(&DataKey::SchemaVersion) {
+    } else if let Some(v) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::SchemaVersion)
+    {
         v
     } else {
         0
@@ -43,7 +54,9 @@ where
     let version = get_schema_version(env);
     if version >= 3 {
         env.storage().persistent().set(key, value);
-        env.storage().persistent().extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         env.storage().instance().remove(key);
     } else {
         env.storage().instance().set(key, value);
@@ -97,21 +110,27 @@ pub fn do_init(
     }
 
     // Set schema version to target 3 in persistent storage first
-    env.storage().persistent().set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION);
-    env.storage().persistent().extend_ttl(&DataKey::SchemaVersion, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+    env.storage()
+        .persistent()
+        .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION);
+    env.storage().persistent().extend_ttl(
+        &DataKey::SchemaVersion,
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
+    );
 
     write_config(env, &DataKey::Token, &token);
-    
+
     let instance = env.storage().instance();
     instance.set(&accepted_token_decimals_key(&token), &token_decimals);
     let mut tokens = Vec::new(env);
     tokens.push_back(token.clone());
     instance.set(&accepted_tokens_key(), &tokens);
-    
+
     write_config(env, &DataKey::Admin, &admin);
     write_config(env, &DataKey::MinTopup, &min_topup);
     instance.set(&DataKey::GracePeriod, &grace_period);
-    
+
     env.events().publish(
         (Symbol::new(env, "initialized"),),
         (token, admin, min_topup, grace_period),
@@ -120,8 +139,7 @@ pub fn do_init(
 }
 
 pub fn require_admin(env: &Env) -> Result<Address, Error> {
-    read_config(env, &DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+    read_config(env, &DataKey::Admin).ok_or(Error::NotInitialized)
 }
 
 pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
@@ -177,8 +195,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
 }
 
 pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
-    read_config(env, &DataKey::MinTopup)
-        .ok_or(Error::NotInitialized)
+    read_config(env, &DataKey::MinTopup).ok_or(Error::NotInitialized)
 }
 
 pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
@@ -198,8 +215,7 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
 }
 
 pub fn get_token(env: &Env) -> Result<Address, Error> {
-    read_config(env, &DataKey::Token)
-        .ok_or(Error::NotFound)
+    read_config(env, &DataKey::Token).ok_or(Error::NotFound)
 }
 
 pub fn get_token_decimals(env: &Env, token: &Address) -> Result<u32, Error> {
@@ -225,9 +241,7 @@ pub fn add_accepted_token(
 
     let storage = env.storage().instance();
     if !storage.has(&accepted_token_decimals_key(&token)) {
-        let mut tokens: Vec<Address> = storage
-            .get(&accepted_tokens_key())
-            .unwrap_or(Vec::new(env));
+        let mut tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
         tokens.push_back(token.clone());
         storage.set(&accepted_tokens_key(), &tokens);
     }
@@ -246,9 +260,7 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     let storage = env.storage().instance();
     storage.remove(&accepted_token_decimals_key(&token));
 
-    let tokens: Vec<Address> = storage
-        .get(&accepted_tokens_key())
-        .unwrap_or(Vec::new(env));
+    let tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
     let mut next = Vec::new(env);
     for t in tokens.iter() {
         if t != token {
@@ -261,9 +273,7 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
 
 pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     let storage = env.storage().instance();
-    let tokens: Vec<Address> = storage
-        .get(&accepted_tokens_key())
-        .unwrap_or(Vec::new(env));
+    let tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
     let mut out = Vec::new(env);
     for token in tokens.iter() {
         if let Some(decimals) = storage.get::<_, u32>(&accepted_token_decimals_key(&token)) {
@@ -278,7 +288,10 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
 /// Called by both `do_batch_charge` (admin path) and
 /// `operator::do_operator_batch_charge` (operator path) after their respective
 /// auth/nonce guards have been satisfied.
-pub(crate) fn execute_batch_charge(env: &Env, subscription_ids: &Vec<u32>) -> Vec<BatchChargeResult> {
+pub(crate) fn execute_batch_charge(
+    env: &Env,
+    subscription_ids: &Vec<u32>,
+) -> Vec<BatchChargeResult> {
     let now = env.ledger().timestamp();
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
@@ -349,15 +362,24 @@ pub fn do_charge_usage(
 }
 
 pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
-    read_config(env, &DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+    read_config(env, &DataKey::Admin).ok_or(Error::NotInitialized)
 }
 
-pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address, nonce: u64) -> Result<(), Error> {
+pub fn do_rotate_admin(
+    env: &Env,
+    current_admin: Address,
+    new_admin: Address,
+    nonce: u64,
+) -> Result<(), Error> {
     require_admin_auth(env, &current_admin)?;
 
     // Consume nonce for this domain before any other state mutation.
-    crate::nonce::check_and_advance(env, &current_admin, crate::nonce::DOMAIN_ADMIN_ROTATION, nonce)?;
+    crate::nonce::check_and_advance(
+        env,
+        &current_admin,
+        crate::nonce::DOMAIN_ADMIN_ROTATION,
+        nonce,
+    )?;
 
     // Disallow self-rotation: rotating to the same address is a no-op that
     // could mask misconfiguration and wastes a transaction.
@@ -536,7 +558,11 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::EmergencyStop) {
         let val: bool = instance.get(&DataKey::EmergencyStop).unwrap_or(false);
         persistent.set(&DataKey::EmergencyStop, &val);
-        persistent.extend_ttl(&DataKey::EmergencyStop, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        persistent.extend_ttl(
+            &DataKey::EmergencyStop,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::EmergencyStop);
     }
 
@@ -567,11 +593,19 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     // 9. SchemaVersion
     if instance.has(&DataKey::SchemaVersion) {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(&DataKey::SchemaVersion, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        persistent.extend_ttl(
+            &DataKey::SchemaVersion,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::SchemaVersion);
     } else {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(&DataKey::SchemaVersion, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        persistent.extend_ttl(
+            &DataKey::SchemaVersion,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
     }
 
     Ok(())
@@ -645,11 +679,21 @@ pub fn do_migrate(
 
     // Commit the new version atomically after all upgrade steps succeed.
     if binary_version >= 3 {
-        env.storage().persistent().set(&crate::types::DataKey::SchemaVersion, &binary_version);
-        env.storage().persistent().extend_ttl(&crate::types::DataKey::SchemaVersion, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
-        env.storage().instance().remove(&crate::types::DataKey::SchemaVersion);
+        env.storage()
+            .persistent()
+            .set(&crate::types::DataKey::SchemaVersion, &binary_version);
+        env.storage().persistent().extend_ttl(
+            &crate::types::DataKey::SchemaVersion,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
+        env.storage()
+            .instance()
+            .remove(&crate::types::DataKey::SchemaVersion);
     } else {
-        env.storage().instance().set(&crate::types::DataKey::SchemaVersion, &binary_version);
+        env.storage()
+            .instance()
+            .set(&crate::types::DataKey::SchemaVersion, &binary_version);
     }
 
     // Emit audit event.

@@ -1,7 +1,7 @@
 #[cfg(kani)]
 mod verification {
-    use subscription_vault::{safe_add, safe_sub, safe_add_balance, safe_sub_balance};
     use subscription_vault::types::Error;
+    use subscription_vault::{safe_add, safe_add_balance, safe_sub, safe_sub_balance};
 
     #[kani::proof]
     pub fn check_safe_add() {

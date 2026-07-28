@@ -1,25 +1,30 @@
 #![cfg(test)]
 
-use crate::types::{OP_WITHDRAW, OP_REFUND, ProposalKind};
+use crate::types::{ProposalKind, OP_REFUND, OP_WITHDRAW};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String,
+};
 
 // ── Governance Proposal Tests ──────────────────────────────────────────────
 
 /// Helper to initialize contract with admin and token
 fn init_vault<'a>(env: &'a Env, admin: &Address) -> (Address, SubscriptionVaultClient<'a>) {
     let token_admin = Address::generate(env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin).address();
-    
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(env, &contract_id);
 
     client.init(
         &token_address,
-        &6,  // decimals
+        &6, // decimals
         admin,
-        &10_000_000,  // min_topup
-        &86400,  // grace period
+        &10_000_000, // min_topup
+        &86400,      // grace period
     );
 
     (token_address, client)
@@ -60,7 +65,7 @@ fn test_submit_proposal_rotate_admin() {
     let (_, client) = init_vault(&env, &admin);
 
     let current_time = env.ledger().timestamp();
-    let eta = current_time + 3600;  // 1 hour from now
+    let eta = current_time + 3600; // 1 hour from now
 
     // Submit proposal
     let proposal_id = client.submit_proposal(
@@ -68,7 +73,7 @@ fn test_submit_proposal_rotate_admin() {
         &new_admin,
         &None,
         &0,
-        &5000,  // 50% quorum
+        &5000, // 50% quorum
         &eta,
     );
 
@@ -100,7 +105,7 @@ fn test_submit_proposal_set_protocol_fee() {
         &treasury,
         &None,
         &250,  // 2.5% fee
-        &7500,  // 75% quorum
+        &7500, // 75% quorum
         &eta,
     );
 
@@ -129,11 +134,14 @@ fn test_invalid_quorum_bps() {
         &new_admin,
         &None,
         &0,
-        &10001,  // Invalid: > 10000
+        &10001, // Invalid: > 10000
         &eta,
     );
 
-    assert!(result.is_err(), "proposal with quorum > 10000 must be rejected");
+    assert!(
+        result.is_err(),
+        "proposal with quorum > 10000 must be rejected"
+    );
 }
 
 #[test]
@@ -147,7 +155,7 @@ fn test_eta_in_past_rejected() {
 
     env.ledger().set_timestamp(1_000_000);
     let current_time = env.ledger().timestamp();
-    let eta_in_past = current_time - 3600;  // 1 hour ago
+    let eta_in_past = current_time - 3600; // 1 hour ago
 
     // Try to submit with ETA in the past
     let result = client.try_submit_proposal(
@@ -280,7 +288,7 @@ fn test_merchant_config_initialization() {
     let config = client.initialize_merchant_config(
         &merchant_a,
         &payout_address,
-        &500, // 5% fee in bips
+        &500,  // 5% fee in bips
         &0x1F, // all operations enabled
         &None,
         &redirect_url,
@@ -316,17 +324,20 @@ fn test_merchant_config_governance_enforced() {
     // Partial update — update_merchant_config also returns MerchantConfig directly
     let updated = client.update_merchant_config(
         &merchant_a,
-        &None,                                                   // payout unchanged
-        &Some(1000),                                             // new fee: 10%
-        &None,                                                   // ops unchanged
-        &None,                                                   // active unchanged
-        &None,                                                   // fee_address unchanged
-        &Some(String::from_str(&env, "https://new-url.com")),   // new redirect
-        &None,                                                   // paused unchanged
+        &None,                                                // payout unchanged
+        &Some(1000),                                          // new fee: 10%
+        &None,                                                // ops unchanged
+        &None,                                                // active unchanged
+        &None,                                                // fee_address unchanged
+        &Some(String::from_str(&env, "https://new-url.com")), // new redirect
+        &None,                                                // paused unchanged
     );
 
     assert_eq!(updated.fee_bips, 1000);
-    assert_eq!(updated.redirect_url, String::from_str(&env, "https://new-url.com"));
+    assert_eq!(
+        updated.redirect_url,
+        String::from_str(&env, "https://new-url.com")
+    );
 }
 
 #[test]
@@ -498,8 +509,8 @@ fn test_partial_update_preserves_other_fields() {
     let initial = client.initialize_merchant_config(
         &merchant,
         &payout,
-        &500,   // 5%
-        &0x0F,  // no OP_AUTO_RENEWAL
+        &500,  // 5%
+        &0x0F, // no OP_AUTO_RENEWAL
         &None,
         &String::from_str(&env, "https://initial.com"),
     );
@@ -521,7 +532,10 @@ fn test_partial_update_preserves_other_fields() {
 
     assert_eq!(updated.fee_bips, 1000);
     assert_eq!(updated.allowed_operations, 0x0F);
-    assert_eq!(updated.redirect_url, String::from_str(&env, "https://initial.com"));
+    assert_eq!(
+        updated.redirect_url,
+        String::from_str(&env, "https://initial.com")
+    );
 }
 
 #[test]
@@ -673,7 +687,10 @@ fn test_merchant_refund_uninitialized_merchant_fails() {
 mod admin_rotation_invariants {
     use crate::test_utils::{fixtures, setup::TestEnv};
     use crate::{AdminRotatedEvent, Error, SubscriptionStatus};
-    use soroban_sdk::{testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, IntoVal, Vec};
+    use soroban_sdk::{
+        testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, IntoVal,
+        Vec,
+    };
 
     const T0: u64 = 1_000;
     const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days
@@ -720,7 +737,9 @@ mod admin_rotation_invariants {
         // The contract cannot sign Soroban auth transactions, so rotating to it
         // would permanently lock all admin-only operations.
         let te = TestEnv::default();
-        let result = te.client.try_rotate_admin(&te.admin, &te.client.address, &0u64);
+        let result = te
+            .client
+            .try_rotate_admin(&te.admin, &te.client.address, &0u64);
         assert_eq!(result, Err(Ok(Error::InvalidNewAdmin)));
         assert_eq!(te.client.get_admin(), te.admin);
     }
@@ -822,7 +841,8 @@ mod admin_rotation_invariants {
             fixtures::create_subscription(&te.env, &te.client, SubscriptionStatus::Active);
         let before = te.client.get_subscription(&id);
 
-        te.client.rotate_admin(&te.admin, &Address::generate(&te.env), &0u64);
+        te.client
+            .rotate_admin(&te.admin, &Address::generate(&te.env), &0u64);
 
         let after = te.client.get_subscription(&id);
         assert_eq!(before.subscriber, after.subscriber);
@@ -847,7 +867,9 @@ mod admin_rotation_invariants {
         fixtures::seed_balance(&te.env, &te.client, id, PREPAID);
 
         // Advance time past the billing interval so a charge is due.
-        te.env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+        te.env
+            .ledger()
+            .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
 
         let new_admin = Address::generate(&te.env);
         te.client.rotate_admin(&te.admin, &new_admin, &0u64);

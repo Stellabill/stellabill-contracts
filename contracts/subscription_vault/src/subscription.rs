@@ -127,14 +127,21 @@ pub fn next_id(env: &Env) -> u32 {
 }
 
 pub fn next_plan_id(env: &Env) -> u32 {
-    let id: u32 = env.storage().instance().get(&DataKey::NextPlanId).unwrap_or(0);
+    let id: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::NextPlanId)
+        .unwrap_or(0);
     let next = id.checked_add(1).unwrap_or(id);
     env.storage().instance().set(&DataKey::NextPlanId, &next);
     id
 }
 
 pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplate, Error> {
-    env.storage().instance().get(&DataKey::Plan(plan_template_id)).ok_or(Error::NotFound)
+    env.storage()
+        .instance()
+        .get(&DataKey::Plan(plan_template_id))
+        .ok_or(Error::NotFound)
 }
 
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
@@ -144,7 +151,9 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
-    env.storage().persistent().set(&DataKey::Sub(subscription_id), sub);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Sub(subscription_id), sub);
     extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
 }
 
@@ -200,7 +209,11 @@ fn count_active_subscriptions_for_plan(
             continue;
         }
 
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if &sub.subscriber == subscriber && sub.status == SubscriptionStatus::Active {
                 count = count.saturating_add(1);
             }
@@ -229,10 +242,7 @@ fn enforce_plan_concurrency_limit(
     Ok(())
 }
 
-fn credit_limit_key(
-    subscriber: &Address,
-    token: &Address,
-) -> DataKey {
+fn credit_limit_key(subscriber: &Address, token: &Address) -> DataKey {
     DataKey::CreditLimit(subscriber.clone(), token.clone())
 }
 
@@ -275,7 +285,11 @@ fn compute_subscriber_exposure(
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if &sub.subscriber != subscriber || &sub.token != token {
                 continue;
             }
@@ -316,6 +330,66 @@ fn enforce_credit_limit_for_delta(
         return Err(Error::CreditLimitExceeded);
     }
 
+    Ok(())
+}
+
+// ── Per-subscriber active-subscription cap (#578) ───────────────────────────
+//
+// `DataKey::SubscriberActiveCount` tracks how many of a subscriber's
+// subscriptions are currently `Active`, maintained incrementally at exactly
+// the four transition points below (not via a full-table scan). Automatic
+// status transitions driven by billing (e.g. `Active` -> `InsufficientBalance`
+// on a failed charge) are intentionally out of scope: they don't touch this
+// counter, and resuming back to `Active` from those states correctly does not
+// re-increment it, since it was never decremented in the first place.
+
+pub fn get_subscriber_active_count(env: &Env, subscriber: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SubscriberActiveCount(subscriber.clone()))
+        .unwrap_or(0)
+}
+
+fn increment_subscriber_active_count(env: &Env, subscriber: &Address) {
+    let count = get_subscriber_active_count(env, subscriber);
+    env.storage().instance().set(
+        &DataKey::SubscriberActiveCount(subscriber.clone()),
+        &count.saturating_add(1),
+    );
+}
+
+fn decrement_subscriber_active_count(env: &Env, subscriber: &Address) {
+    let count = get_subscriber_active_count(env, subscriber);
+    env.storage().instance().set(
+        &DataKey::SubscriberActiveCount(subscriber.clone()),
+        &count.saturating_sub(1),
+    );
+}
+
+/// Effective active-subscription cap for `subscriber`: the admin override if
+/// one is set, otherwise [`DEFAULT_SUBSCRIBER_ACTIVE_CAP`].
+pub fn get_subscriber_active_cap(env: &Env, subscriber: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::SubscriberActiveCapOverride(subscriber.clone()))
+        .unwrap_or(DEFAULT_SUBSCRIBER_ACTIVE_CAP)
+}
+
+/// Sets (or clears, with `cap: None`) an admin override of a subscriber's
+/// active-subscription cap — e.g. to raise the limit for an institutional
+/// account. Admin-only.
+pub fn do_set_subscriber_active_cap(
+    env: &Env,
+    admin: Address,
+    subscriber: Address,
+    cap: Option<u32>,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+    let key = DataKey::SubscriberActiveCapOverride(subscriber);
+    match cap {
+        Some(c) => env.storage().instance().set(&key, &c),
+        None => env.storage().instance().remove(&key),
+    }
     Ok(())
 }
 
@@ -371,6 +445,23 @@ pub fn do_create_subscription_with_token(
         return Err(Error::MaxConcurrentSubscriptionsReached);
     }
 
+    // Enforce per-subscriber active subscription cap (#578).
+    let subscriber_active_count = get_subscriber_active_count(env, &subscriber);
+    let subscriber_cap = get_subscriber_active_cap(env, &subscriber);
+    if subscriber_active_count >= subscriber_cap {
+        env.events().publish(
+            (Symbol::new(env, "subscriber_cap_reached"), subscriber.clone()),
+            SubscriberCapReachedEvent {
+                subscriber: subscriber.clone(),
+                active_count: subscriber_active_count,
+                cap: subscriber_cap,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        return Err(Error::MaxConcurrentSubscriptionsReached);
+    }
+
     if amount < 0 {
         return Err(Error::InvalidAmount);
     }
@@ -379,6 +470,15 @@ pub fn do_create_subscription_with_token(
     }
 
     validate_interval(interval_seconds)?;
+
+    // Reject expiration timestamps that are at or before the current ledger time.
+    // A subscription that is already expired at creation would be a zombie entry
+    // that can never be charged.
+    if let Some(exp) = expires_at {
+        if exp <= env.ledger().timestamp() {
+            return Err(Error::InvalidExpiration);
+        }
+    }
 
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
@@ -426,6 +526,7 @@ pub fn do_create_subscription_with_token(
 
     crate::admin::write_config(env, &DataKey::NextId, &next_id);
     write_subscription(env, id, &sub);
+    increment_subscriber_active_count(env, &subscriber);
 
     // Maintain merchant -> subscription-ID index
     let merchant_key = DataKey::MerchantSubs(merchant.clone());
@@ -470,10 +571,16 @@ pub fn do_create_subscription_with_token(
         issued_at: env.ledger().timestamp(),
         revoked: false,
     };
-    env.storage().persistent().set(&DataKey::Credential(id), &credential);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Credential(id), &credential);
     // Extend TTL of credential just like subscription
-    env.storage().persistent().extend_ttl(&DataKey::Credential(id), SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
-    
+    env.storage().persistent().extend_ttl(
+        &DataKey::Credential(id),
+        SUB_TTL_THRESHOLD as u32,
+        SUB_TTL_EXTEND_TO as u32,
+    );
+
     env.events().publish(
         (Symbol::new(env, "credential_issued"), id),
         crate::types::CredentialIssuedEvent {
@@ -830,7 +937,15 @@ fn apply_cancellation(
     mut sub: Subscription,
     authorizer: Address,
 ) -> Result<(), Error> {
+    // Only decrement if the subscription was actually counted as `Active`:
+    // if it was already `Paused` (or in an automatic billing state), the
+    // counter was either already decremented (at pause time) or never
+    // incremented for that state to begin with.
+    let was_active = sub.status == SubscriptionStatus::Active;
     transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+    if was_active {
+        decrement_subscriber_active_count(env, &sub.subscriber);
+    }
     let refund_amount = sub.prepaid_balance;
 
     // EFFECTS: zero balance before external token transfer (CEI pattern).
@@ -893,11 +1008,17 @@ fn apply_cancellation(
     );
 
     // Revoke soulbound credential if it exists
-    if let Some(mut credential) = env.storage().persistent().get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id)) {
+    if let Some(mut credential) = env
+        .storage()
+        .persistent()
+        .get::<_, crate::types::CredentialBadge>(&DataKey::Credential(subscription_id))
+    {
         if !credential.revoked {
             credential.revoked = true;
-            env.storage().persistent().set(&DataKey::Credential(subscription_id), &credential);
-            
+            env.storage()
+                .persistent()
+                .set(&DataKey::Credential(subscription_id), &credential);
+
             env.events().publish(
                 (Symbol::new(env, "credential_revoked"), subscription_id),
                 crate::types::CredentialRevokedEvent {
@@ -1006,7 +1127,6 @@ pub fn do_unschedule_cancel(
     Ok(())
 }
 
-
 /// Pause a subscription (no charges until resumed).
 ///
 /// # Authorization
@@ -1061,6 +1181,9 @@ fn apply_pause(
     transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
 
     write_subscription(env, subscription_id, &sub);
+    // Only `Active -> Paused` is a valid transition here (see state_machine),
+    // so this always corresponds to a subscription actually leaving `Active`.
+    decrement_subscriber_active_count(env, &sub.subscriber);
 
     env.events().publish(
         (Symbol::new(env, "sub_paused"), subscription_id),
@@ -1123,8 +1246,16 @@ pub fn do_resume_subscription(
     transition_to(&mut sub.status, SubscriptionStatus::Active)?;
 
     write_subscription(env, subscription_id, &sub);
+    // Only re-increment when resuming from `Paused`: that's the only source
+    // state this contract ever decremented the counter for. Resuming from
+    // `GracePeriod`/`InsufficientBalance` (entered automatically via billing,
+    // not via `pause`) must not re-increment, since those transitions never
+    // decremented it.
+    if previous_status == SubscriptionStatus::Paused {
+        increment_subscriber_active_count(env, &sub.subscriber);
+    }
 
-     env.events().publish(
+    env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
         crate::types::SubscriptionResumedEvent {
             subscription_id,
@@ -1248,12 +1379,7 @@ fn bulk_cancel_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSub
 ///
 /// The nonce shares the `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller
 /// address, so admin and operator each maintain an independent monotonic sequence.
-fn bulk_precheck(
-    env: &Env,
-    caller: &Address,
-    ids: &Vec<u32>,
-    nonce: u64,
-) -> Result<bool, Error> {
+fn bulk_precheck(env: &Env, caller: &Address, ids: &Vec<u32>, nonce: u64) -> Result<bool, Error> {
     crate::admin::require_admin_or_operator_auth(env, caller)?;
 
     if ids.len() > BATCH_MAX_SIZE {
@@ -1536,7 +1662,7 @@ pub fn do_charge_one_off(
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
-        
+
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
                 (symbol_short!("cap_reach"), subscription_id),
@@ -1618,7 +1744,7 @@ pub fn do_cleanup_subscription(
 
         transition_to(&mut sub.status, SubscriptionStatus::Archived)?;
         write_subscription(env, subscription_id, &sub);
-        
+
         env.events().publish(
             (Symbol::new(env, "subscription_archived"), subscription_id),
             crate::types::SubscriptionArchivedEvent {
@@ -1885,8 +2011,9 @@ pub fn do_update_subscription_cap(
     write_subscription(env, subscription_id, &sub);
 
     // Get admin address for event, fallback to a zero-address if not set
-    let admin_addr = crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
-    
+    let admin_addr =
+        crate::admin::read_config(env, &DataKey::Admin).unwrap_or(sub.merchant.clone());
+
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
         LifetimeCapUpdatedEvent {
@@ -2030,6 +2157,23 @@ pub fn do_create_subscription_from_plan(
         return Err(Error::MaxConcurrentSubscriptionsReached);
     }
 
+    // Enforce per-subscriber active subscription cap (#578).
+    let subscriber_active_count = get_subscriber_active_count(env, &subscriber);
+    let subscriber_cap = get_subscriber_active_cap(env, &subscriber);
+    if subscriber_active_count >= subscriber_cap {
+        env.events().publish(
+            (Symbol::new(env, "subscriber_cap_reached"), subscriber.clone()),
+            SubscriberCapReachedEvent {
+                subscriber: subscriber.clone(),
+                active_count: subscriber_active_count,
+                cap: subscriber_cap,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        return Err(Error::MaxConcurrentSubscriptionsReached);
+    }
+
     // Enforce subscriber-level credit limit for the plan's token.
     enforce_credit_limit_for_delta(env, &subscriber, &plan.token, plan.amount)?;
 
@@ -2060,6 +2204,7 @@ pub fn do_create_subscription_from_plan(
     };
 
     write_subscription(env, id, &sub);
+    increment_subscriber_active_count(env, &subscriber);
 
     // Persist linkage between subscription and the plan template
     let sub_plan_storage_key = sub_plan_key(id);
@@ -2367,7 +2512,10 @@ pub fn do_set_merchant_max_subs(
         .set(&DataKey::MerchantMaxSubs(merchant.clone()), &max_subs);
 
     env.events().publish(
-        (Symbol::new(env, "merchant_max_subs_updated"), merchant.clone()),
+        (
+            Symbol::new(env, "merchant_max_subs_updated"),
+            merchant.clone(),
+        ),
         crate::types::MerchantMaxSubsUpdatedEvent {
             merchant,
             max_subs,
@@ -2444,5 +2592,3 @@ pub fn do_configure_usage_limits(
 
     Ok(())
 }
-
-
