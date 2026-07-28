@@ -6,6 +6,7 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 
 ## Table of contents
 
+- [Threat model](#threat-model)
 - [What’s in this repo](#whats-in-this-repo)
 - [Prerequisites](#prerequisites)
 - [Local setup](#local-setup)
@@ -15,6 +16,52 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 - [License](#license)
 
 ---
+
+## Threat model
+
+This repository is anchored by a top-level threat model that defines the trust boundaries, adversary assumptions, and mitigations for the `subscription_vault` contract. It is intended to serve as the primary reference for future audits and security reviews.
+
+### Actors and trust boundaries
+
+- **Admin**: the highest-trust actor. Authorized to charge subscriptions, set configuration, rotate the admin key, enable emergency stop, and recover stranded funds. Admin compromise is a primary threat.
+- **Merchant**: a semi-trusted actor. May withdraw merchant balances, pause/resume/cancel their own subscriptions, and manage merchant-scoped blocklists. Merchants cannot move subscriber funds or modify unrelated subscriptions.
+- **Subscriber**: a semi-trusted actor. May create subscriptions, deposit funds, cancel/pause/resume their own subscriptions, and withdraw remaining balance after cancellation. Subscribers cannot withdraw merchant balances or alter other subscribers' subscriptions.
+- **Oracle contract**: an external price feed. When enabled, the oracle provides pricing data used to resolve token amounts. It is treated as partially untrusted; bad data, stale updates, or drift must be detected and rejected.
+- **Token contract**: the USDC token contract used for deposits and withdrawals. It is treated as untrusted for callback/reentrancy behavior, upgradeability risks, and non-standard transfer mechanics.
+- **Soroban runtime**: trusted to enforce authentication, ledger timestamp semantics, and atomic execution of transactions.
+
+### Assumed adversary capabilities
+
+- Unauthorized callers may attempt to invoke admin-only or ownership-restricted entrypoints.
+- A compromised admin key may attempt forced billing, configuration changes, emergency stop manipulation, or recovery operations.
+- A malicious or buggy token contract may attempt recursive callbacks, transfer failures, fee-on-transfer behavior, or upgradeable semantics changes.
+- An oracle may deliver stale, invalid, or manipulated prices, or drift outside configured freshness bounds.
+- Attackers may attempt double-charging, replay billing requests, or exploit interval boundary edge cases.
+- External observers may rely on events for indexing; the contract must emit consistent, auditable events while avoiding sensitive data leakage.
+
+### Key mitigations by module
+
+- **Authentication and authorization**: strict signer checks for admin-only, merchant-only, and subscriber-only flows. Shared owner checks and explicit caller validation prevent abuse of entrypoints.
+- **Reentrancy protection**: the contract follows a checks-effects-interactions pattern and uses guard logic where external token calls occur, ensuring internal state is updated before any transfer.
+- **Replay protection**: billing and sensitive state-changing operations use idempotency or nonce mechanisms to prevent duplicate execution and ensure once-only semantics.
+- **Safe arithmetic**: all balance updates use checked arithmetic and explicit underflow/overflow handling to preserve invariants and prevent wraparound.
+- **Oracle safety**: oracle pricing is gated by explicit configuration, a maximum age for price data, and rejection of invalid or stale quotes.
+- **Event audit surface**: each lifecycle transition, charge attempt, withdrawal, admin rotation, oracle configuration change, and emergency stop action emits an on-chain event for auditability.
+- **Data segregation**: subscription records store fixed fields per subscription, including subscriber, merchant, token address, interval, status, prepaid balance, and expiration. All calls operate on the stored token per-subscription to prevent cross-token confusion.
+
+### Data classes and event surface
+
+- `Subscription`: captured in storage with fields for `subscriber`, `merchant`, `amount`, `interval_seconds`, `last_payment_timestamp`, `status`, `prepaid_balance`, `expiration`, and `usage_enabled`.
+- `Charge` and `deposit` flows: maintain explicit prepaid balances and status transitions such as `Active`, `Paused`, `Cancelled`, `InsufficientBalance`, and `GracePeriod`.
+- Event surface includes creation, deposit, charge success/failure, withdrawal, admin rotation, oracle configuration updates, emergency stop toggles, and recovery actions.
+
+### New attacker surface for current architecture
+
+- **Upgradeable token contracts**: the token contract may change behavior after deployment, introducing fee-on-transfer, callback semantics, or decimals changes. The contract assumes standard token transfer behavior and defends against callbacks by updating internal state before any external call.
+- **Oracle drift**: an oracle may become stale or return invalid prices. The contract enforces freshness via `max_age_seconds`, rejects invalid quotes, and falls back to safe behavior when oracle pricing is disabled or unavailable.
+- **Admin key compromise**: a compromised admin is treated as a high-severity threat. Mitigations include immediate admin rotation, strong auth checks, and audit-event emission for all admin operations.
+
+For deeper details, see [docs/security.md](docs/security.md).
 
 ## What’s in this repo
 
