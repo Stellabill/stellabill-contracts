@@ -551,6 +551,21 @@ pub struct DisputeRespondedEvent {
     pub schema_version: u32,
 }
 
+/// Cumulative escrow ledger for a dispute.
+///
+/// Tracks the original escrowed amount and the cumulative amount disbursed
+/// across one or more resolution steps. Every resolution is checked against
+/// this ledger so that `total_disbursed <= original_amount` at all times,
+/// preventing overpay even if partial-resolution logic is added later.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeEscrowLedger {
+    /// The total amount escrowed when the dispute was opened.
+    pub original_amount: i128,
+    /// Cumulative amount already disbursed via resolutions.
+    pub total_disbursed: i128,
+}
+
 /// Event emitted when a dispute is resolved.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -820,6 +835,8 @@ pub enum Error {
     DisputeAlreadyOpen = 10005,
     /// The dispute has already been responded to by the admin.
     DisputeAlreadyResponded = 10006,
+    /// Dispute resolution would overpay — total disbursed cannot exceed escrowed amount.
+    DisputeOverpay = 10007,
 
     // --- Subscription Transfer (11000-11099) ---
     /// The transfer intent was not found or has expired.
