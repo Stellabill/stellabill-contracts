@@ -50,9 +50,7 @@ pub fn remove_guardian(env: &Env, guardian: &Address) -> Result<(), Error> {
 
 /// Get a guardian's current voting weight (0 if not a guardian).
 pub fn get_guardian_weight(env: &Env, guardian: &Address) -> u32 {
-    read_guardians(env)
-        .get(guardian.clone())
-        .unwrap_or(0)
+    read_guardians(env).get(guardian.clone()).unwrap_or(0)
 }
 
 /// Calculate total voting weight across all guardians.
@@ -307,9 +305,11 @@ fn write_guardians(env: &Env, guardians: &Map<Address, u32>) {
     env.storage()
         .persistent()
         .set(&DataKey::Guardians, guardians);
-    env.storage()
-        .persistent()
-        .extend_ttl(&DataKey::Guardians, 30 * 24 * 60 * 60, 365 * 24 * 60 * 60);
+    env.storage().persistent().extend_ttl(
+        &DataKey::Guardians,
+        30 * 24 * 60 * 60,
+        365 * 24 * 60 * 60,
+    );
 }
 
 /// Read proposal from persistent storage.

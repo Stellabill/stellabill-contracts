@@ -3,12 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec, Bytes, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
 /// Current schema version for contract events.
-pub const EVENT_SCHEMA_VERSION: u32 = 2;
-
-/// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum number of metadata keys per subscription.
@@ -17,6 +14,11 @@ pub const MAX_METADATA_KEYS: u32 = 10;
 pub const MAX_METADATA_KEY_LENGTH: u32 = 32;
 /// Maximum length of a metadata value in bytes.
 pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
+/// Maximum number of subscription IDs accepted by a single bulk pause/cancel call.
+pub const BATCH_MAX_SIZE: u32 = 100;
+/// Default cap on concurrent active subscriptions per subscriber (#578).
+/// Admins can override this per-subscriber via `DataKey::SubscriberActiveCapOverride`.
+pub const DEFAULT_SUBSCRIBER_ACTIVE_CAP: u32 = 10;
 
 /// Threshold below which a persistent subscription record TTL is extended.
 /// If a subscription record is read or updated and its remaining TTL is less
@@ -201,6 +203,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 54.
+    BuyoutPremiumBps,
 }
 
 impl DataKey {
@@ -208,8 +212,6 @@ impl DataKey {
     pub const fn canonical_discriminant(&self) -> u32 {
         match self {
             DataKey::MerchantSubs(_) => 0,
-            DataKey::Kyc(KycKey::Required) => 49,
-            DataKey::Kyc(KycKey::Merchant(_)) => 50,
             DataKey::Token => 1,
             DataKey::Admin => 2,
             DataKey::MinTopup => 3,
@@ -221,7 +223,8 @@ impl DataKey {
             DataKey::EmergencyStop => 9,
             DataKey::MerchantPaused(_) => 10,
             DataKey::BillingStatement(_, _) => 11,
-            DataKey::PayoutSchedule(_) => 12,
+            DataKey::BillingStatementsBySubscription(_) => 12,
+            DataKey::BillingStatementsByMerchant(_) => 13,
             DataKey::TotalAccounted(_) => 14,
             DataKey::Recovery(_) => 15,
             DataKey::MerchantConfig(_) => 16,
@@ -251,6 +254,8 @@ impl DataKey {
             DataKey::MetadataKeys(_) => 40,
             DataKey::Operator => 41,
             DataKey::BillingRetentionConfig => 42,
+            DataKey::BillingStatementSequence(_) => 43,
+            DataKey::BillingStatementAggregate(_) => 44,
             DataKey::MerchantMaxSubs(_) => 45,
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
@@ -260,6 +265,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
+            DataKey::MerchantMultiSig(_) => 54,
         }
     }
 
@@ -309,11 +315,14 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
+    54, // MerchantMultiSig(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
 pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
-    KNOWN_INSTANCE_KEY_DISCRIMINANTS.iter().any(|&known| known == discriminant)
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
 }
 
 /// Debug-only guard asserting that `key` belongs to the canonical instance-key
@@ -321,7 +330,11 @@ pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
 #[inline]
 #[allow(dead_code)]
 pub fn assert_known_data_key(key: &DataKey) {
-    debug_assert!(key.is_known_instance_key(), "Unknown or persistent key reached instance storage: {}", key.canonical_discriminant());
+    debug_assert!(
+        key.is_known_instance_key(),
+        "Unknown or persistent key reached instance storage: {}",
+        key.canonical_discriminant()
+    );
 }
 
 /// Convenience wrapper over [`assert_known_data_key`] for instance storage helpers.
@@ -400,6 +413,23 @@ pub struct CredentialBadge {
     pub revoked: bool,
 }
 
+/// Event emitted when a soulbound credential is issued for a new subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialIssuedEvent {
+    pub subscription_id: u32,
+    pub tier: u32,
+    pub issued_at: u64,
+}
+
+/// Event emitted when a soulbound credential is revoked (subscription cancelled).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CredentialRevokedEvent {
+    pub subscription_id: u32,
+    pub timestamp: u64,
+}
+
 /// Detailed error information for insufficient balance scenarios.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -412,7 +442,10 @@ pub struct InsufficientBalanceError {
 
 impl InsufficientBalanceError {
     pub const fn new(available: i128, required: i128) -> Self {
-        Self { available, required }
+        Self {
+            available,
+            required,
+        }
     }
     pub fn shortfall(&self) -> i128 {
         self.required - self.available
@@ -506,6 +539,86 @@ pub struct DisputeResolvedEvent {
     pub schema_version: u32,
 }
 
+/// The privileged action a governance proposal executes once quorum is reached.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    /// Rotate the contract admin to `Proposal::target`.
+    RotateAdmin = 0,
+    /// Set the protocol fee (bps in `target3`) and, optionally, the treasury
+    /// address (`target2`).
+    SetProtocolFee = 1,
+    /// Reserved for a future contract-upgrade action.
+    UpgradeContract = 2,
+}
+
+/// A quorum-gated governance proposal.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub target2: Option<Address>,
+    pub target3: u32,
+    /// Required approval quorum, in basis points of total guardian weight.
+    pub quorum_bps: u32,
+    /// Per-guardian vote: `true` = yes, `false` = no.
+    pub votes: Map<Address, bool>,
+    /// Ledger timestamp at/after which this proposal may execute.
+    pub eta: u64,
+    pub submitted_at: u64,
+    pub executed: bool,
+}
+
+/// Event emitted when a new governance proposal is submitted.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalSubmittedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub quorum_bps: u32,
+    pub eta: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a guardian votes on a proposal.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalVotedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub voted_yes: bool,
+    pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a proposal is executed after reaching quorum.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub total_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a proposal is cancelled before execution.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCancelledEvent {
+    pub proposal_id: u64,
+    pub reason: String,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracterror(export = false)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -543,6 +656,8 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
+    /// Expiration timestamp is at or before the current ledger time.
+    InvalidExpiration = 3008,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -565,6 +680,8 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
+    /// Subscription is not in GracePeriod for a buyout operation.
+    NotInGracePeriod = 4011,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -619,6 +736,8 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
+    /// A bulk operation was called with more ids than `BATCH_MAX_SIZE` allows.
+    BatchTooLarge = 6018,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -659,31 +778,9 @@ pub enum Error {
 
 impl Error {
     /// Returns the numeric code for this error.
-    pub const fn to_code(self) -> u32 { self as u32 }
-}
-
-/// Normalize an amount to 9 decimal places based on token decimals.
-/// If token has 6 decimals, amount is scaled up by 10^(9-6) = 1000.
-pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .unwrap_or(7);
-    let scale = 10i128.pow(9u32.saturating_sub(decimals));
-    amount.checked_mul(scale).ok_or(Error::Overflow)
-}
-
-/// Denormalize an amount from 9 decimal places to token-specific decimals.
-#[allow(dead_code)]
-pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .unwrap_or(7);
-    let scale = 10i128.pow(9u32.saturating_sub(decimals));
-    amount.checked_div(scale).ok_or(Error::Underflow)
+    pub const fn to_code(self) -> u32 {
+        self as u32
+    }
 }
 
 /// Event emitted when an admin nonce is consumed by a privileged operation.
@@ -1135,6 +1232,18 @@ pub struct DiscountAppliedEvent {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Pricing strategy used to resolve a cross-currency charge amount.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    /// One-shot latest price from the configured oracle.
+    Spot = 0,
+    /// Median price across a sliding time window (`window_secs`).
+    Twap = 1,
+    /// Deterministic fixed ratio (`fixed_numerator` / `fixed_denominator`); no oracle reads.
+    FixedRate = 2,
+}
+
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1284,6 +1393,19 @@ pub struct SubscriptionCreatedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a subscriber's active-subscription cap blocks creation (#578).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriberCapReachedEvent {
+    pub subscriber: Address,
+    /// The subscriber's active-subscription count at the time of the attempt.
+    pub active_count: u32,
+    /// The effective cap (override if set, otherwise `DEFAULT_SUBSCRIBER_ACTIVE_CAP`).
+    pub cap: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct FundsDepositedEvent {
@@ -1335,19 +1457,6 @@ pub struct SubscriptionRecoveryReadyEvent {
     pub schema_version: u32,
 }
 
-/// Event emitted when a charge fails due to an error.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ChargeFailureEvent {
-    pub subscription_id: u32,
-    /// Numeric error code from the Error enum.
-    pub error_code: u32,
-    /// Amount that was attempted to be charged.
-    pub attempted_amount: i128,
-    /// Ledger timestamp when the failure occurred.
-    pub ledger: u64,
-}
-
 /// Event emitted when a subscription is cancelled.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1390,12 +1499,66 @@ pub struct SubscriptionPausedEvent {
     pub schema_version: u32,
 }
 
+/// Per-id outcome of a bulk pause/cancel operation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    /// `true` if this id's state actually changed; `false` for idempotent no-ops.
+    pub changed: bool,
+    /// Numeric error code from the `Error` enum, or `0` on success.
+    pub error_code: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-pause batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub paused: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-cancel batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub cancelled: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GracePeriodEnteredEvent {
     pub subscription_id: u32,
     pub previous_status: SubscriptionStatus,
     pub grace_expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraceBuyoutEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub deposit_amount: i128,
+    pub charge_amount: i128,
+    pub premium_paid: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1458,6 +1621,17 @@ pub struct MerchantWithdrawalEvent {
     pub schema_version: u32,
 }
 
+/// Audit event emitted when a merchant's address is rotated to a new one.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    pub admin: Address,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+    pub subscriptions_updated: u32,
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriberWithdrawalEvent {
@@ -1507,6 +1681,31 @@ pub struct MetadataDeletedEvent {
     pub subscription_id: u32,
     pub key: String,
     pub authorizer: Address,
+    pub schema_version: u32,
+}
+
+/// Off-chain-signed metadata update payload, applied via `set_metadata_signed`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SignedMetadataPayload {
+    pub subscription_id: u32,
+    pub key: String,
+    pub value: String,
+    /// Must equal the signer's next-expected nonce for the metadata-signed domain.
+    pub nonce: u64,
+    /// Ledger timestamp after which this payload is no longer valid.
+    pub expires_at: u64,
+}
+
+/// Event emitted when metadata is updated via an off-chain-signed payload.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MetadataSetSignedEvent {
+    pub subscription_id: u32,
+    pub key: String,
+    pub signer: Address,
+    pub nonce: u64,
+    pub timestamp: u64,
     pub schema_version: u32,
 }
 
@@ -1774,6 +1973,13 @@ pub struct MerchantConfig {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantMultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantPausedEvent {
     pub merchant: Address,
@@ -1891,10 +2097,17 @@ pub struct PrepaidQueryResult {
 }
 
 pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         amount.checked_mul(factor).ok_or(Error::Overflow)
@@ -1905,10 +2118,17 @@ pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128
 }
 
 pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         Ok(amount / factor)
@@ -1940,7 +2160,6 @@ mod known_keys_tests {
             (DataKey::EmergencyStop, true),
             (DataKey::MerchantPaused(a.clone()), true),
             (DataKey::BillingStatement(1, 2), false),
-            (DataKey::PayoutSchedule(a.clone()), false),
             (DataKey::TotalAccounted(a.clone()), true),
             (DataKey::Recovery(s.clone()), false),
             (DataKey::MerchantConfig(a.clone()), true),
@@ -1979,6 +2198,8 @@ mod known_keys_tests {
             (DataKey::NextDisputeId, true),
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
+            (DataKey::SubscriberActiveCount(a.clone()), true),
+            (DataKey::SubscriberActiveCapOverride(a.clone()), true),
         ]
     }
 
@@ -2014,7 +2235,7 @@ mod known_keys_tests {
 
     /// The debug guard must panic for an unknown key in test/debug builds.
     #[test]
-    #[should_panic(expected = "KNOWN_INSTANCE_KEY_DISCRIMINANTS")]
+    #[should_panic(expected = "Unknown or persistent key reached instance storage")]
     fn assert_panics_on_persistent_key() {
         // `Sub(u32)` (discriminant 6) is persistent and must never be written to
         // instance storage; the guard catches it.
@@ -2029,14 +2250,22 @@ mod known_keys_tests {
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
         let variants = all_variants(&env);
-        let n = variants.len();
-        let mut seen = vec![false; n];
+        let max_discriminant = variants
+            .iter()
+            .map(|(key, _)| key.canonical_discriminant())
+            .max()
+            .unwrap_or(0) as usize;
+        let mut seen = vec![false; max_discriminant + 1];
         for (key, _) in &variants {
             let d = key.canonical_discriminant() as usize;
-            assert!(!seen.contains(&d), "duplicate discriminant {d}");
-            seen.insert(d);
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..={}", n - 1);
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
         assert!(n > 0, "variant count must be non-zero");
     }
 
@@ -2067,7 +2296,5 @@ mod known_keys_tests {
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
-        assert!(seen.iter().all(|&s| s));
-        assert_eq!(variants.len(), 50);
     }
 }
