@@ -12,7 +12,7 @@
 use crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE;
 use crate::test_utils::setup::TestEnv;
 use crate::types::{BulkSubscriptionResult, Error, SubscriptionStatus, BATCH_MAX_SIZE};
-use soroban_sdk::{testutils::Address as _, vec, Address, Vec};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, vec, Address, Vec};
 
 const AMOUNT: i128 = 1_000;
 const INTERVAL: u64 = 24 * 60 * 60;
