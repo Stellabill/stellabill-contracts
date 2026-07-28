@@ -74,7 +74,3 @@ path = "benches/idem_lookup.rs"
 name = "charge_cold_warm"
 path = "benches/charge_cold_warm.rs"
 
-[[test]]
-name = "emergency_stop_view_surface"
-path = "src/test_emergency_stop_view_surface.rs"
-

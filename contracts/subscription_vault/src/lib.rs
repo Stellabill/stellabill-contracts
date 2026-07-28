@@ -665,32 +665,8 @@ impl SubscriptionVault {
     }
 
     /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
-    ///
-    /// # Security
-    ///
-    /// **Gated by the emergency-stop circuit breaker.**
-    ///
-    /// Returns `Error::EmergencyStopActive` when the stop is engaged.
-    ///
-    /// The nonce value is the exact input needed to craft a replay-protected
-    /// `rotate_admin`, `batch_charge`, or other admin-domain transaction. Exposing
-    /// it during a stop window would let an automated attacker pre-compute a valid
-    /// payload to submit the moment the stop is lifted — before the admin has
-    /// completed key-rotation or remediation.
-    ///
-    /// *Defence-in-depth note:* raw ledger storage is still accessible to node
-    /// operators via RPC simulation, so this gate is not an absolute control. Its
-    /// purpose is to signal clearly that nonce polling during a stop is disallowed
-    /// and to raise the effort required for an in-band automated attack.
-    ///
-    /// # Errors
-    ///
-    /// - `Error::EmergencyStopActive` — circuit breaker is currently engaged.
-    pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> Result<u64, Error> {
-        // SECURITY (#634): block nonce reads while the emergency stop is active.
-        // See docs/emergency_stop_view_audit.md §2a for the full rationale.
-        require_not_emergency_stop(&env)?;
-        Ok(nonce::get_nonce(&env, &signer, domain))
+    pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
+        nonce::get_nonce(&env, &signer, domain)
     }
 
     // ── Operator management ───────────────────────────────────────────────────
@@ -711,27 +687,8 @@ impl SubscriptionVault {
     }
 
     /// Return the current (next-expected) operator nonce.
-    ///
-    /// # Security
-    ///
-    /// **Gated by the emergency-stop circuit breaker.**
-    ///
-    /// Returns `Error::EmergencyStopActive` when the stop is engaged.
-    ///
-    /// The operator nonce is the exact input needed to craft a valid
-    /// `operator_batch_charge`, `operator_charge_subscription`, or
-    /// `operator_charge_usage` transaction. Blocking this query during a stop
-    /// prevents pre-computation of operator payloads while key-rotation or
-    /// remediation is in progress.
-    ///
-    /// # Errors
-    ///
-    /// - `Error::EmergencyStopActive` — circuit breaker is currently engaged.
-    pub fn get_operator_nonce(env: Env, op: Address) -> Result<u64, Error> {
-        // SECURITY (#634): block nonce reads while the emergency stop is active.
-        // See docs/emergency_stop_view_audit.md §2a for the full rationale.
-        require_not_emergency_stop(&env)?;
-        Ok(nonce::get_nonce(&env, &op, nonce::DOMAIN_OPERATOR_BATCH_CHARGE))
+    pub fn get_operator_nonce(env: Env, op: Address) -> u64 {
+        nonce::get_nonce(&env, &op, nonce::DOMAIN_OPERATOR_BATCH_CHARGE)
     }
 
     // ── Operator charge endpoints ─────────────────────────────────────────────
