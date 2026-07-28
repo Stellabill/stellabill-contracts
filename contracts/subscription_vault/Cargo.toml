@@ -69,3 +69,8 @@ path = "benches/ttl_extension.rs"
 [[test]]
 name = "idem_lookup"
 path = "benches/idem_lookup.rs"
+
+[[test]]
+name = "charge_cold_warm"
+path = "benches/charge_cold_warm.rs"
+

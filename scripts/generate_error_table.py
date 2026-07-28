@@ -120,6 +120,8 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "RateLimitExceeded":              ("Retry after the rate window resets (see configure_usage_limits).", "UsageLimitsConfiguredEvent", False),
     "UsageCapExceeded":               ("Retry only after new billing period begins or cap is raised.", "UsageLimitsConfiguredEvent", False),
     "BurstLimitExceeded":             ("Retry after burst_min_interval_secs elapses.", "UsageLimitsConfiguredEvent", False),
+    "SubscriberRateLimited":          ("Subscriber exceeded 24h subscription creation limit; retry after window resets.", "RateLimitTrippedEvent", False),
+    "UsageLimitsRequired":            ("Configure usage limits via configure_usage_limits before creating usage-enabled subscriptions.", "UsageLimitsConfiguredEvent", False),
     # Merchant config
     "InvalidFeeBips":                 ("Fix fee_bips to be in range [0, 10000].", "MerchantConfigUpdatedEvent", False),
     "InvalidOperations":              ("Fix allowed_operations bitmap to use only valid OP_* bits.", "MerchantConfigUpdatedEvent", False),
@@ -139,6 +141,14 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "DisputeWindowElapsed":           ("Check auto-resolution rules; dispute can now be resolved.", "—", False),
     "DisputeAlreadyOpen":             ("A dispute is already open for this subscription; wait for resolution.", "DisputeOpenedEvent", False),
     "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
+    # Coupon
+    "CouponNotFound":                 ("Verify the coupon code before retrying.", "—", False),
+    "CouponExpired":                  ("Coupon has expired; request a new coupon from the merchant.", "CouponCreatedEvent", False),
+    "CouponRedemptionLimitReached":   ("Coupon has reached its global redemption limit; merchant may create a new coupon.", "CouponCreatedEvent", False),
+    "CouponRevoked":                  ("Coupon was revoked by the merchant; choose a different coupon.", "CouponRevokedEvent", False),
+    "CouponAlreadyExists":            ("Choose a different coupon code and retry.", "CouponCreatedEvent", False),
+    "CouponAlreadyApplied":           ("Subscription already has a coupon bound; only one coupon per subscription.", "CouponAppliedEvent", False),
+    "CouponTokenMismatch":            ("Use a coupon whose token matches the subscription's settlement token.", "—", False),
     # Subscription Transfer
     "TransferIntentNotFound":         ("Verify transfer initiation or expiry before retrying.", "—", False),
     "TransferIntentExpired":          ("Transfer intent has expired; initiate a new transfer.", "—", False),

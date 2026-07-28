@@ -29,6 +29,8 @@ Defined in `contracts/subscription_vault/src/types.rs`:
 | `prepaid_balance` | `i128` | Current balance; increased by deposit, decreased by successful charge. |
 | `expiration` | `Option<u64>` | Optional ledger timestamp after which the subscription is expired. `None` means no expiry. Charging returns `Error::SubscriptionExpired` (4003) once `now >= expiration`. |
 | `usage_enabled` | `bool` | Usage flag (reserved for future use). |
+| `auto_renew` | `bool` | When `false`, the billing engine skips charges once the current interval elapses. Defaults to `true` on creation. See [auto_renew.md](auto_renew.md). |
+| `auto_renew_disabled_at` | `Option<u64>` | Ledger timestamp of the first `set_auto_renew(false)` call. Used to enforce the one-interval renewal window. `None` when auto-renewal is enabled. |
 
 The **status** field is the only one modified by the state machine. Other fields change only through specific operations: `prepaid_balance` and `last_payment_timestamp` change on deposit and charge; the rest are set at creation (or not changed). The `expiration` field is checked on every charge attempt; it does not trigger an automatic status change but blocks charging via `Error::SubscriptionExpired`.
 

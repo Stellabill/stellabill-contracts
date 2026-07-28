@@ -31,7 +31,7 @@ pub fn create_test_client<'a>(
 /// Advances the ledger's timestamp by `seconds`.
 #[allow(dead_code)]
 pub fn advance_ledger_by(env: &Env, seconds: u64) {
-    env.ledger().set_timestamp(env.ledger().timestamp() + seconds);
+    env.ledger().with_mut(|l| l.timestamp += seconds);
 }
 
 pub struct TestEnv {
@@ -73,29 +73,7 @@ impl TestEnv {
 
     #[allow(dead_code)]
     pub fn jump(&self, seconds: u64) {
-        self.env
-            .ledger()
-            .set_timestamp(self.env.ledger().timestamp() + seconds);
+        self.env.ledger().with_mut(|l| l.timestamp += seconds);
     }
 }
 
-pub fn setup_env() -> Env {
-    let env = Env::default();
-    env.mock_all_auths();
-    env
-}
-
-pub fn create_test_client<'a>(
-    env: &Env,
-    admin: &Address,
-    token: &Address,
-) -> SubscriptionVaultClient<'a> {
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(env, &contract_id);
-    client.init(token, &6, admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-    client
-}
-
-pub fn advance_ledger_by(env: &Env, seconds: u64) {
-    env.ledger().set_timestamp(env.ledger().timestamp() + seconds);
-}

@@ -71,6 +71,7 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 10004 | `DisputeWindowElapsed` | State transition | Dispute window has elapsed. | Check resolution rules. |
 | 10005 | `DisputeAlreadyOpen` | State transition | A dispute is already open for this subscription. | Wait for resolution or inspect existing dispute. |
 | 10006 | `DisputeAlreadyResponded` | State transition | Dispute is not in `Open` status. | Cannot respond twice. |
+| 12001 | `RenewalWindowClosed` | State transition | Re-enabling auto-renewal after the one-interval renewal window has elapsed. | Cancel and recreate the subscription. Do not retry `set_auto_renew(true)`. |
 
 ## Retry Guidance
 
@@ -179,7 +180,4 @@ Column definitions:
 | 11001 | `TransferIntentNotFound` | Unknown | `subscription.rs`, `test_subscription_transfer.rs` | Verify transfer initiation or expiry before retrying. | — |
 | 11002 | `TransferIntentExpired` | Unknown | `subscription.rs`, `test_subscription_transfer.rs` | Transfer intent has expired; initiate a new transfer. | — |
 | 11003 | `InvalidTransferTarget` | Unknown | `subscription.rs`, `test_subscription_transfer.rs` | Provide a valid target address (not self). | — |
-
-> **⚠ Undocumented variants** — the following variants are present in `types.rs` but have no entry in the script's `REMEDIATION` map: `CouponNotFound`, `CouponExpired`, `CouponRedemptionLimitReached`, `CouponRevoked`, `CouponAlreadyExists`, `CouponAlreadyApplied`, `CouponTokenMismatch`. Add them to `scripts/generate_error_table.py` to resolve this warning.
-
 <!-- GENERATED:entrypoint-table:end -->

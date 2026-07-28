@@ -1,17 +1,17 @@
 #![cfg(test)]
 
 use crate::{
-    test::setup_test_env,
+    test_utils::setup::TestEnv,
     types::{Error, UsageLimits},
 };
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol};
+use soroban_sdk::{testutils::Address as _, Address, String, Symbol};
 
 const AMOUNT: i128 = 10_000_000; // 1.0 USDC
 const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days
 
 #[test]
 fn test_usage_limits_required() {
-    let (env, client, _, _) = setup_test_env();
+    let TestEnv { env, client, .. } = TestEnv::default();
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
