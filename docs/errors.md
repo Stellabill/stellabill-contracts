@@ -114,7 +114,7 @@ Column definitions:
 | 1003 | `SubscriberBlocklisted` | Auth | `blocklist.rs`, `test.rs` | Escalate to admin/support flow; stop retrying. | BlocklistAddedEvent |
 | 1004 | `SelfRotation` | Auth | `admin.rs`, `test.rs`, `test_admin_transfer_auth.rs`, `test_governance.rs` | Fix request payload — new_admin must differ from current_admin. | — |
 | 1005 | `NonceAlreadyUsed` | Auth | `lib.rs`, `metadata.rs`, `nonce.rs`, `test.rs`, `test_bulk_admin_ops.rs`, `test_governance.rs`, `test_metadata_signed.rs`, `test_nonce_domains.rs`, `test_operator.rs` | Re-fetch nonce via get_admin_nonce / get_operator_nonce, then retry. | NonceConsumedEvent |
-| 1006 | `BatchTooLarge` | Auth | `lib.rs`, `subscription.rs`, `test_bulk_admin_ops.rs` | Reduce batch size and retry; check BATCH_MAX_SIZE. | — |
+| 1006 | `BatchTooLarge` | Auth | `lib.rs`, `subscription.rs`, `test_bulk_admin_ops.rs` | Reduce batch size to ≤ BATCH_MAX_SIZE entries and retry. | — |
 | 2001 | `NotFound` | Not Found | `admin.rs`, `blocklist.rs`, `governance.rs`, `lib.rs`, `merchant.rs`, `metadata.rs`, `queries.rs`, `subscription.rs`, `test.rs`, `test_bulk_admin_ops.rs`, `test_governance.rs`, `test_metadata_signed.rs`, `test_reentrancy_invariants.rs`, `test_require_auth.rs` | Verify identifiers before retrying. | — |
 | 2002 | `NotInitialized` | Not Found | `admin.rs` | Admin must call init before any other operation. | — |
 | 3001 | `InvalidAmount` | Invalid Args | `accounting.rs`, `admin.rs`, `charge_core.rs`, `dispute.rs`, `lib.rs`, `merchant.rs`, `subscription.rs`, `test.rs`, `test_reentrancy_invariants.rs`, `test_require_auth.rs` | Fix input; amount must be > 0. | — |
@@ -124,7 +124,7 @@ Column definitions:
 | 3005 | `MetadataKeyTooLong` | Invalid Args | `lib.rs`, `metadata.rs`, `test_metadata_signed.rs` | Trim key to ≤ MAX_METADATA_KEY_LENGTH bytes and retry. | — |
 | 3006 | `MetadataValueTooLong` | Invalid Args | `lib.rs`, `metadata.rs`, `test_metadata_signed.rs` | Trim value to ≤ MAX_METADATA_VALUE_LENGTH bytes and retry. | — |
 | 3007 | `OraclePriceInvalid` | Invalid Args | `oracle_adapter.rs`, `test.rs` | Treat as terminal for this request; investigate oracle data feed. | OracleConfigUpdatedEvent |
-| 3008 | `InvalidExpiration` | Invalid Args | `subscription.rs`, `test_expiration.rs` | Fix expiration timestamp; must be strictly in the future. | — |
+| 3008 | `InvalidExpiration` | Invalid Args | `subscription.rs`, `test_expiration.rs` | Fix expires_at to a future ledger timestamp and retry. | — |
 | 4001 | `InvalidStatusTransition` | State Transition | `lib.rs`, `period_snapshots.rs`, `state_machine.rs`, `subscription.rs`, `test.rs`, `test_billing_period_snapshots.rs` | Refresh subscription state before presenting the next action. | — |
 | 4002 | `NotActive` | State Transition | `charge_core.rs`, `subscription.rs`, `test.rs`, `test_operator.rs`, `test_reentrancy_invariants.rs`, `test_subscription_status_transitions.rs` | Refresh state; do not blindly retry. | — |
 | 4003 | `SubscriptionExpired` | State Transition | `charge_core.rs`, `subscription.rs`, `test_bulk_admin_ops.rs`, `test_expiration.rs` | Stop retrying mutating operations on this subscription. | SubscriptionExpiredEvent |
@@ -135,7 +135,7 @@ Column definitions:
 | 4008 | `AlreadyInitialized` | State Transition | `admin.rs`, `test.rs` | Do not retry; contract is already set up. | — |
 | 4009 | `MerchantPaused` | State Transition | `charge_core.rs`, `subscription.rs` | Retry only after merchant pause is removed (unpause_merchant). | MerchantUnpausedEvent |
 | 4010 | `Reentrancy` | State Transition | `reentrancy.rs` | Treat as a security failure; investigate calling path immediately. | — |
-| 4011 | `NotInGracePeriod` | State Transition | `subscription.rs`, `test_grace_buyout.rs` | Only subscriptions in GracePeriod can use this operation; resume or wait for grace. | SubscriptionResumedEvent |
+| 4011 | `NotInGracePeriod` | State Transition | `subscription.rs`, `test_grace_buyout.rs` | Refresh state; a grace-period buyout is only legal when status == GracePeriod. | — |
 | 5001 | `InsufficientBalance` | Accounting | `admin.rs`, `dispute.rs`, `lib.rs`, `merchant.rs`, `subscription.rs`, `test.rs`, `test_grace_buyout.rs`, `test_recovery.rs`, `test_reentrancy_invariants.rs` | Retry only after subscriber deposits funds via deposit_funds. | FundsDepositedEvent |
 | 5002 | `InsufficientPrepaidBalance` | Accounting | `charge_core.rs`, `subscription.rs`, `test.rs` | Top up subscription via deposit_funds, then retry. | FundsDepositedEvent |
 | 5003 | `BelowMinimumTopup` | Accounting | `subscription.rs`, `test.rs` | Increase deposit amount above get_min_topup() threshold and retry. | — |
@@ -154,19 +154,19 @@ Column definitions:
 | 6008 | `RateLimitExceeded` | Limits | — | Retry after the rate window resets (see configure_usage_limits). | UsageLimitsConfiguredEvent |
 | 6009 | `UsageCapExceeded` | Limits | — | Retry only after new billing period begins or cap is raised. | UsageLimitsConfiguredEvent |
 | 6010 | `BurstLimitExceeded` | Limits | — | Retry after burst_min_interval_secs elapses. | UsageLimitsConfiguredEvent |
-| 6011 | `CouponNotFound` | Limits | `coupon.rs` | Verify the coupon code before retrying. | — |
-| 6012 | `CouponExpired` | Limits | `coupon.rs`, `test_coupon.rs` | Coupon has expired; request a new coupon from the merchant. | CouponCreatedEvent |
-| 6013 | `CouponRedemptionLimitReached` | Limits | `coupon.rs`, `test_coupon.rs` | Coupon has reached its global redemption limit; merchant may create a new coupon. | CouponCreatedEvent |
-| 6014 | `CouponRevoked` | Limits | `coupon.rs`, `test_coupon.rs` | Coupon was revoked by the merchant; choose a different coupon. | CouponRevokedEvent |
-| 6015 | `CouponAlreadyExists` | Limits | `coupon.rs`, `test_coupon.rs` | Choose a different coupon code and retry. | CouponCreatedEvent |
-| 6016 | `CouponAlreadyApplied` | Limits | `coupon.rs`, `test_coupon.rs` | Subscription already has a coupon bound; only one coupon per subscription. | CouponAppliedEvent |
-| 6017 | `CouponTokenMismatch` | Limits | `coupon.rs`, `test_coupon.rs` | Use a coupon whose token matches the subscription's settlement token. | — |
-| 6019 | `SubscriberRateLimited` | Limits | `subscription.rs`, `test.rs` | Subscriber exceeded 24h subscription creation limit; retry after window resets. | RateLimitTrippedEvent |
-| 6020 | `UsageLimitsRequired` | Limits | `subscription.rs`, `test_usage_limits_required.rs` | Configure usage limits via configure_usage_limits before creating usage-enabled subscriptions. | UsageLimitsConfiguredEvent |
+| 6011 | `CouponNotFound` | Limits | `coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6012 | `CouponExpired` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6013 | `CouponRedemptionLimitReached` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6014 | `CouponRevoked` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6015 | `CouponAlreadyExists` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6016 | `CouponAlreadyApplied` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6017 | `CouponTokenMismatch` | Limits | `coupon.rs`, `test_coupon.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
+| 6019 | `SubscriberRateLimited` | Limits | `subscription.rs`, `test.rs` | Retry after the per-subscriber rolling 24-hour subscription-creation window resets; throttle limit is configurable. | — |
+| 6020 | `UsageLimitsRequired` | Limits | `subscription.rs`, `test_usage_limits_required.rs` | Configure UsageLimits on the subscription via configure_usage_limits before enabling usage-based charges. | UsageLimitsConfiguredEvent |
 | 7001 | `InvalidFeeBips` | Merchant Config | `merchant.rs` | Fix fee_bips to be in range [0, 10000]. | MerchantConfigUpdatedEvent |
 | 7002 | `InvalidOperations` | Merchant Config | `merchant.rs` | Fix allowed_operations bitmap to use only valid OP_* bits. | MerchantConfigUpdatedEvent |
 | 7003 | `MustAllowChargeOperation` | Merchant Config | `merchant.rs` | Set OP_CHARGE bit in allowed_operations; merchants must accept charges. | MerchantConfigUpdatedEvent |
-| 7004 | `MerchantNotApproved` | Merchant Config | `merchant.rs`, `test_merchant_whitelist.rs` | Merchant is not whitelisted; admin must approve via merchant config. | MerchantConfigInitializedEvent |
+| 7004 | `MerchantNotApproved` | Merchant Config | `merchant.rs`, `test_merchant_whitelist.rs` | Admin must approve merchant via approve_merchant before subscription creation, or disable whitelist_mode before retrying. | — |
 | 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs` | Fix token_decimals; must be in [1, 19]. | — |
 | 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs` | Provide an accepted token address from list_accepted_tokens. | — |
 | 9001 | `CannotChangeUsageMode` | Subscription Update | `subscription.rs` | Cannot toggle usage_enabled on an existing subscription; create a new one. | — |
