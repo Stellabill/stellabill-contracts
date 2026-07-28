@@ -6,7 +6,7 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 
 ## Table of contents
 
-- [Threat model](#threat-model)
+- [Threat model and audit anchor](#threat-model-and-audit-anchor)
 - [What’s in this repo](#whats-in-this-repo)
 - [Prerequisites](#prerequisites)
 - [Local setup](#local-setup)
@@ -17,9 +17,9 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 
 ---
 
-## Threat model
+## Threat model and audit anchor
 
-This repository is anchored by a top-level threat model that defines the trust boundaries, adversary assumptions, and mitigations for the `subscription_vault` contract. It is intended to serve as the primary reference for future audits and security reviews.
+This section is the top-level security reference for the subscription vault and should be treated as the anchor document for future audits, reviews, and incident response. It complements the deeper guidance in [docs/security.md](docs/security.md) and should be read alongside the lifecycle and reentrancy notes in the docs directory.
 
 ### Actors and trust boundaries
 
@@ -62,6 +62,7 @@ This repository is anchored by a top-level threat model that defines the trust b
 - **Admin key compromise**: a compromised admin is treated as a high-severity threat. Mitigations include immediate admin rotation, strong auth checks, and audit-event emission for all admin operations.
 
 For deeper details, see [docs/security.md](docs/security.md).
+
 
 ## What’s in this repo
 
