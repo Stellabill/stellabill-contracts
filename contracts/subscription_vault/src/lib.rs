@@ -116,6 +116,8 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_admin_rotation_two_step;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -124,7 +126,9 @@ pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
 pub use queries::{compute_next_charge_info, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE};
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
@@ -270,7 +274,7 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
-    // Updates the admin address.
+    /// Updates the admin address.
     ///
     /// This change happens immediately, so make sure the new address is correct.
     ///
@@ -278,6 +282,56 @@ impl SubscriptionVault {
     /// - `Unauthorized` if caller is not current admin
     pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin)
+    }
+
+    /// Propose a new admin as part of the two-step admin rotation flow.
+    ///
+    /// Creates a proposal that the `new_admin` must claim within 7 days via
+    /// [`claim_admin_role`](Self::claim_admin_role). The current admin can cancel
+    /// the proposal at any time via [`cancel_admin_proposal`](Self::cancel_admin_proposal).
+    ///
+    /// Only one proposal may be active at a time.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `InvalidNewAdmin` if `new_admin` is the contract address
+    /// - `ProposalAlreadyExists` if a proposal is already pending
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim the admin role after a proposal has been created by the current admin.
+    ///
+    /// The claimant must match the `new_admin` address in the proposal, and the
+    /// 7-day claim window must not have expired. On success the stored admin is
+    /// atomically swapped and the proposal is consumed.
+    ///
+    /// # Errors
+    /// - `ProposalNotFound` if no proposal exists
+    /// - `ProposalExpired` if the 7-day window has elapsed
+    /// - `InvalidClaimant` if the caller is not the proposed new admin
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal.
+    ///
+    /// Only the current admin may cancel. The proposal is removed from storage
+    /// and a cancellation event is emitted. After cancellation a new proposal
+    /// may be created.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `NoActiveProposal` if there is no proposal to cancel
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Read the current admin proposal, if any.
+    ///
+    /// Returns `None` when no proposal is active.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
     }
 
     /// Allows the admin to recover funds that are not tied to any subscription.

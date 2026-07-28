@@ -274,6 +274,16 @@ pub enum Error {
     SelfRotation = 1036,
     /// The provided new admin address is invalid.
     InvalidNewAdmin = 1037,
+    /// No admin proposal exists for claiming.
+    ProposalNotFound = 1038,
+    /// The admin proposal window has expired.
+    ProposalExpired = 1039,
+    /// The claimant does not match the proposed new admin.
+    InvalidClaimant = 1040,
+    /// An admin proposal is already active; cancel it first.
+    ProposalAlreadyExists = 1041,
+    /// No active proposal to cancel.
+    NoActiveProposal = 1042,
 }
 
 impl Error {
@@ -321,6 +331,11 @@ impl Error {
             Error::BurstLimitExceeded => 1035,
             Error::SelfRotation => 1036,
             Error::InvalidNewAdmin => 1037,
+            Error::ProposalNotFound => 1038,
+            Error::ProposalExpired => 1039,
+            Error::InvalidClaimant => 1040,
+            Error::ProposalAlreadyExists => 1041,
+            Error::NoActiveProposal => 1042,
         }
     }
 }
@@ -614,6 +629,44 @@ pub struct EmergencyStopEnabledEvent {
 pub struct AdminRotatedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+/// Two-step admin proposal stored when `propose_admin` is called.
+///
+/// The proposal must be claimed by `new_admin` before `expires_at`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposal {
+    pub new_admin: Address,
+    pub proposed_at: u64,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a two-step admin proposal is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalCreatedEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a two-step admin proposal is claimed (rotation completes).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalClaimedEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a two-step admin proposal is cancelled by the current admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalCancelledEvent {
+    pub admin: Address,
     pub timestamp: u64,
 }
 

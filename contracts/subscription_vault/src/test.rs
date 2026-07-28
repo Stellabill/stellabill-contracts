@@ -2976,7 +2976,6 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
         &None::<u64>,
     );
 
@@ -3017,7 +3016,6 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
         &None::<u64>,
     );
 
