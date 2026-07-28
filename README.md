@@ -6,6 +6,7 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 
 ## Table of contents
 
+- [Threat model and audit anchor](#threat-model-and-audit-anchor)
 - [What’s in this repo](#whats-in-this-repo)
 - [Prerequisites](#prerequisites)
 - [Local setup](#local-setup)
@@ -13,6 +14,58 @@ Soroban smart contracts for **Stellabill** — prepaid USDC subscription billing
 - [Contributing (open source)](#contributing-open-source)
 - [Project layout](#project-layout)
 - [License](#license)
+
+---
+
+## Threat model and audit anchor
+
+This section is the top-level security reference for the subscription vault and should be treated as the anchor document for future audits, reviews, and incident response. It complements the deeper guidance in [docs/security.md](docs/security.md) and should be read alongside the lifecycle and reentrancy notes in the docs directory.
+
+### Trust boundaries
+
+| Boundary | Primary actors | Trust level | Main concerns | Primary mitigations |
+|----------|----------------|-------------|--------------|---------------------|
+| Admin | Contract admin and upgrade/operational controllers | High privilege, minimal trust | Unauthorized state changes, compromised admin keys, excessive charging or threshold changes | Require explicit auth for privileged entrypoints, keep admin actions narrow, rotate admin keys, and prefer multisig or timelocked controls for critical operations. |
+| Merchant | Subscription merchant receiving payouts | Semi-trusted | Attempting to withdraw more than earned balance, exploiting cross-subscription accounting | Enforce owner checks, validate balances before transfer, and keep withdrawals bounded to the merchant’s accrued funds. |
+| Subscriber | Subscription owner who deposits funds and manages lifecycle | Semi-trusted | Replaying state transitions, circumventing billing windows, attempting invalid status changes | Validate lifecycle transitions, enforce auth per subscription owner, and ensure billing windows and balances are checked before each charge. |
+| Oracle | Optional external price/feed provider for future pricing logic | Untrusted unless cryptographically verified | Stale, manipulated, or inconsistent data | Use freshness windows, bounded price deltas, authentication/signature checks, and fail-closed behavior when data is invalid. |
+| Token contracts | USDC/SAC or any token used for custody and transfers | Untrusted | Reentrancy callbacks, transfer failure, arbitrary token semantics, upgradeable token behavior | Follow CEI ordering, update internal state before external calls, verify balances before transfer, and assume external token logic may behave unexpectedly. |
+
+### Assumed adversary capabilities
+
+The threat model assumes an attacker can:
+
+- Call public entrypoints with arbitrary addresses and attempt to exploit missing or weak authorization.
+- Re-enter the contract or trigger callbacks through token contracts or upgradeable token behavior.
+- Attempt to replay or duplicate charges, manipulate subscription state, or force invalid lifecycle transitions.
+- Exploit arithmetic edge cases such as underflow, overflow, or balance mismatches.
+- Abuse compromised admin keys, stale admin roles, or unauthorized upgrades if they are introduced.
+- Introduce oracle drift, stale price data, or inconsistent data feeds where pricing logic depends on external oracles.
+- Spam the contract with many subscriptions or state changes to increase gas or storage pressure.
+
+### Data classes and event surface
+
+The security properties of the vault depend on a small set of sensitive data classes:
+
+- Subscription state: subscriber, merchant, amount, interval, status, timestamps, prepaid balance, and expiry.
+- Configuration and authorization: admin identity, minimum top-up thresholds, and other operational parameters.
+- Financial state: internal vault balances, merchant withdrawal claims, and balance deltas caused by deposits or charges.
+- External dependencies: token transfer results, oracle inputs, and any future upgrade metadata.
+
+For every state-changing operation, the implementation should emit auditable events that make it possible to reconstruct who acted, what changed, and whether the operation succeeded or failed. At minimum, the event surface should cover subscription creation, funding, charging, cancellation, pausing, resuming, merchant withdrawals, and admin rotation or emergency actions.
+
+### Mitigations by module
+
+- Auth and admin controls: use explicit signer checks, owner validation, and admin rotation paths that remove stale permissions immediately.
+- Billing and lifecycle logic: enforce status-transition rules, check time windows before charging, and prevent double charging or replayed operations.
+- Accounting and safety: use checked arithmetic, validate balances before and after state changes, and ensure any transfer is safe and bounded.
+- Token interaction safety: prefer CEI ordering, preserve internal state before external calls, and treat token contracts as potentially adversarial.
+- Oracle hardening (future): require freshness, signatures or attestation, bounded price deltas, and fail-safe behavior when inputs are invalid.
+- Operational resilience: keep a documented incident response path, protect admin keys, and prefer multisig or timelocked controls for high-impact actions.
+
+### Security assumptions and review checklist
+
+This model assumes the underlying Soroban runtime enforces authorization correctly, the token contract behaves deterministically for transfer semantics, and state updates are committed atomically. The implementation should be reviewed against these assumptions whenever auth, token transfers, accounting, or upgrade paths change. A future audit should verify that the contract remains fail-safe under admin compromise, token callback abuse, replay attempts, stale oracle data, and arithmetic edge conditions.
 
 ---
 
