@@ -53,6 +53,10 @@ pub enum DataKey {
     UsageLimits(u32),
     /// Running usage state for a subscription within the current window.
     UsageState(u32),
+    /// Per-token oracle price history metadata (head index + count).
+    OraclePriceHistoryMeta(Address),
+    /// Individual price entry in the ring buffer (`slot` in 0..ORACLE_PRICE_HISTORY_SIZE).
+    OraclePriceHistoryEntry(Address, u32),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -274,6 +278,8 @@ pub enum Error {
     SelfRotation = 1036,
     /// The provided new admin address is invalid.
     InvalidNewAdmin = 1037,
+    /// Oracle price deviation exceeds configured threshold (circuit breaker).
+    OracleDeviationTooHigh = 1038,
 }
 
 impl Error {
@@ -321,6 +327,7 @@ impl Error {
             Error::BurstLimitExceeded => 1035,
             Error::SelfRotation => 1036,
             Error::InvalidNewAdmin => 1037,
+            Error::OracleDeviationTooHigh => 1038,
         }
     }
 }
@@ -589,6 +596,28 @@ pub struct OraclePrice {
     /// Quote units per 1 token.
     pub price: i128,
     /// Timestamp when quote was published by oracle.
+    pub timestamp: u64,
+}
+
+/// Ring-buffer metadata for a per-token oracle price history window.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceHistoryMeta {
+    /// Current write index in the ring buffer (0..ORACLE_PRICE_HISTORY_SIZE).
+    pub head: u32,
+    /// Total samples written (capped at ORACLE_PRICE_HISTORY_SIZE for read semantics).
+    pub count: u32,
+}
+
+/// Event emitted when an oracle price is rejected by the deviation circuit breaker.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleDeviationBreakerEvent {
+    pub token: Address,
+    pub latest_price: i128,
+    pub median_price: i128,
+    pub deviation_bps: u64,
+    pub threshold_bps: u32,
     pub timestamp: u64,
 }
 
@@ -927,35 +956,6 @@ pub struct MerchantConfig {
     pub is_paused: bool,      // Global pause for all merchant plans
 }
 
-/// Aggregated billing totals used in compaction and earnings records.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
-}
-
-/// Per-token earnings record for a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Reconciliation snapshot for a single token bucket held by a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-}
-
 /// Event emitted when a merchant enables their blanket pause.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -980,41 +980,23 @@ pub struct MerchantRefundEvent {
     pub amount: i128,
 }
 
-/// Breakdown of a merchant's accrued earnings by charge kind.
+/// Event emitted when protocol fee configuration is changed.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    /// Total earned from interval charges.
-    pub interval: i128,
-    /// Total earned from usage charges.
-    pub usage: i128,
-    /// Total earned from one-off charges.
-    pub one_off: i128,
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub timestamp: u64,
 }
 
-/// Accumulated earnings for a merchant for a single token.
+/// Event emitted when a protocol fee is charged on a subscription.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    /// Accrued charge totals broken down by kind.
-    pub accruals: AccruedTotals,
-    /// Total amount withdrawn by the merchant.
-    pub withdrawals: i128,
-    /// Total amount refunded to subscribers.
-    pub refunds: i128,
-}
-
-/// A reconciliation snapshot for one token, returned by `get_reconciliation_snapshot`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    /// Sum of all charges accrued (interval + usage + one_off).
-    pub total_accruals: i128,
-    /// Sum of all withdrawals.
-    pub total_withdrawals: i128,
-    /// Sum of all subscriber refunds.
-    pub total_refunds: i128,
-    /// Computed balance = total_accruals - withdrawals - refunds.
-    pub computed_balance: i128,
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
 }

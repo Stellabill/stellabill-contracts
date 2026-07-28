@@ -91,8 +91,6 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
@@ -131,7 +129,8 @@ pub use types::{
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    OracleDeviationBreakerEvent, OraclePrice, OraclePriceHistoryMeta, PartialRefundEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
     ProtocolFeeConfiguredEvent, RecoveryEvent,
     RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
@@ -1753,6 +1752,46 @@ impl SubscriptionVault {
     /// Read the currently configured oracle integration settings.
     pub fn get_oracle_config(env: Env) -> OracleConfig {
         oracle::get_oracle_config(&env)
+    }
+
+// ── Oracle Deviation Circuit Breaker ──────────────────────────────────────────
+
+    /// Configure the oracle price deviation circuit-breaker threshold.
+    ///
+    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
+    /// When the latest oracle price deviates from the median of the last N
+    /// samples by more than this amount, the charge is rejected with
+    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
+    /// is emitted.
+    ///
+    /// A value of `0` rejects **any** price change (strict mode).
+    /// When never called, the deviation check is disabled entirely.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the admin.
+    pub fn set_oracle_deviation_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_deviation_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Return the current deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
+        oracle::get_oracle_deviation_bps(&env)
+    }
+
+    /// Return the recorded oracle price history for a token (insertion order).
+    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
+        oracle::get_oracle_price_history(&env, &token)
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────

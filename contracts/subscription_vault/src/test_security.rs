@@ -88,7 +88,7 @@ fn test_pause_subscription_unauthorized_stranger() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #401)")]
+#[should_panic(expected = "Error(Contract, #403)")]
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_security_env();
     let stranger = Address::generate(&env);
