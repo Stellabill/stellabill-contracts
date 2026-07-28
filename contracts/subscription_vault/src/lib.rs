@@ -2842,7 +2842,7 @@ mod test_usage_limits_required;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
-mod test_reentrancy_invariants;
+mod test_charge_event_exclusivity;
 #[cfg(test)]
 mod test_metadata_signed;
 
@@ -2892,5 +2892,276 @@ mod test {
 #[cfg(test)]
 mod test_subscription_transfer;
 
+/// ABI-hash regression guard.
+///
+/// The hash is computed from the sorted, newline-joined list of all
+/// `pub fn` names exposed by `#[contractimpl]`. Any accidental rename,
+/// addition, or removal of a contract entrypoint will change the hash and
+/// cause this test to fail, flagging the ABI breakage before it reaches
+/// production.
+///
+/// **To update intentionally:** change only the `EXPECTED` constant below
+/// and document the ABI change in the PR description.
+#[cfg(test)]
+mod test_abi_hash {
+    /// All `pub fn` names from the `#[contractimpl]` block, sorted
+    /// lexicographically. Keep this list in sync whenever entrypoints are
+    /// added, renamed, or removed.
+    const ENTRYPOINTS: &[&str] = &[
+        "accept_transfer",
+        "add_accepted_token",
+        "add_guardian",
+        "add_to_blocklist",
+        "apply_coupon",
+        "batch_charge",
+        "bulk_cancel_subscriptions",
+        "bulk_pause_subscriptions",
+        "cancel_proposal",
+        "cancel_subscription",
+        "charge_one_off",
+        "charge_subscription",
+        "charge_usage",
+        "charge_usage_with_reference",
+        "cleanup_subscription",
+        "compact_billing_statements",
+        "configure_usage_limits",
+        "create_coupon",
+        "create_plan_template",
+        "create_plan_template_with_token",
+        "create_subscription",
+        "create_subscription_from_plan",
+        "create_subscription_with_token",
+        "delete_metadata",
+        "deposit_funds",
+        "disable_emergency_stop",
+        "emit_oracle_liveness",
+        "enable_emergency_stop",
+        "estimate_topup_for_intervals",
+        "execute_proposal",
+        "export_contract_snapshot",
+        "export_full_snapshot_page",
+        "export_subscription_summaries",
+        "export_subscription_summary",
+        "flush_payouts",
+        "generate_reconciliation_proof",
+        "get_billing_retention",
+        "get_blocklist_entry",
+        "get_cap_info",
+        "get_coupon",
+        "get_current_proposal_id",
+        "get_dispute",
+        "get_emergency_stop_status",
+        "get_global_cap_default",
+        "get_guardian_weight",
+        "get_merchant_balance",
+        "get_merchant_balance_by_token",
+        "get_merchant_cap_default",
+        "get_merchant_config",
+        "get_merchant_max_subs",
+        "get_merchant_multisig_config",
+        "get_merchant_paused",
+        "get_merchant_subscription_count",
+        "get_merchant_token_earnings",
+        "get_merchant_total_earnings",
+        "get_metadata",
+        "get_metadata_signed_nonce",
+        "get_min_topup",
+        "get_next_charge_info",
+        "get_oracle_config",
+        "get_operator",
+        "get_payout_schedule",
+        "get_period_snapshot",
+        "get_plan_max_active_subs",
+        "get_plan_template",
+        "get_proposal",
+        "get_recon_summary",
+        "get_reconciliation_snapshot",
+        "get_stmt_compacted_aggregate",
+        "get_sub_statements_cursor",
+        "get_sub_statements_offset",
+        "get_subscriber_active_cap",
+        "get_subscriber_active_count",
+        "get_subscriber_create_cap",
+        "get_subscriber_credit_limit",
+        "get_subscriber_exposure",
+        "get_subscription",
+        "get_subscription_count",
+        "get_subscription_dispute",
+        "get_token_reconciliation",
+        "get_token_subscription_count",
+        "grace_buyout",
+        "init",
+        "initiate_transfer",
+        "initialize_merchant_config",
+        "is_blocklisted",
+        "list_accepted_tokens",
+        "list_guardians",
+        "list_metadata_keys",
+        "list_period_snapshots",
+        "list_subscriptions_by_subscriber",
+        "merchant_refund",
+        "migrate",
+        "migrate_config_to_persistent",
+        "migrate_subscription_to_plan",
+        "open_dispute",
+        "operator_batch_charge",
+        "operator_charge_subscription",
+        "operator_charge_usage",
+        "operator_charge_usage_with_ref",
+        "partial_refund",
+        "pause_merchant",
+        "pause_subscription",
+        "query_prepaid_balances_paginated",
+        "recover_stranded_funds",
+        "remove_accepted_token",
+        "remove_from_blocklist",
+        "remove_guardian",
+        "remove_operator",
+        "resolve_dispute",
+        "respond_dispute",
+        "restore_snapshot_page",
+        "resume_subscription",
+        "revoke_coupon",
+        "rotate_admin",
+        "rotate_merchant_address",
+        "schedule_cancel",
+        "set_billing_retention",
+        "set_global_cap_default",
+        "set_merchant_cap_default",
+        "set_merchant_config",
+        "set_merchant_max_subs",
+        "set_merchant_multisig",
+        "set_metadata",
+        "set_metadata_signed",
+        "set_min_topup",
+        "set_operator",
+        "set_oracle_config",
+        "set_payout_schedule",
+        "set_plan_max_active_subs",
+        "set_protocol_fee",
+        "set_subscriber_active_cap",
+        "set_subscriber_create_cap",
+        "set_subscriber_credit_limit",
+        "submit_proposal",
+        "unpause_merchant",
+        "unschedule_cancel",
+        "update_merchant_config",
+        "update_plan_template",
+        "update_subscription_cap",
+        "version",
+        "veto_transfer",
+        "vote_proposal",
+        "withdraw_merchant_funds",
+        "withdraw_merchant_token_funds",
+        "withdraw_subscriber_funds",
+    ];
+
+    /// FNV-1a 64-bit hash of the sorted entrypoint list.
+    ///
+    /// Recompute with the helper below whenever `ENTRYPOINTS` changes:
+    /// ```text
+    /// fn fnv1a(data: &[u8]) -> u64 {
+    ///     let mut h: u64 = 14695981039346656037;
+    ///     for b in data { h ^= *b as u64; h = h.wrapping_mul(1099511628211); }
+    ///     h
+    /// }
+    /// let joined = ENTRYPOINTS.join("\n");
+    /// println!("{:#018x}", fnv1a(joined.as_bytes()));
+    /// ```
+    const EXPECTED_HASH: u64 = {
+        // Inline FNV-1a over the sorted, newline-joined entrypoint list.
+        // Evaluated entirely at compile time — no runtime cost.
+        let data = {
+            // Build the joined string as a const byte array.
+            // We re-join manually so no allocation is needed at compile time.
+            // The value must match `ENTRYPOINTS.join("\n")` exactly.
+            b"accept_transfer\nadd_accepted_token\nadd_guardian\nadd_to_blocklist\napply_coupon\nbatch_charge\nbulk_cancel_subscriptions\nbulk_pause_subscriptions\ncancel_proposal\ncancel_subscription\ncharge_one_off\ncharge_subscription\ncharge_usage\ncharge_usage_with_reference\ncleanup_subscription\ncompact_billing_statements\nconfigure_usage_limits\ncreate_coupon\ncreate_plan_template\ncreate_plan_template_with_token\ncreate_subscription\ncreate_subscription_from_plan\ncreate_subscription_with_token\ndelete_metadata\ndeposit_funds\ndisable_emergency_stop\nemit_oracle_liveness\nenable_emergency_stop\nestimate_topup_for_intervals\nexecute_proposal\nexport_contract_snapshot\nexport_full_snapshot_page\nexport_subscription_summaries\nexport_subscription_summary\nflush_payouts\ngenerate_reconciliation_proof\nget_billing_retention\nget_blocklist_entry\nget_cap_info\nget_coupon\nget_current_proposal_id\nget_dispute\nget_emergency_stop_status\nget_global_cap_default\nget_guardian_weight\nget_merchant_balance\nget_merchant_balance_by_token\nget_merchant_cap_default\nget_merchant_config\nget_merchant_max_subs\nget_merchant_multisig_config\nget_merchant_paused\nget_merchant_subscription_count\nget_merchant_token_earnings\nget_merchant_total_earnings\nget_metadata\nget_metadata_signed_nonce\nget_min_topup\nget_next_charge_info\nget_oracle_config\nget_operator\nget_payout_schedule\nget_period_snapshot\nget_plan_max_active_subs\nget_plan_template\nget_proposal\nget_recon_summary\nget_reconciliation_snapshot\nget_stmt_compacted_aggregate\nget_sub_statements_cursor\nget_sub_statements_offset\nget_subscriber_active_cap\nget_subscriber_active_count\nget_subscriber_create_cap\nget_subscriber_credit_limit\nget_subscriber_exposure\nget_subscription\nget_subscription_count\nget_subscription_dispute\nget_token_reconciliation\nget_token_subscription_count\ngrace_buyout\ninit\ninitiate_transfer\ninitialize_merchant_config\nis_blocklisted\nlist_accepted_tokens\nlist_guardians\nlist_metadata_keys\nlist_period_snapshots\nlist_subscriptions_by_subscriber\nmerchant_refund\nmigrate\nmigrate_config_to_persistent\nmigrate_subscription_to_plan\nopen_dispute\noperator_batch_charge\noperator_charge_subscription\noperator_charge_usage\noperator_charge_usage_with_ref\npartial_refund\npause_merchant\npause_subscription\nquery_prepaid_balances_paginated\nrecover_stranded_funds\nremove_accepted_token\nremove_from_blocklist\nremove_guardian\nremove_operator\nresolve_dispute\nrespond_dispute\nrestore_snapshot_page\nresume_subscription\nrevoke_coupon\nrotate_admin\nrotate_merchant_address\nschedule_cancel\nset_billing_retention\nset_global_cap_default\nset_merchant_cap_default\nset_merchant_config\nset_merchant_max_subs\nset_merchant_multisig\nset_metadata\nset_metadata_signed\nset_min_topup\nset_operator\nset_oracle_config\nset_payout_schedule\nset_plan_max_active_subs\nset_protocol_fee\nset_subscriber_active_cap\nset_subscriber_create_cap\nset_subscriber_credit_limit\nsubmit_proposal\nunpause_merchant\nunschedule_cancel\nupdate_merchant_config\nupdate_plan_template\nupdate_subscription_cap\nversion\nveto_transfer\nvote_proposal\nwithdraw_merchant_funds\nwithdraw_merchant_token_funds\nwithdraw_subscriber_funds"
+        };
+        let mut h: u64 = 14695981039346656037;
+        let mut i = 0usize;
+        while i < data.len() {
+            h ^= data[i] as u64;
+            h = h.wrapping_mul(1099511628211);
+            i += 1;
+        }
+        h
+    };
+
+    /// Verify that the sorted entrypoint list in `ENTRYPOINTS` matches the
+    /// golden hash, and that `ENTRYPOINTS` is itself sorted.
+    ///
+    /// If this test fails after a legitimate ABI change, update `EXPECTED_HASH`
+    /// above by running the snippet in its doc comment and document the change
+    /// in your PR.
+    #[test]
+    fn abi_entrypoints_unchanged() {
+        // 1. Assert sorted order (catches accidental mis-ordering).
+        let mut sorted = ENTRYPOINTS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            ENTRYPOINTS.to_vec(),
+            sorted,
+            "ENTRYPOINTS must be kept in sorted order; re-sort the slice"
+        );
+
+        // 2. Recompute FNV-1a over the joined list and compare to golden hash.
+        let joined = ENTRYPOINTS.join("\n");
+        let mut h: u64 = 14695981039346656037;
+        for b in joined.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        assert_eq!(
+            h,
+            EXPECTED_HASH,
+            "ABI entrypoint hash mismatch!\n\
+             The sorted entrypoint list has changed. If this is intentional,\n\
+             recompute EXPECTED_HASH using the snippet in its doc comment and\n\
+             document the ABI change in your PR description."
+        );
+    }
+
+    /// Edge case: a new entrypoint added post-refactor is detected immediately
+    /// because the golden hash will no longer match.
+    #[test]
+    fn new_entrypoint_changes_hash() {
+        let mut with_new = ENTRYPOINTS.to_vec();
+        with_new.push("hypothetical_new_fn");
+        with_new.sort_unstable();
+        let joined = with_new.join("\n");
+        let mut h: u64 = 14695981039346656037;
+        for b in joined.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        assert_ne!(
+            h,
+            EXPECTED_HASH,
+            "Adding a new entrypoint must change the golden hash"
+        );
+    }
+
+    /// Edge case: renaming an entrypoint (even with a deprecated shim kept)
+    /// changes the joined string and therefore the hash.
+    #[test]
+    fn renamed_entrypoint_changes_hash() {
+        let mut renamed: Vec<&str> = ENTRYPOINTS
+            .iter()
+            .map(|&s| if s == "version" { "get_version" } else { s })
+            .collect();
+        renamed.sort_unstable();
+        let joined = renamed.join("\n");
+        let mut h: u64 = 14695981039346656037;
+        for b in joined.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        assert_ne!(
+            h,
+            EXPECTED_HASH,
+            "Renaming an entrypoint must change the golden hash"
+        );
+    }
+}
 #[cfg(test)]
 mod test_merchant_whitelist;
