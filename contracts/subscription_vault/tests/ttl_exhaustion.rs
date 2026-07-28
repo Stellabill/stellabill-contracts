@@ -46,8 +46,7 @@ use soroban_sdk::{
     Address, Env,
 };
 use subscription_vault::{
-    Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
-    SUB_TTL_EXTEND_TO,
+    Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, SUB_TTL_EXTEND_TO,
 };
 
 // ── Shared constants ────────────────────────────────────────────────────────────
@@ -150,7 +149,10 @@ fn readable_at_exact_ttl_boundary() {
 
     set_seq(&env, LIVE_UNTIL);
     let sub = client.get_subscription(&id);
-    assert_eq!(sub.amount, AMOUNT, "record must be readable on its last live ledger");
+    assert_eq!(
+        sub.amount, AMOUNT,
+        "record must be readable on its last live ledger"
+    );
     assert_eq!(sub.status, SubscriptionStatus::Active);
 }
 

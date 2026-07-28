@@ -56,7 +56,12 @@ impl Default for TestEnv {
             .address();
 
         client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-        TestEnv { env, client, admin, token }
+        TestEnv {
+            env,
+            client,
+            admin,
+            token,
+        }
     }
 }
 
@@ -68,6 +73,8 @@ impl TestEnv {
 
     #[allow(dead_code)]
     pub fn jump(&self, seconds: u64) {
-        self.env.ledger().set_timestamp(self.env.ledger().timestamp() + seconds);
+        self.env
+            .ledger()
+            .set_timestamp(self.env.ledger().timestamp() + seconds);
     }
 }

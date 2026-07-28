@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Env, Map, String, Symbol, Vec, Bytes, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -339,7 +339,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
 pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
-    KNOWN_INSTANCE_KEY_DISCRIMINANTS.iter().any(|&known| known == discriminant)
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
 }
 
 /// Debug-only guard asserting that `key` belongs to the canonical instance-key
@@ -347,7 +349,11 @@ pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
 #[inline]
 #[allow(dead_code)]
 pub fn assert_known_data_key(key: &DataKey) {
-    debug_assert!(key.is_known_instance_key(), "Unknown or persistent key reached instance storage: {}", key.canonical_discriminant());
+    debug_assert!(
+        key.is_known_instance_key(),
+        "Unknown or persistent key reached instance storage: {}",
+        key.canonical_discriminant()
+    );
 }
 
 /// Convenience wrapper over [`assert_known_data_key`] for instance storage helpers.
@@ -455,7 +461,10 @@ pub struct InsufficientBalanceError {
 
 impl InsufficientBalanceError {
     pub const fn new(available: i128, required: i128) -> Self {
-        Self { available, required }
+        Self {
+            available,
+            required,
+        }
     }
     pub fn shortfall(&self) -> i128 {
         self.required - self.available
@@ -784,7 +793,9 @@ pub enum Error {
 
 impl Error {
     /// Returns the numeric code for this error.
-    pub const fn to_code(self) -> u32 { self as u32 }
+    pub const fn to_code(self) -> u32 {
+        self as u32
+    }
 }
 
 /// Event emitted when an admin nonce is consumed by a privileged operation.
@@ -2080,10 +2091,17 @@ pub struct PrepaidQueryResult {
 }
 
 pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         amount.checked_mul(factor).ok_or(Error::Overflow)
@@ -2094,10 +2112,17 @@ pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128
 }
 
 pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         Ok(amount / factor)
@@ -2230,7 +2255,12 @@ mod known_keys_tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        assert!(!variants.is_empty(), "variant count must be non-zero");
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
+        assert!(n > 0, "variant count must be non-zero");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier
