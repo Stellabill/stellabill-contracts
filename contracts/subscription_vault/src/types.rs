@@ -543,6 +543,8 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
+    /// Expiration timestamp is at or before the current ledger time.
+    InvalidExpiration = 3008,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.

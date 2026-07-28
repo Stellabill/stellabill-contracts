@@ -380,6 +380,15 @@ pub fn do_create_subscription_with_token(
 
     validate_interval(interval_seconds)?;
 
+    // Reject expiration timestamps that are at or before the current ledger time.
+    // A subscription that is already expired at creation would be a zombie entry
+    // that can never be charged.
+    if let Some(exp) = expires_at {
+        if exp <= env.ledger().timestamp() {
+            return Err(Error::InvalidExpiration);
+        }
+    }
+
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
     }
