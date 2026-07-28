@@ -33,6 +33,11 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+mod nonce;
+mod coupon;
+mod invariants;
+mod reentrancy;
+mod oracle_adapter;
 mod validation;
 
 pub use safe_math::*;
@@ -396,11 +401,9 @@ pub use types::{
     DEFAULT_ALLOWED_OPS,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
     OperatorRemovedEvent, OperatorSetEvent,
-    OracleLivenessEvent,
     PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
     TokenLiabilities,
     FullSnapshotPage, MerchantBalanceEntry, SnapshotExportedEvent, SnapshotRestoredEvent,
-    EVENT_SCHEMA_VERSION,
 };
 
 /// Maximum subscription ID this contract will ever allocate.

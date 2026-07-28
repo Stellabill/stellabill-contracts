@@ -5,9 +5,6 @@
 
 use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec, Bytes, BytesN};
 
-/// Current schema version for contract events.
-pub const EVENT_SCHEMA_VERSION: u32 = 2;
-
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
@@ -1712,16 +1709,6 @@ pub struct ProtocolFeeChargedEvent {
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct ChargeFailureEvent {
-    pub subscription_id: u32,
-    pub error_code: u32,
-    pub attempted_amount: i128,
-    pub ledger: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
 pub struct GlobalCapDefaultUpdatedEvent {
     pub admin: Address,
     pub cap: i128,
@@ -1902,33 +1889,139 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
-pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
-    if decimals < 9 {
-        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
-        amount.checked_mul(factor).ok_or(Error::Overflow)
-    } else {
-        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
-        Ok(amount / factor)
-    }
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    Spot,
+    Twap,
+    FixedRate,
 }
 
-pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
-    if decimals < 9 {
-        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
-        Ok(amount / factor)
-    } else {
-        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
-        amount.checked_mul(factor).ok_or(Error::Overflow)
-    }
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    RotateAdmin = 0,
+    SetProtocolFee = 1,
+    UpgradeContract = 2,
 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub target2: Option<Address>,
+    pub target3: u32,
+    pub quorum_bps: u32,
+    pub votes: soroban_sdk::Map<Address, bool>,
+    pub eta: u64,
+    pub submitted_at: u64,
+    pub executed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalSubmittedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub quorum_bps: u32,
+    pub eta: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalVotedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub voted_yes: bool,
+    pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub total_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCancelledEvent {
+    pub proposal_id: u64,
+    pub reason: String,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SignedMetadataPayload {
+    pub subscription_id: u32,
+    pub key: String,
+    pub value: String,
+    pub nonce: u64,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MetadataSetSignedEvent {
+    pub subscription_id: u32,
+    pub key: String,
+    pub signer: Address,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    pub changed: bool,
+    pub error_code: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub paused: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub cancelled: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+pub const BATCH_MAX_SIZE: u32 = 100;
 
 #[cfg(test)]
 mod known_keys_tests {
