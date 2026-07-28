@@ -1052,7 +1052,7 @@ fn apply_cancellation(
     // Remove from index
     let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
     if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&merchant_key) {
-        if let Some(idx) = ids.iter().position(|x| x == &subscription_id) {
+        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
             let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
             ids.remove(idx_u32);
             env.storage().instance().set(&merchant_key, &ids);
@@ -1061,7 +1061,7 @@ fn apply_cancellation(
 
     let token_key = DataKey::TokenSubs(sub.token.clone());
     if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&token_key) {
-        if let Some(idx) = ids.iter().position(|x| x == &subscription_id) {
+        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
             let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
             ids.remove(idx_u32);
             env.storage().instance().set(&token_key, &ids);
@@ -1071,7 +1071,7 @@ fn apply_cancellation(
     // Remove from subscriber -> subscription-ID index
     let subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
     if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&subscriber_key) {
-        if let Some(idx) = ids.iter().position(|x| x == &subscription_id) {
+        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
             let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
             ids.remove(idx_u32);
             env.storage().instance().set(&subscriber_key, &ids);
