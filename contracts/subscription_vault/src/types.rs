@@ -215,6 +215,7 @@ pub enum DataKey {
     Credential(u32),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
+    ChargeSalt(u32),
 }
 
 impl DataKey {
@@ -282,6 +283,7 @@ impl DataKey {
             DataKey::Credential(_) => 58,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
+            DataKey::ChargeSalt(_) => 61,
         }
     }
 
@@ -333,6 +335,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
     59,
+    61, // ChargeSalt(u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1474,6 +1477,7 @@ pub struct SubscriptionChargedEvent {
     pub timestamp: u64,
     pub period_start: u64,
     pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
     pub schema_version: u32,
 }
 
@@ -2316,6 +2320,7 @@ mod known_keys_tests {
             (DataKey::TransferIntent(1), true),
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
+            (DataKey::ChargeSalt(1), true),
         ]
     }
 
@@ -2415,7 +2420,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 53);
+        assert_eq!(variants.len(), 62);
     }
 }
 
@@ -2537,6 +2542,7 @@ pub struct SubscriptionChargedEvent {
     pub timestamp: u64,
     pub period_start: u64,
     pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
     pub schema_version: u32,
 }
 
