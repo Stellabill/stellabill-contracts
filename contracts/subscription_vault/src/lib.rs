@@ -562,7 +562,12 @@ pub use types::{
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 
 /// On-chain storage schema version.
-const STORAGE_VERSION: u32 = 3;
+///
+/// Bumped to **4** when [`Subscription`] gained the `expires_at_ledger: Option<u32>`
+/// field. Existing live `DataKey::Sub(id)` records were serialized without this
+/// trailing field; the `v3 → v4` step in [`admin::do_migrate`] walks every
+/// subscription record and rewrites it so the new field deserializes cleanly.
+const STORAGE_VERSION: u32 = 4;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a single call.
 const MAX_EXPORT_LIMIT: u32 = 100;
@@ -987,6 +992,7 @@ impl SubscriptionVault {
             lifetime_charged: sub.lifetime_charged,
             start_time: sub.start_time,
             expires_at: sub.expires_at,
+            expires_at_ledger: sub.expires_at_ledger,
         })
     }
 
@@ -1032,6 +1038,7 @@ impl SubscriptionVault {
                     lifetime_charged: sub.lifetime_charged,
                     start_time: sub.start_time,
                     expires_at: sub.expires_at,
+                    expires_at_ledger: sub.expires_at_ledger,
                 });
             }
             id += 1;
@@ -1099,6 +1106,7 @@ impl SubscriptionVault {
                     lifetime_charged: sub.lifetime_charged,
                     start_time: sub.start_time,
                     expires_at: sub.expires_at,
+                    expires_at_ledger: sub.expires_at_ledger,
                 });
                 let bal: i128 = env
                     .storage()
@@ -1174,6 +1182,7 @@ impl SubscriptionVault {
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
                     cancel_at: None,
+                    expires_at_ledger: s.expires_at_ledger,
                 };
                 env.storage()
                     .persistent()
@@ -1219,6 +1228,7 @@ impl SubscriptionVault {
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -1228,6 +1238,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        expires_at_ledger: Option<u32>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1239,6 +1250,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            expires_at_ledger,
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1252,6 +1264,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
+                expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1271,6 +1284,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        expires_at_ledger: Option<u32>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1283,6 +1297,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            expires_at_ledger,
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1295,6 +1310,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
+                expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1481,6 +1497,37 @@ impl SubscriptionVault {
     /// account. Admin only. (#578)
     pub fn set_subscriber_active_cap(env: Env, admin: Address, subscriber: Address, cap: Option<u32>) -> Result<(), Error> {
         subscription::do_set_subscriber_active_cap(&env, admin, subscriber, cap)
+    }
+
+    /// Set or clear the ledger-sequence expiration bound on a subscription.
+    ///
+    /// Pass `Some(seq)` to require the subscription to also expire once the
+    /// ledger sequence reaches `seq`; pass `None` to clear an existing ledger
+    /// bound. The wall-clock `expires_at` is unaffected by this call.
+    ///
+    /// Either the subscription's `subscriber` or `merchant` may authorize. The
+    /// value must be strictly greater than the current ledger sequence when set
+    /// (a bound at or below the current sequence is rejected with
+    /// [`Error::InvalidExpiration`] to avoid creating a zombie subscription).
+    /// Terminal-state subscriptions (`Cancelled` / `Expired` / `Archived`) are
+    /// rejected with [`Error::InvalidStatusTransition`].
+    ///
+    /// Emits [`ExpirationLedgerSetEvent`] on every successful call (including
+    /// `None`, with `previous_expires_at_ledger` set to the prior bound so
+    /// indexers can reconstruct the lifecycle).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_subscription_expiration_ledger(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        expires_at_ledger: Option<u32>,
+    ) -> Result<(), Error> {
+        subscription::do_set_subscription_expiration_ledger(
+            &env,
+            subscription_id,
+            authorizer,
+            expires_at_ledger,
+        )
     }
 
     /// Get the effective active-subscription cap for a subscriber (override

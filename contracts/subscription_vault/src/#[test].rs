@@ -3,7 +3,7 @@ fn test_create_subscription_emits_event() {
     let env = Env::default();
     // ... setup contract ...
     
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &3600, &None, &false);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &3600, &None, &false, &None::<u32>, &None::<u32>);
     
     let last_event = env.events().all().last().unwrap();
     assert_eq!(
@@ -19,6 +19,7 @@ fn test_create_subscription_emits_event() {
                 interval_seconds: 3600,
                 lifetime_cap: None,
                 expires_at: None,
+                expires_at_ledger: None,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             }.into_val(&env)
         )
@@ -29,7 +30,7 @@ fn test_create_subscription_emits_event() {
     let env = Env::default();
     // ... setup contract ...
     
-    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &3600, &None, &false);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1000, &3600, &None, &false, &None::<u32>, &None::<u32>);
     
     let last_event = env.events().all().last().unwrap();
     assert_eq!(
@@ -45,6 +46,7 @@ fn test_create_subscription_emits_event() {
                 interval_seconds: 3600,
                 lifetime_cap: None,
                 expires_at: None,
+                expires_at_ledger: None,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             }.into_val(&env)
         )
@@ -61,6 +63,7 @@ env.events().publish(
         interval_seconds,
         lifetime_cap: None, // Update if your logic supports caps
         expires_at: expiration,
+        expires_at_ledger: None,
         schema_version: crate::types::EVENT_SCHEMA_VERSION,
     },
 );

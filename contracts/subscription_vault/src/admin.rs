@@ -518,6 +518,28 @@ pub fn get_buyout_premium_bps(env: &Env) -> u32 {
 
 // ── Schema migration ──────────────────────────────────────────────────────────
 
+pub fn rewrite_subscriptions_for_ledger_expiration(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {
     let instance = env.storage().instance();
     let persistent = env.storage().persistent();
@@ -670,6 +692,16 @@ pub fn do_migrate(
             (2, _) => {
                 do_migrate_config_to_persistent_internal(env)?;
                 current = 3;
+            }
+            // v3 → v4: rewrite every `DataKey::Sub(id)` record so the new
+            // `expires_at_ledger: Option<u32>` field deserializes cleanly
+            // for subscriptions created before STORAGE_VERSION 4. Soroban's
+            // `#[contracttype]` serialization is positional, so old records
+            // would otherwise fail to deserialize and every `get_subscription`
+            // call would panic after the binary upgrade.
+            (3, _) => {
+                rewrite_subscriptions_for_ledger_expiration(env);
+                current = 4;
             }
             _ => {
                 current += 1;

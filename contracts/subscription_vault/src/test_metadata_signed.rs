@@ -88,6 +88,7 @@ fn create_subscription(
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
     let _ = token; // touch unused param to silence the lint without complaining
     (id, subscriber, merchant)
@@ -220,6 +221,7 @@ fn subscriber_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
 
     let payload = payload_for(
@@ -263,6 +265,7 @@ fn merchant_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
 
     let payload = payload_for(

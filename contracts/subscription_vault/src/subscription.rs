@@ -402,6 +402,7 @@ pub fn do_create_subscription(
     usage_enabled: bool,
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
+    expires_at_ledger: Option<u32>,
 ) -> Result<u32, Error> {
     let token = crate::admin::get_token(env)?;
 
@@ -418,6 +419,7 @@ pub fn do_create_subscription(
         usage_enabled,
         lifetime_cap,
         expires_at,
+        expires_at_ledger,
     )
 }
 
@@ -432,6 +434,7 @@ pub fn do_create_subscription_with_token(
     usage_enabled: bool,
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
+    expires_at_ledger: Option<u32>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
 
@@ -479,6 +482,14 @@ pub fn do_create_subscription_with_token(
             return Err(Error::InvalidExpiration);
         }
     }
+    // Reject ledger-sequence bounds that are at or below the current ledger
+    // sequence, for the same zombie-prevention reason. Unset (None) is always
+    // accepted and means "no ledger bound".
+    if let Some(exp_ledger) = expires_at_ledger {
+        if exp_ledger <= env.ledger().sequence() {
+            return Err(Error::InvalidExpiration);
+        }
+    }
 
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
@@ -515,6 +526,7 @@ pub fn do_create_subscription_with_token(
         expires_at,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -559,6 +571,7 @@ pub fn do_create_subscription_with_token(
             interval_seconds,
             lifetime_cap,
             expires_at,
+            expires_at_ledger,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
@@ -627,7 +640,7 @@ pub fn do_deposit_funds(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -904,7 +917,7 @@ pub fn do_cancel_subscription(
 
     let sub = get_subscription(env, subscription_id)?;
 
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return Err(Error::SubscriptionExpired);
     }
 
@@ -1068,7 +1081,7 @@ pub fn do_schedule_cancel(
     if sub.status == SubscriptionStatus::Cancelled {
         return Err(Error::InvalidStatusTransition);
     }
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         return Err(Error::SubscriptionExpired);
     }
 
@@ -1084,6 +1097,83 @@ pub fn do_schedule_cancel(
             timestamp: now,
         },
     );
+    Ok(())
+}
+
+/// Set (or clear) the ledger-sequence expiration bound on a subscription.
+///
+/// `Some(seq)` replaces any previous bound with `seq`. `None` clears the bound
+/// entirely — the subscription then only honors the wall-clock `expires_at`.
+///
+/// # Authorization
+/// Either the subscription's `subscriber` or `merchant` may authorize the
+/// change — mirroring the auth surface used by `cancel_subscription` /
+/// `pause_subscription` / `schedule_cancel`. Other callers receive
+/// [`Error::Forbidden`].
+///
+/// # Validation
+/// - Subscription must exist.
+/// - Subscription must not be in a terminal state (`Cancelled` / `Expired` /
+///   `Archived`).
+/// - `Some(seq)` must be strictly greater than the current ledger sequence
+///   (zombie prevention, mirroring `create_subscription`'s
+///   `InvalidExpiration` rule for the wall-clock bound). `seq == current + 0`
+///   is rejected; the smallest valid value is `current + 1`.
+///
+/// # Events
+/// Emits [`ExpirationLedgerSetEvent`] on every successful call, including the
+/// `None` case (with `previous_expires_at_ledger` set to the prior bound so
+/// indexers can reconstruct the lifecycle of the bound).
+///
+/// # Reentrancy
+/// Safe: only updates contract storage, no external calls.
+pub fn do_set_subscription_expiration_ledger(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    expires_at_ledger: Option<u32>,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // Terminal-state guard: don't allow mutating the bound on a subscription
+    // that has already been finalized. Mirrors the behaviour of
+    // `do_schedule_cancel` and `do_resume_subscription`.
+    if matches!(
+        sub.status,
+        SubscriptionStatus::Cancelled | SubscriptionStatus::Expired | SubscriptionStatus::Archived
+    ) {
+        return Err(Error::InvalidStatusTransition);
+    }
+
+    // Zombie prevention: any `Some(seq)` must be strictly in the future.
+    if let Some(seq) = expires_at_ledger {
+        if seq <= env.ledger().sequence() {
+            return Err(Error::InvalidExpiration);
+        }
+    }
+
+    let previous = sub.expires_at_ledger;
+    sub.expires_at_ledger = expires_at_ledger;
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "expiration_ledger_set"), subscription_id),
+        crate::types::ExpirationLedgerSetEvent {
+            subscription_id,
+            expires_at_ledger,
+            previous_expires_at_ledger: previous,
+            authorizer,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
     Ok(())
 }
 
@@ -1149,7 +1239,7 @@ pub fn do_pause_subscription(
 
     let sub = get_subscription(env, subscription_id)?;
 
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return Err(Error::SubscriptionExpired);
     }
 
@@ -1221,7 +1311,7 @@ pub fn do_resume_subscription(
 
     let mut sub = get_subscription(env, subscription_id)?;
 
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return Err(Error::SubscriptionExpired);
     }
     if authorizer != sub.subscriber && authorizer != sub.merchant {
@@ -1326,7 +1416,7 @@ fn bulk_pause_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSubs
         Err(e) => return bulk_failed(subscription_id, e),
     };
 
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return bulk_failed(subscription_id, Error::SubscriptionExpired);
     }
 
@@ -1352,7 +1442,7 @@ fn bulk_cancel_one(env: &Env, subscription_id: u32, caller: &Address) -> BulkSub
         Err(e) => return bulk_failed(subscription_id, e),
     };
 
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return bulk_failed(subscription_id, Error::SubscriptionExpired);
     }
 
@@ -1529,7 +1619,7 @@ pub fn do_charge_one_off(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -1727,7 +1817,7 @@ pub fn do_cleanup_subscription(
 
     // Can only cleanup if it's already expired or cancelled
     let now = env.ledger().timestamp();
-    let is_terminal = sub.status == SubscriptionStatus::Cancelled || sub.is_expired(now);
+    let is_terminal = sub.status == SubscriptionStatus::Cancelled || sub.is_expired(now, env.ledger().sequence());
 
     if !is_terminal {
         return Err(Error::InvalidStatusTransition);
@@ -1737,7 +1827,7 @@ pub fn do_cleanup_subscription(
         // If it's expired but not yet marked as Expired or Cancelled, transition it to Expired first
         if sub.status != SubscriptionStatus::Cancelled
             && sub.status != SubscriptionStatus::Expired
-            && sub.is_expired(now)
+            && sub.is_expired(now, env.ledger().sequence())
         {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
         }
@@ -1779,7 +1869,7 @@ pub fn do_withdraw_subscriber_funds(
     if sub.status != SubscriptionStatus::Cancelled
         && sub.status != SubscriptionStatus::Expired
         && sub.status != SubscriptionStatus::Archived
-        && !sub.is_expired(env.ledger().timestamp())
+        && !sub.is_expired(env.ledger().timestamp(), env.ledger().sequence())
     {
         return Err(Error::InvalidStatusTransition);
     }
@@ -2201,6 +2291,7 @@ pub fn do_create_subscription_from_plan(
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
     };
 
     write_subscription(env, id, &sub);
@@ -2609,7 +2700,7 @@ pub fn do_initiate_transfer(
     if sub.status == SubscriptionStatus::Cancelled {
         return Err(Error::InvalidStatusTransition);
     }
-    if sub.is_expired(env.ledger().timestamp()) {
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
         return Err(Error::SubscriptionExpired);
     }
 

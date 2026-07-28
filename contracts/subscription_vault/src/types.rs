@@ -407,11 +407,30 @@ pub struct Subscription {
     pub grace_start_timestamp: Option<u64>,
     /// Scheduled future cancellation timestamp.
     pub cancel_at: Option<u64>,
+    /// Optional ledger-sequence bound for expiration. When set, the subscription
+    /// also expires as soon as the ledger sequence reaches this value,
+    /// independently of the wall-clock `expires_at`. `None` disables the bound.
+    ///
+    /// Either bound being met is sufficient to consider the subscription
+    /// expired for charge / deposit / state-transition purposes.
+    pub expires_at_ledger: Option<u32>,
 }
 
 impl Subscription {
-    pub fn is_expired(&self, current_time: u64) -> bool {
-        self.expires_at.map_or(false, |exp| current_time >= exp)
+    /// Returns true when *either* the wall-clock bound or the ledger-sequence
+    /// bound is met (or both). `None` for either bound disables that check.
+    pub fn is_expired(&self, current_time: u64, current_ledger: u32) -> bool {
+        if let Some(exp) = self.expires_at {
+            if current_time >= exp {
+                return true;
+            }
+        }
+        if let Some(exp_ledger) = self.expires_at_ledger {
+            if current_ledger >= exp_ledger {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -861,6 +880,9 @@ pub struct SubscriptionSummary {
     pub lifetime_charged: i128,
     pub start_time: u64,
     pub expires_at: Option<u64>,
+    /// Optional ledger-sequence bound for expiration (mirrors
+    /// `Subscription::expires_at_ledger`). `None` means no ledger bound.
+    pub expires_at_ledger: Option<u32>,
 }
 
 #[contracttype]
@@ -1411,6 +1433,8 @@ pub struct SubscriptionCreatedEvent {
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    /// Optional ledger-sequence expiration bound. `None` means no ledger bound.
+    pub expires_at_ledger: Option<u32>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1601,6 +1625,25 @@ pub struct SubscriptionResumedEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionExpiredEvent {
     pub subscription_id: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription's ledger-sequence expiration bound is
+/// updated by the subscriber or merchant.
+///
+/// Setting `expires_at_ledger` to `None` clears the bound; setting it to a
+/// concrete sequence replaces the previous bound. The wall-clock bound
+/// (`expires_at`) is unaffected by this event.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ExpirationLedgerSetEvent {
+    pub subscription_id: u32,
+    /// New ledger-sequence bound. `None` means the bound has been cleared.
+    pub expires_at_ledger: Option<u32>,
+    /// Previous ledger-sequence bound, if any. `None` if no prior bound was set.
+    pub previous_expires_at_ledger: Option<u32>,
+    pub authorizer: Address,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2512,6 +2555,8 @@ pub struct SubscriptionCreatedEvent {
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    /// Optional ledger-sequence expiration bound. `None` means no ledger bound.
+    pub expires_at_ledger: Option<u32>,
     pub timestamp: u64,
     pub schema_version: u32,
 }

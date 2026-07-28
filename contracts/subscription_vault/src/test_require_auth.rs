@@ -59,6 +59,7 @@ fn make_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Addre
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
     (id, subscriber, merchant)
 }
@@ -97,6 +98,7 @@ fn create_subscription_missing_auth() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
 }
 
@@ -113,6 +115,7 @@ fn create_subscription_correct_auth() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
     );
     let sub = client.get_subscription(&id);
     assert_eq!(sub.subscriber, subscriber);

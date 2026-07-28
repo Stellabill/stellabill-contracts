@@ -44,6 +44,7 @@ pub fn create_subscription_detailed(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
     );
 
     if status != SubscriptionStatus::Active {
@@ -85,6 +86,7 @@ pub fn create_subscription_with_merchant(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
     );
 
     if status != SubscriptionStatus::Active {
@@ -125,6 +127,7 @@ pub fn create_active_subscription(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
     );
 
     if prepaid > 0 {
