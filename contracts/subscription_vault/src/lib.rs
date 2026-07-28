@@ -37,9 +37,6 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-mod nonce;
-mod coupon;
-mod invariants;
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
@@ -548,9 +545,10 @@ pub use types::{
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof, ReconciliationSummaryPage,
-    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof, 
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberCapReachedEvent, 
+    SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -1501,6 +1499,18 @@ impl SubscriptionVault {
         subscription::get_subscriber_active_count(&env, &subscriber)
     }
 
+    pub fn set_subscriber_create_cap(
+        env: Env,
+        admin: Address,
+        cap: u32,
+    ) -> Result<(), Error> {
+        admin::do_set_subscriber_create_cap(&env, admin, cap)
+    }
+
+    pub fn get_subscriber_create_cap(env: Env) -> u32 {
+        admin::get_subscriber_create_cap(&env)
+    }
+
     /// Get current subscriber exposure.
     pub fn get_subscriber_exposure(
         env: Env,
@@ -1607,8 +1617,6 @@ impl SubscriptionVault {
             (Symbol::new(&env, "sub_paused"), subscription_id),
             SubscriptionPausedEvent {
                 subscription_id,
-                subscriber: sub.subscriber,
-                merchant: sub.merchant,
                 authorizer,
                 timestamp,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -1812,6 +1820,14 @@ impl SubscriptionVault {
                 timestamp,
                 period_start: old_sub.last_payment_timestamp,
                 period_end: timestamp,
+                salt: {
+                    let mut salt_buf = [0u8; 20];
+                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
+                    salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
+                    env.crypto().sha256(&salt_input).into()
+                },
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
@@ -2685,6 +2701,31 @@ impl SubscriptionVault {
         )
     }
 
+    /// Get the global merchant whitelist mode toggle.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Enable or disable the global merchant whitelist mode. Admin-only.
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Check whether a merchant is approved under whitelist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Approve a merchant under whitelist mode. Admin-only.
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a merchant's approval under whitelist mode. Admin-only.
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
     /// Update merchant config.
     pub fn set_merchant_config(
         env: Env,
@@ -2765,6 +2806,8 @@ impl SubscriptionVault {
 
 #[cfg(test)]
 mod test_utils;
+#[cfg(test)]
+mod test_usage_limits_required;
 
 #[cfg(test)]
 mod test_charge_invariants;
@@ -2816,3 +2859,6 @@ mod test {
 
 #[cfg(test)]
 mod test_subscription_transfer;
+
+#[cfg(test)]
+mod test_merchant_whitelist;

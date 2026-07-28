@@ -213,7 +213,7 @@ fn collect_single_charge_result_codes(
     ids: &[u32],
 ) -> alloc::vec::Vec<(bool, u32)> {
     ids.iter()
-        .map(|id| match client.try_charge_subscription(id) {
+        .map(|id| match client.try_charge_subscription(id, &None::<soroban_sdk::BytesN<32>>) {
             Ok(Ok(ChargeExecutionResult::Charged)) => (true, 0),
             Ok(Ok(ChargeExecutionResult::InsufficientBalance)) => {
                 (false, Error::InsufficientBalance.to_code())
@@ -608,7 +608,7 @@ fn test_state_machine_property_charge_failures_and_recovery_paths_obey_rules() {
 
             soroban_sdk::token::StellarAssetClient::new(&env, &token)
                 .mint(&subscriber, &topup_amount.max(1_000_000));
-            client.deposit_funds(&id, &subscriber, &topup_amount.max(1_000_000, &None::<soroban_sdk::BytesN<32>>));
+            client.deposit_funds(&id, &subscriber, &topup_amount.max(1_000_000), &None::<soroban_sdk::BytesN<32>>);
 
             let after_deposit = client.get_subscription(&id).status;
             if topup_amount >= AMOUNT {
@@ -996,6 +996,7 @@ fn test_subscription_struct_status_field() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -1021,6 +1022,7 @@ fn test_subscription_struct_with_lifetime_cap() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -1098,6 +1100,112 @@ fn test_subscription_limit_reached() {
         &false,
         &None::<i128>,
      &None::<u64>);
+}
+
+#[test]
+fn test_subscriber_create_cap_admin_endpoints() {
+    let test_env = TestEnv::default();
+    let non_admin = Address::generate(&test_env.env);
+    
+    assert_eq!(test_env.client.get_subscriber_create_cap(), 50);
+
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &10);
+    assert_eq!(test_env.client.get_subscriber_create_cap(), 10);
+
+    let res = test_env.client.try_set_subscriber_create_cap(&non_admin, &20);
+    assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_enforced() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &2);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res1 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res2.is_ok());
+
+    let res3 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res3, Err(Ok(Error::SubscriberRateLimited)));
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_rollover() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &1);
+    test_env.env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res1 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res2, Err(Ok(Error::SubscriberRateLimited)));
+
+    test_env.jump(86401);
+
+    let res3 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res3.is_ok());
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_zero_cap_and_events() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &0);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res, Err(Ok(Error::SubscriberRateLimited)));
+
+    let events = test_env.env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        if let Some(first) = topics.get(0) {
+            if Symbol::from_val(&test_env.env, &first) == Symbol::new(&test_env.env, "rate_limit_tripped") {
+                let evt: crate::types::RateLimitTrippedEvent = soroban_sdk::FromVal::from_val(&test_env.env, &data);
+                assert_eq!(evt.subscriber, subscriber);
+                found = true;
+            }
+        }
+    }
+    assert!(found, "rate_limit_tripped event missing");
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_admin_bypass() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &0);
+
+    let merchant = Address::generate(&test_env.env);
+
+    let res = test_env.client.try_create_subscription(&test_env.admin, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_from_plan() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &1);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let plan_id = test_env.client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+
+    let res1 = test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    assert_eq!(res2, Err(Ok(Error::SubscriberRateLimited)));
 }
 
 #[test]
@@ -2317,6 +2425,7 @@ fn test_compute_next_charge_info_active() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2341,6 +2450,7 @@ fn test_compute_next_charge_info_paused() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2365,6 +2475,7 @@ fn test_compute_next_charge_info_cancelled() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2388,6 +2499,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2519,6 +2631,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
@@ -9217,6 +9330,15 @@ fn setup_usage_sub(
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
+    // Pre-register usage limits
+    client.configure_usage_limits(
+        &merchant,
+        &0, // NextId is 0 initially for the first subscription, but wait, this might be called multiple times! 
+        &None::<u32>,
+        &0,
+        &0,
+        &None::<i128>,
+    );
     let id = client.create_subscription(
         &subscriber,
         &merchant,

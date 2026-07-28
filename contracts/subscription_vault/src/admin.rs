@@ -280,6 +280,20 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
         .unwrap_or(0))
 }
 
+pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    write_config(env, &DataKey::SubscriberCreateCap, &cap);
+    env.events().publish(
+        (Symbol::new(env, "subscriber_create_cap_updated"),),
+        cap,
+    );
+    Ok(())
+}
+
+pub fn get_subscriber_create_cap(env: &Env) -> u32 {
+    read_config(env, &DataKey::SubscriberCreateCap).unwrap_or(50u32)
+}
+
 pub fn get_token(env: &Env) -> Result<Address, Error> {
     read_config(env, &DataKey::Token).ok_or(Error::NotFound)
 }

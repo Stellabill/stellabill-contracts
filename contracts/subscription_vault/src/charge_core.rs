@@ -226,6 +226,31 @@ pub fn charge_one(
         .checked_add(sub.interval_seconds)
         .unwrap_or(u64::MAX);
 
+    // Anti-frontrunning salt
+    let seq = env.ledger().sequence();
+    let salt = {
+        let mut salt_buf = [0u8; 20];
+        salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+        salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
+        salt_buf[12..20].copy_from_slice(&seq.to_be_bytes());
+        let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
+        let hash: soroban_sdk::BytesN<32> = env.crypto().sha256(&salt_input).into();
+        hash
+    };
+
+    let salt_key = DataKey::ChargeSalt(subscription_id);
+    if let Some(last_salt) = env.storage().instance().get::<_, soroban_sdk::BytesN<32>>(&salt_key) {
+        if last_salt == salt {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::Replay,
+                charge_amount,
+                now,
+            ));
+        }
+    }
+
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
         let hashed = crate::idempotency::hash_idem_key(
@@ -321,7 +346,7 @@ pub fn charge_one(
                 merchant_amount,
                 BillingChargeKind::Interval,
             )?;
-            if fee_amount > 0 {
+            let should_emit_fee_event = if fee_amount > 0 {
                 if let Some(ref treasury) = treasury_opt {
                     crate::merchant::credit_merchant_balance_for_token(
                         env,
@@ -330,20 +355,13 @@ pub fn charge_one(
                         fee_amount,
                         BillingChargeKind::Interval,
                     )?;
-                    env.events().publish(
-                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                        crate::types::ProtocolFeeChargedEvent {
-                            subscription_id,
-                            merchant: sub.merchant.clone(),
-                            token: sub.token.clone(),
-                            fee_amount,
-                            treasury: treasury.clone(),
-                            timestamp: now,
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                        },
-                    );
+                    Some((treasury.clone(), fee_amount))
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
             sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
@@ -368,6 +386,23 @@ pub fn charge_one(
             }
 
             write_subscription(env, subscription_id, &sub);
+
+            // Emit protocol fee event after state is written
+            if let Some((treasury, fee)) = should_emit_fee_event {
+                env.events().publish(
+                    (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                    crate::types::ProtocolFeeChargedEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        fee_amount: fee,
+                        treasury,
+                        timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    },
+                );
+            }
+
             append_statement(
                 env,
                 subscription_id,
@@ -394,6 +429,7 @@ pub fn charge_one(
 
             // Record charged period and optional idempotency key
             storage.set(&DataKey::ChargedPeriod(subscription_id), &period_index);
+            storage.set(&salt_key, &salt);
             if let Some(k) = idempotency_key {
                 let hashed = crate::idempotency::hash_idem_key(
                     env,
@@ -416,6 +452,7 @@ pub fn charge_one(
                     timestamp: now,
                     period_start,
                     period_end,
+                    salt: salt.clone(),
                     schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );
@@ -462,7 +499,16 @@ pub fn charge_one(
                 // First underfunded charge — enter GracePeriod and start the clock
                 transition_to(&mut sub.status, SubscriptionStatus::GracePeriod)?;
                 sub.grace_start_timestamp = Some(now);
+            } else {
+                // No grace period configured — go straight to InsufficientBalance
+                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                sub.grace_start_timestamp = None;
+            }
 
+            write_subscription(env, subscription_id, &sub);
+
+            // Emit grace_period_entered event after state is written
+            if grace_duration > 0 && previous_status != SubscriptionStatus::GracePeriod {
                 let grace_expires_at = now.saturating_add(grace_duration);
                 env.events().publish(
                     (Symbol::new(env, "grace_period_entered"), subscription_id),
@@ -474,13 +520,7 @@ pub fn charge_one(
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
-            } else {
-                // No grace period configured — go straight to InsufficientBalance
-                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
-                sub.grace_start_timestamp = None;
             }
-
-            write_subscription(env, subscription_id, &sub);
 
             let shortfall = charge_amount.saturating_sub(sub.prepaid_balance).max(0);
             env.events().publish(
@@ -793,7 +833,7 @@ pub fn charge_usage_one(
                 merchant_amount,
                 BillingChargeKind::Usage,
             )?;
-            if fee_amount > 0 {
+            let should_emit_fee_event = if fee_amount > 0 {
                 if let Some(ref treasury) = treasury_opt {
                     crate::merchant::credit_merchant_balance_for_token(
                         env,
@@ -802,20 +842,13 @@ pub fn charge_usage_one(
                         fee_amount,
                         BillingChargeKind::Usage,
                     )?;
-                    env.events().publish(
-                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                        crate::types::ProtocolFeeChargedEvent {
-                            subscription_id,
-                            merchant: sub.merchant.clone(),
-                            token: sub.token.clone(),
-                            fee_amount,
-                            treasury: treasury.clone(),
-                            timestamp: now,
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                        },
-                    );
+                    Some((treasury.clone(), fee_amount))
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
             sub.lifetime_charged = pending_lifetime;
             let cap_reached = sub
@@ -831,6 +864,23 @@ pub fn charge_usage_one(
             }
 
             write_subscription(env, subscription_id, &sub);
+
+            // Emit protocol fee event after state is written
+            if let Some((treasury, fee)) = should_emit_fee_event {
+                env.events().publish(
+                    (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                    crate::types::ProtocolFeeChargedEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        fee_amount: fee,
+                        treasury,
+                        timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    },
+                );
+            }
+
             env.storage().instance().set(&ref_key, &true); // Mark reference as used
 
             let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
