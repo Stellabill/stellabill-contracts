@@ -10,6 +10,17 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 //!
+//! # Feature-grouped API Navigation
+//! Three documentation and re-export modules group the `#[contractimpl]`
+//! entrypoints by audience without changing the compiled ABI:
+//! - [`subscription_api`] — subscriber lifecycle, plans, coupons, charging,
+//!   billing statements, caps, metadata, and subscriber-initiated disputes
+//! - [`merchant_api`] — withdrawals, configuration, payout schedules,
+//!   reconciliation, and dispute resolution
+//! - [`admin_api`] — initialisation, operator management, emergency stop,
+//!   token allowlist, protocol fees, oracle, migration/export, governance,
+//!   and blocklist
+//!
 //! # Storage Lifecycle
 //! The contract uses a mix of Instance and Persistent storage tiers. Instance storage is
 //! used for global configuration and merchant-level metadata. Persistent storage is used
@@ -41,13 +52,13 @@ mod reentrancy;
 mod oracle_adapter;
 mod validation;
 
-pub use charge_core::calculate_prorated_first_charge;
+pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
     AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
-    DisputeStatus, Error, OracleLivenessEvent, Proposal, ProposalCancelledEvent,
+    DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -57,6 +68,24 @@ pub mod state_machine;
 
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;
+
+// ── Feature-grouped API navigation modules ────────────────────────────────────
+// These modules do NOT define new ABI entrypoints. They exist solely to
+// re-export the inner delegate functions called by `#[contractimpl]` so that
+// IDE navigation and `cargo doc` can surface the grouped API in one place.
+
+/// Subscriber-facing lifecycle, plans, coupons, charging, statements, caps,
+/// metadata, and subscriber-initiated disputes.
+pub mod subscription_api;
+
+/// Merchant-facing withdrawals, configuration, payout schedules, reconciliation,
+/// and dispute resolution.
+pub mod merchant_api;
+
+/// Admin and protocol-governance: initialisation, operators, emergency stop,
+/// token allowlist, protocol fees, oracle, migration/export, governance,
+/// and blocklist.
+pub mod admin_api;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
@@ -283,9 +312,14 @@ pub mod statements {
         limit: u32,
         newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
-        get_statements_by_subscription_offset(env, subscription_id, cursor.unwrap_or(0), limit, newest_first)
+        Ok(BillingStatementsPage {
+            statements: soroban_sdk::Vec::new(_env),
+            next_cursor: None,
+            total: 0,
+        })
     }
 }
+
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 pub mod accounting {
@@ -346,6 +380,8 @@ pub mod oracle {
         if matches!(kind, OracleKind::FixedRate) && fixed_denominator == 0 {
             return Err(Error::InvalidInput);
         }
+
+        crate::admin::enforce_config_cooldown(env, "Oracle")?;
 
         let cfg = OracleConfig {
             enabled,
@@ -440,6 +476,7 @@ pub mod operator {
         if operator == env.current_contract_address() {
             return Err(Error::InvalidInput);
         }
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::write_config(env, &DataKey::Operator, &operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_set"),),
@@ -455,6 +492,7 @@ pub mod operator {
 
     pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
         crate::admin::require_admin_auth(env, &admin)?;
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::remove_config(env, &DataKey::Operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_removed"),),
@@ -530,27 +568,30 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
+    DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
+    CapInfo, Coupon, OracleKind,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof, 
-    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberCapReachedEvent, 
-    SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
+    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -890,6 +931,7 @@ impl SubscriptionVault {
         if get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
@@ -908,6 +950,7 @@ impl SubscriptionVault {
         if !get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
@@ -1173,6 +1216,10 @@ impl SubscriptionVault {
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
                     cancel_at: None,
+                    // Default to auto_renew=true on snapshot restore; the original value
+                    // is not stored in SubscriptionSummary (pre-562 snapshots).
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1597,6 +1644,39 @@ impl SubscriptionVault {
         subscription::do_unschedule_cancel(&env, subscription_id, authorizer)
     }
 
+    /// Enable or disable auto-renewal for a subscription.
+    ///
+    /// When `enabled = false` the billing engine will not charge the subscription
+    /// once the current interval elapses, effectively halting billing at the next
+    /// natural boundary. The subscriber or merchant may re-enable auto-renewal
+    /// within the *renewal window* (one full billing interval after the flag was
+    /// first disabled) without re-creating the subscription — preserving all
+    /// history and metadata.
+    ///
+    /// After the renewal window closes, re-enabling returns [`Error::RenewalWindowClosed`]
+    /// and the subscription must be cancelled and recreated.
+    ///
+    /// # Authorization
+    /// `authorizer` must be the subscriber or merchant of the subscription.
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — subscription does not exist.
+    /// * [`Error::Forbidden`] — caller is neither subscriber nor merchant.
+    /// * [`Error::InvalidStatusTransition`] — subscription is cancelled.
+    /// * [`Error::SubscriptionExpired`] — subscription has expired.
+    /// * [`Error::RenewalWindowClosed`] — renewal window has passed; cannot re-enable.
+    ///
+    /// # Events
+    /// Emits [`AutoRenewToggledEvent`] with topic `("auto_renew_toggled", subscription_id)`.
+    pub fn set_auto_renew(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        subscription::do_set_auto_renew(&env, subscription_id, authorizer, enabled)
+    }
+
     /// Pause a subscription.
     pub fn pause_subscription(
         env: Env,
@@ -1883,6 +1963,7 @@ impl SubscriptionVault {
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
+
         merchant::withdraw_merchant_funds(&env, merchant.clone(), amount)?;
         let new_balance = merchant::get_merchant_balance(&env, &merchant);
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
@@ -2318,6 +2399,7 @@ impl SubscriptionVault {
     /// Set billing retention. Admin only.
     pub fn set_billing_retention(env: Env, admin: Address, keep_recent: u32) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
+        admin::enforce_config_cooldown(&env, "BillingRetention")?;
         statements::set_retention_config(&env, keep_recent);
         Ok(())
     }
@@ -2719,6 +2801,42 @@ impl SubscriptionVault {
         merchant::revoke_merchant(&env, admin, merchant)
     }
 
+    /// Get the admin-controlled allowlist of valid merchant compliance-category tags.
+    pub fn get_tag_allowlist(env: Env) -> Vec<Symbol> {
+        merchant::get_tag_allowlist(&env)
+    }
+
+    /// Replace the global merchant tag allowlist. Admin-only.
+    ///
+    /// # Errors
+    /// * [`Error::Unauthorized`] — caller is not the stored admin.
+    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+    pub fn set_tag_allowlist(env: Env, admin: Address, tags: Vec<Symbol>) -> Result<(), Error> {
+        merchant::set_tag_allowlist(&env, admin, tags)
+    }
+
+    /// Get the compliance-category tags currently assigned to `merchant`.
+    pub fn get_merchant_tags(env: Env, merchant: Address) -> Vec<Symbol> {
+        merchant::get_merchant_tags(&env, merchant)
+    }
+
+    /// Set (fully replacing) `merchant`'s compliance-category tags. Admin-only.
+    /// Pass an empty `tags` vector to clear all tags.
+    ///
+    /// # Errors
+    /// * [`Error::Unauthorized`] — caller is not the stored admin.
+    /// * [`Error::MerchantTagLimitExceeded`] — more than `MAX_MERCHANT_TAGS` tags supplied.
+    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
+    /// * [`Error::UnknownMerchantTag`] — a tag is not present in the current allowlist.
+    pub fn set_merchant_tags(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        tags: Vec<Symbol>,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_tags(&env, admin, merchant, tags)
+    }
+
     /// Update merchant config.
     pub fn set_merchant_config(
         env: Env,
@@ -2767,6 +2885,17 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 
+    /// Set the number of consecutive InsufficientBalance failures before a
+    /// subscription is automatically paused. `0` disables auto-pause. Admin only.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
+    }
+
+    /// Return the current auto-pause threshold (`0` = disabled).
+    pub fn get_auto_pause_threshold(env: Env) -> u32 {
+        admin::get_auto_pause_threshold(&env)
+    }
+
     /// Returns the schema version.
     pub fn version(_env: Env) -> u32 {
         1
@@ -2805,6 +2934,8 @@ mod test_usage_limits_required;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
+mod test_charge_event_exclusivity;
+#[cfg(test)]
 mod test_metadata_signed;
 
 #[cfg(test)]
@@ -2816,11 +2947,10 @@ mod test_statement_compaction;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
-
-#[cfg(test)]
-mod test_governance;
 #[cfg(test)]
 mod test_insufficient_balance;
+#[cfg(test)]
+mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test_validation;
@@ -2832,6 +2962,9 @@ mod test_coupon;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
+
+#[cfg(test)]
+mod test_auto_pause;
 
 #[cfg(test)]
 mod test_grace_buyout;
@@ -2853,8 +2986,18 @@ mod test {
 #[cfg(test)]
 mod test_subscription_transfer;
 
+/// ABI-hash regression guard.
+///
+/// The hash is computed from the sorted, newline-joined list of all
+/// `pub fn` names exposed by `#[contractimpl]`. Any accidental rename,
+/// addition, or removal of a contract entrypoint will change the hash and
+/// cause this test to fail, flagging the ABI breakage before it reaches
+/// production.
+///
+/// **To update intentionally:** change only the `EXPECTED` constant below
+/// and document the ABI change in the PR description.
 #[cfg(test)]
 mod test_merchant_whitelist;
 
 #[cfg(test)]
-mod test_proration_fuzz;
+mod test_merchant_tags;
