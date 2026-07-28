@@ -230,10 +230,18 @@ struct MockOracle;
 #[contractimpl]
 impl MockOracle {
     pub fn set_price(env: Env, price: i128, timestamp: u64) {
-        env.storage().instance().set(
-            &Symbol::new(&env, "price"),
-            &OraclePrice { price, timestamp },
-        );
+        let key = Symbol::new(&env, "price");
+        let mut observations: Vec<OraclePrice> = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "observations"))
+            .unwrap_or(Vec::new(&env));
+        observations.push_back(OraclePrice { price, timestamp });
+
+        env.storage().instance().set(&key, &OraclePrice { price, timestamp });
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "observations"), &observations);
     }
 
     pub fn latest_price(env: Env) -> OraclePrice {
@@ -244,6 +252,21 @@ impl MockOracle {
                 price: 0,
                 timestamp: 0,
             })
+    }
+
+    pub fn get_observations(env: Env, since: u64) -> Vec<OraclePrice> {
+        let observations: Vec<OraclePrice> = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "observations"))
+            .unwrap_or(Vec::new(&env));
+        let mut filtered = Vec::new(&env);
+        for obs in observations.iter() {
+            if obs.timestamp >= since {
+                filtered.push_back(obs);
+            }
+        }
+        filtered
     }
 }
 
@@ -5111,7 +5134,83 @@ fn test_oracle_stale_quote_rejected() {
 }
 
 #[test]
+fn test_twap_adapter_resists_single_block_manipulation() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind, OraclePrice};
 
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+
+    // Simulate a malicious single-block spike that would dominate a mean-based window.
+    oracle.set_price(&10_000_000i128, &1000);
+    oracle.set_price(&1_000_000i128, &1000);
+    oracle.set_price(&1_000_000i128, &1000);
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 10_000,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Ok(1_000_000));
+}
+
+#[test]
+fn test_twap_adapter_returns_unavailable_for_empty_window() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind};
+
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let oracle_id = env.register(MockOracle, ());
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 10_000,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Err(Error::OraclePriceUnavailable));
+}
+
+#[test]
+fn test_twap_adapter_filters_stale_samples() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind};
+
+    let env = Env::default();
+    env.ledger().set_timestamp(1_500);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&2_000_000i128, &1000);
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 100,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Err(Error::OraclePriceStale));
+}
+
+#[test]
 fn test_create_subscription_with_unaccepted_token_fails() {
     let test_env = TestEnv::default();
     let subscriber = Address::generate(&test_env.env);

@@ -44,16 +44,13 @@ pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 pub const DOMAIN_METADATA_SIGNED: u32 = 3;
 
 /// Domain constant for charge_interval operations.
-pub const DOMAIN_CHARGE_INTERVAL: u32 = 4;
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 5;
 
 /// Domain constant for deposit_funds operations.
-pub const DOMAIN_DEPOSIT_FUNDS: u32 = 5;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 6;
 
 /// Domain constant for charge_one_off operations.
-pub const DOMAIN_CHARGE_ONEOFF: u32 = 6;
-
-/// Domain constant for merchant rotation operations.
-pub const DOMAIN_MERCHANT_ROTATION: u32 = 7;
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 7;
 
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
