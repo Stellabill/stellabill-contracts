@@ -9,6 +9,7 @@
 .soroban/
 *.wasm
 *.wasm.hash
+.contract_id
 
 # Environment and secrets
 .env
