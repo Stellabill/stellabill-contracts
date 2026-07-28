@@ -77,6 +77,7 @@ pub fn charge_one(
     subscription_id: u32,
     now: u64,
     idempotency_key: Option<soroban_sdk::BytesN<32>>,
+    admin_config: Option<&crate::admin::CachedAdminConfig>,
 ) -> Result<ChargeExecutionResult, Error> {
     let mut sub = get_subscription(env, subscription_id)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
@@ -340,8 +341,14 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let fee_bps = crate::admin::get_protocol_fee_bps(env);
-            let treasury_opt = crate::admin::get_treasury(env);
+            let (fee_bps, treasury_opt) = if let Some(cfg) = admin_config {
+                (cfg.fee_bps, cfg.treasury.clone())
+            } else {
+                (
+                    crate::admin::get_protocol_fee_bps(env),
+                    crate::admin::get_treasury(env),
+                )
+            };
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
                     let fee = charge_amount * fee_bps as i128 / 10_000i128;
@@ -494,7 +501,11 @@ pub fn charge_one(
             Ok(ChargeExecutionResult::Charged)
         }
         Err(_) => {
-            let grace_duration = crate::admin::get_grace_period(env)?;
+            let grace_duration = if let Some(cfg) = admin_config {
+                cfg.grace_duration
+            } else {
+                crate::admin::get_grace_period(env)?
+            };
             let previous_status = sub.status;
 
             if sub.status == SubscriptionStatus::GracePeriod {
@@ -557,7 +568,11 @@ pub fn charge_one(
             );
 
             // Increment consecutive failure counter and auto-pause if threshold reached.
-            let threshold = crate::admin::get_auto_pause_threshold(env);
+            let threshold = if let Some(cfg) = admin_config {
+                cfg.auto_pause_threshold
+            } else {
+                crate::admin::get_auto_pause_threshold(env)
+            };
             if threshold > 0 && sub.status == SubscriptionStatus::InsufficientBalance {
                 let counter_key = DataKey::ChargeFailureCounter(subscription_id);
                 let failures: u32 = env
