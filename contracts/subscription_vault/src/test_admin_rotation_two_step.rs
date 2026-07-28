@@ -1,13 +1,28 @@
 #![cfg(test)]
 
 use crate::{
-    types::{AdminProposal, AdminProposalCancelledEvent, AdminProposalClaimedEvent, AdminProposalCreatedEvent},
+    types::{
+        AdminProposalCancelledEvent, AdminProposalClaimedEvent, AdminProposalCreatedEvent,
+    },
     Error, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Events},
-    Address, Env, IntoVal, Symbol,
+    testutils::{Address as _, Events, Ledger as _},
+    Address, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
 };
+
+fn find_event_data(env: &Env, topic: &Symbol) -> Option<Val> {
+    let all = env.events().all();
+    let topic_val: Val = topic.clone().into_val(env);
+    for i in 0..all.len() {
+        let (_, topics, data): (Address, Vec<Val>, Val) = all.get(i).unwrap();
+        let first_topic = topics.get(0);
+        if first_topic == Some(topic_val.clone()) {
+            return Some(data);
+        }
+    }
+    None
+}
 
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
@@ -71,7 +86,7 @@ fn test_propose_admin_twice_rejected() {
 
 #[test]
 fn test_propose_admin_to_contract_rejected() {
-    let (env, client, _token, admin) = setup();
+    let (_env, client, _token, admin) = setup();
 
     let result = client.try_propose_admin(&admin, &client.address);
     assert_eq!(result, Err(Ok(Error::InvalidNewAdmin)));
@@ -84,9 +99,7 @@ fn test_propose_admin_event_emitted() {
 
     client.propose_admin(&admin, &new_admin);
 
-    let events = env.events().all();
-    let created = events.find_first(&(Symbol::new(&env, "admin_proposal_created"),));
-    assert!(created.is_some());
+    assert!(find_event_data(&env, &Symbol::new(&env, "admin_proposal_created")).is_some());
 }
 
 #[test]
@@ -173,9 +186,7 @@ fn test_claim_admin_role_event_emitted() {
     client.propose_admin(&admin, &new_admin);
     client.claim_admin_role(&new_admin);
 
-    let events = env.events().all();
-    let claimed = events.find_first(&(Symbol::new(&env, "admin_proposal_claimed"),));
-    assert!(claimed.is_some());
+    assert!(find_event_data(&env, &Symbol::new(&env, "admin_proposal_claimed")).is_some());
 }
 
 #[test]
@@ -209,7 +220,7 @@ fn test_cancel_admin_proposal_success() {
 
 #[test]
 fn test_cancel_admin_proposal_no_proposal() {
-    let (env, client, _token, admin) = setup();
+    let (_env, client, _token, admin) = setup();
     let result = client.try_cancel_admin_proposal(&admin);
     assert_eq!(result, Err(Ok(Error::NoActiveProposal)));
 }
@@ -233,9 +244,7 @@ fn test_cancel_admin_proposal_event_emitted() {
     client.propose_admin(&admin, &new_admin);
     client.cancel_admin_proposal(&admin);
 
-    let events = env.events().all();
-    let cancelled = events.find_first(&(Symbol::new(&env, "admin_proposal_cancelled"),));
-    assert!(cancelled.is_some());
+    assert!(find_event_data(&env, &Symbol::new(&env, "admin_proposal_cancelled")).is_some());
 }
 
 #[test]
@@ -315,12 +324,8 @@ fn test_admin_proposal_created_event_payload() {
 
     client.propose_admin(&admin, &new_admin);
 
-    let events = env.events().all();
-    let (_, _, payload) = events
-        .find_first(&(Symbol::new(&env, "admin_proposal_created"),))
-        .unwrap();
-
-    let parsed: AdminProposalCreatedEvent = payload.try_into_val(&env).unwrap();
+    let payload = find_event_data(&env, &Symbol::new(&env, "admin_proposal_created")).unwrap();
+    let parsed = AdminProposalCreatedEvent::try_from_val(&env, &payload).unwrap();
     assert_eq!(parsed.old_admin, admin);
     assert_eq!(parsed.new_admin, new_admin);
     assert_eq!(parsed.expires_at, 1_000_000 + 7 * 24 * 60 * 60);
@@ -335,12 +340,8 @@ fn test_admin_proposal_claimed_event_payload() {
     client.propose_admin(&admin, &new_admin);
     client.claim_admin_role(&new_admin);
 
-    let events = env.events().all();
-    let (_, _, payload) = events
-        .find_first(&(Symbol::new(&env, "admin_proposal_claimed"),))
-        .unwrap();
-
-    let parsed: AdminProposalClaimedEvent = payload.try_into_val(&env).unwrap();
+    let payload = find_event_data(&env, &Symbol::new(&env, "admin_proposal_claimed")).unwrap();
+    let parsed = AdminProposalClaimedEvent::try_from_val(&env, &payload).unwrap();
     assert_eq!(parsed.old_admin, admin);
     assert_eq!(parsed.new_admin, new_admin);
 }
@@ -353,12 +354,8 @@ fn test_admin_proposal_cancelled_event_payload() {
     client.propose_admin(&admin, &new_admin);
     client.cancel_admin_proposal(&admin);
 
-    let events = env.events().all();
-    let (_, _, payload) = events
-        .find_first(&(Symbol::new(&env, "admin_proposal_cancelled"),))
-        .unwrap();
-
-    let parsed: AdminProposalCancelledEvent = payload.try_into_val(&env).unwrap();
+    let payload = find_event_data(&env, &Symbol::new(&env, "admin_proposal_cancelled")).unwrap();
+    let parsed = AdminProposalCancelledEvent::try_from_val(&env, &payload).unwrap();
     assert_eq!(parsed.admin, admin);
 }
 

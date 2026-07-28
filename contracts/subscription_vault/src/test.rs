@@ -881,7 +881,7 @@ fn test_subscription_struct_status_field() {
         prepaid_balance: 500_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -903,7 +903,7 @@ fn test_subscription_struct_with_lifetime_cap() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: Some(cap),
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -2185,7 +2185,7 @@ fn test_compute_next_charge_info_active() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2206,7 +2206,7 @@ fn test_compute_next_charge_info_paused() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2227,7 +2227,7 @@ fn test_compute_next_charge_info_cancelled() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2247,7 +2247,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         prepaid_balance: 1_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2377,6 +2377,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         lifetime_charged: 0,
         start_time: 0,
         expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -4854,7 +4855,6 @@ fn test_create_subscription_lifetime_cap_less_than_amount_rejected() {
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4930,7 +4930,6 @@ fn test_create_subscription_with_token_lifetime_cap_less_than_amount_rejected() 
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4970,7 +4969,6 @@ fn test_create_subscription_max_amount_and_cap_succeeds() {
         &INTERVAL,
         &false,
         &Some(i128::MAX),
-    ,
         &None::<u64>,
     );
     let sub = test_env.client.get_subscription(&id);
@@ -4990,7 +4988,6 @@ fn test_create_subscription_max_amount_cap_smaller_rejected() {
         &INTERVAL,
         &false,
         &Some(i128::MAX - 1),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -5137,7 +5134,7 @@ fn test_admin_rotation_affects_recovery_operations() {
         &test_env.admin,
         &recipient,
         &1_000_000i128,
-        &RecoveryReason::AccidentalTransfer,
+        &RecoveryReason::UserOverpayment,
     );
 
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
@@ -5180,7 +5177,7 @@ fn test_all_admin_operations_after_rotation() {
         &new_admin,
         &recipient,
         &1_000_000i128,
-        &RecoveryReason::AccidentalTransfer,
+        &RecoveryReason::UserOverpayment,
     );
     test_env.client.rotate_admin(&new_admin, &next_admin);
     assert_eq!(test_env.client.get_admin(), next_admin);
@@ -7114,6 +7111,7 @@ mod storage_layout {
             lifetime_charged: 10_000_000,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -7218,6 +7216,7 @@ mod storage_layout {
             lifetime_charged: 0,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&client.address, || {
@@ -7993,7 +7992,6 @@ fn test_oneoff_lifetime_cap_boundary() {
         &INTERVAL,
         &false,
         &Some(20_000_000i128),
-    ,
         &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
