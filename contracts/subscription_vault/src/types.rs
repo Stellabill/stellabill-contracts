@@ -203,21 +203,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
-    /// Soulbound credential badge keyed by subscription ID. Discriminant 54.
-    Credential(u32),
-    /// Coupon record keyed by its code. Discriminant 55.
-    Coupon(Symbol),
-    /// Global redemption count for a coupon code. Discriminant 56.
-    CouponRedemptions(Symbol),
-    /// Maps a subscription ID to its bound coupon code. Discriminant 57.
-    SubCoupon(u32),
-    /// Count of currently-active subscriptions for a subscriber, maintained
-    /// incrementally on create/resume/cancel/pause. Discriminant 58.
-    SubscriberActiveCount(Address),
-    /// Per-subscriber override of the active-subscription cap (e.g. for
-    /// institutional accounts). Absent means the default cap applies.
-    /// Discriminant 59.
-    SubscriberActiveCapOverride(Address),
+    /// Merchant withdrawal multi-sig configuration. Discriminant 54.
+    MerchantMultiSig(Address),
 }
 
 impl DataKey {
@@ -278,12 +265,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
-            DataKey::Credential(_) => 54,
-            DataKey::Coupon(_) => 55,
-            DataKey::CouponRedemptions(_) => 56,
-            DataKey::SubCoupon(_) => 57,
-            DataKey::SubscriberActiveCount(_) => 58,
-            DataKey::SubscriberActiveCapOverride(_) => 59,
+            DataKey::MerchantMultiSig(_) => 54,
         }
     }
 
@@ -333,8 +315,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
-    58, // SubscriberActiveCount(Address)
-    59, // SubscriberActiveCapOverride(Address)
+    54, // MerchantMultiSig(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1971,6 +1952,13 @@ pub struct MerchantConfig {
     pub redirect_url: String,
     pub is_paused: bool,
     pub last_updated: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantMultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
 }
 
 #[contracttype]

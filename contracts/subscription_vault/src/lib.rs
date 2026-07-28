@@ -2631,6 +2631,12 @@ impl SubscriptionVault {
         merchant::set_merchant_config(&env, merchant, config)
     }
 
+    /// Configure merchant withdrawal co-signers and threshold.
+    pub fn set_merchant_multisig(env: Env, admin: Address, merchant: Address, signers: Vec<Address>, threshold: u32) -> Result<(), Error> { merchant::set_merchant_multisig(&env, admin, merchant, signers, threshold) }
+
+    /// Get merchant withdrawal co-signer config.
+    pub fn get_merchant_multisig_config(env: Env, merchant: Address) -> Option<crate::types::MerchantMultiSigConfig> { merchant::get_merchant_multisig_config(&env, merchant) }
+
     /// Partial update merchant config.
     pub fn update_merchant_config(
         env: Env,

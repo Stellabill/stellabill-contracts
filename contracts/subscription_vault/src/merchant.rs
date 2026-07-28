@@ -22,10 +22,10 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    is_valid_allowed_operations, AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent,
-    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, OP_CHARGE,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent, TokenEarnings,
+    TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -181,6 +181,11 @@ pub fn set_merchant_config(
 
 pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfig> {
     let key = DataKey::MerchantConfig(merchant);
+    env.storage().instance().get(&key)
+}
+
+pub fn get_merchant_multisig_config(env: &Env, merchant: Address) -> Option<MerchantMultiSigConfig> {
+    let key = DataKey::MerchantMultiSig(merchant);
     env.storage().instance().get(&key)
 }
 
@@ -358,6 +363,44 @@ pub fn credit_merchant_balance_for_token(
 
     Ok(())
 }
+pub fn set_merchant_multisig(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    signers: Vec<Address>,
+    threshold: u32,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+    merchant.require_auth();
+
+    if threshold == 0 {
+        return Err(Error::InvalidInput);
+    }
+
+    if threshold as usize > signers.len() {
+        return Err(Error::InvalidInput);
+    }
+
+    let mut seen = Vec::new(env);
+    for signer in signers.iter() {
+        if seen.contains(&signer) {
+            return Err(Error::InvalidInput);
+        }
+        seen.push_back(signer.clone());
+    }
+
+    let key = DataKey::MerchantMultiSig(merchant.clone());
+    env.storage().instance().set(
+        &key,
+        &MerchantMultiSigConfig {
+            signers: signers.clone(),
+            threshold,
+        },
+    );
+
+    Ok(())
+}
+
 pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Result<(), Error> {
     let token_addr = crate::admin::get_token(env)?;
     withdraw_merchant_funds_for_token(env, merchant, token_addr, amount)
@@ -370,6 +413,17 @@ pub fn withdraw_merchant_funds_for_token(
     amount: i128,
 ) -> Result<(), Error> {
     merchant.require_auth();
+
+    if let Some(config) = get_merchant_multisig_config(env, merchant.clone()) {
+        let required_signers = config.threshold.min(config.signers.len() as u32);
+        let mut iter = 0u32;
+        while iter < required_signers {
+            let signer = config.signers.get(iter).unwrap_or_default();
+            signer.require_auth();
+            iter += 1;
+        }
+    }
+
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
     if amount <= 0 {
