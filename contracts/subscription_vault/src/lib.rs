@@ -1813,6 +1813,14 @@ impl SubscriptionVault {
                 timestamp,
                 period_start: old_sub.last_payment_timestamp,
                 period_end: timestamp,
+                salt: {
+                    let mut salt_buf = [0u8; 20];
+                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
+                    salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
+                    env.crypto().sha256(&salt_input).into()
+                },
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
