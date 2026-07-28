@@ -22,7 +22,8 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent,
+    MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
@@ -467,7 +468,7 @@ pub fn set_merchant_multisig(
         return Err(Error::InvalidInput);
     }
 
-    if threshold as usize > signers.len() {
+    if threshold as usize > signers.len() as usize {
         return Err(Error::InvalidInput);
     }
 
@@ -508,8 +509,9 @@ pub fn withdraw_merchant_funds_for_token(
         let required_signers = config.threshold.min(config.signers.len() as u32);
         let mut iter = 0u32;
         while iter < required_signers {
-            let signer = config.signers.get(iter).unwrap_or_default();
-            signer.require_auth();
+            if let Some(signer) = config.signers.get(iter) {
+                signer.require_auth();
+            }
             iter += 1;
         }
     }
@@ -733,16 +735,7 @@ fn flush_merchant_token(
 
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
-    // EFFECTS
-    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
-    earnings.refunds = earnings
-        .refunds
-        .checked_add(amount)
-        .ok_or(Error::Overflow)?;
-    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, merchant, token);
     earnings.withdrawals = earnings
         .withdrawals
@@ -932,25 +925,6 @@ pub fn do_rotate_merchant_address(
     crate::admin::require_admin_auth(env, &admin)?;
 
     crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_MERCHANT_ROTATION, nonce)?;
-
-    env.events().publish(
-        (
-            Symbol::new(env, "merchant_balance_snapshot"),
-            merchant.clone(),
-            token.clone(),
-        ),
-        MerchantBalanceSnapshotEvent {
-            merchant: merchant.clone(),
-            token: token.clone(),
-            balance,
-            accrued,
-            withdrawn,
-            refunded,
-            ledger_sequence,
-            timestamp,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
 
     let storage = env.storage().instance();
 

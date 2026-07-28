@@ -530,26 +530,26 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, Coupon, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof, 
-    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberCapReachedEvent, 
-    SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
+    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -1172,6 +1172,10 @@ impl SubscriptionVault {
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
                     cancel_at: None,
+                    // Default to auto_renew=true on snapshot restore; the original value
+                    // is not stored in SubscriptionSummary (pre-562 snapshots).
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1594,6 +1598,39 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "unschedule_cancel")?;
         subscription::do_unschedule_cancel(&env, subscription_id, authorizer)
+    }
+
+    /// Enable or disable auto-renewal for a subscription.
+    ///
+    /// When `enabled = false` the billing engine will not charge the subscription
+    /// once the current interval elapses, effectively halting billing at the next
+    /// natural boundary. The subscriber or merchant may re-enable auto-renewal
+    /// within the *renewal window* (one full billing interval after the flag was
+    /// first disabled) without re-creating the subscription — preserving all
+    /// history and metadata.
+    ///
+    /// After the renewal window closes, re-enabling returns [`Error::RenewalWindowClosed`]
+    /// and the subscription must be cancelled and recreated.
+    ///
+    /// # Authorization
+    /// `authorizer` must be the subscriber or merchant of the subscription.
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — subscription does not exist.
+    /// * [`Error::Forbidden`] — caller is neither subscriber nor merchant.
+    /// * [`Error::InvalidStatusTransition`] — subscription is cancelled.
+    /// * [`Error::SubscriptionExpired`] — subscription has expired.
+    /// * [`Error::RenewalWindowClosed`] — renewal window has passed; cannot re-enable.
+    ///
+    /// # Events
+    /// Emits [`AutoRenewToggledEvent`] with topic `("auto_renew_toggled", subscription_id)`.
+    pub fn set_auto_renew(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        subscription::do_set_auto_renew(&env, subscription_id, authorizer, enabled)
     }
 
     /// Pause a subscription.
@@ -2854,3 +2891,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_merchant_whitelist;
+
+#[cfg(test)]
+mod test_auto_renew;
