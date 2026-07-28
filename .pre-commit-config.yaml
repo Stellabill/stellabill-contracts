@@ -1,0 +1,61 @@
+# .pre-commit-config.yaml — Pre-commit hooks for Stellabill Contracts
+# https://pre-commit.com
+#
+# Install:
+#   pip install pre-commit
+#   pre-commit install          # install git hooks
+#   pre-commit run --all-files  # run manually against every file
+
+repos:
+  # --------------------------------------------------------------------------
+  # General hygiene
+  # --------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # --------------------------------------------------------------------------
+  # Buf: OpenAPI and proto linting
+  # --------------------------------------------------------------------------
+  - repo: https://github.com/bufbuild/buf
+    rev: v1.47.2
+    hooks:
+      # Lint: naming, casing, and completeness rules (buf.yaml).
+      - id: buf-lint
+        name: buf lint
+        # Only run when spec or config files change.
+        files: ^(openapi/|proto/|buf\.yaml|buf\.gen\.yaml)
+
+      # Breaking-change detection against the committed HEAD on main.
+      # This runs locally on the author's machine before push, giving early
+      # feedback before CI.
+      - id: buf-breaking
+        name: buf breaking (vs main)
+        args: ["--against", ".git#branch=main"]
+        files: ^(openapi/|proto/|buf\.yaml)
+
+  # --------------------------------------------------------------------------
+  # Rust
+  # --------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        types: [rust]
+        pass_filenames: false

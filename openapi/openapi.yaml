@@ -1,0 +1,653 @@
+openapi: "3.1.0"
+
+info:
+  title: Stellabill API
+  version: "0.1.0"
+  description: |
+    REST gateway for the Stellabill prepaid USDC subscription billing system.
+    On-chain state lives in the `subscription_vault` Soroban contract; this API
+    provides a HTTP façade for wallets, merchant dashboards, and integrators.
+  contact:
+    name: Stellabill Engineering
+    url: https://github.com/stellabill/stellabill-backend
+  license:
+    name: MIT
+
+servers:
+  - url: https://api.stellabill.io/v1
+    description: Production
+  - url: https://api.testnet.stellabill.io/v1
+    description: Testnet / staging
+
+tags:
+  - name: subscriptions
+    description: Subscription lifecycle – create, fund, query, and cancel.
+  - name: charges
+    description: Admin-initiated recurring charges and batch operations.
+  - name: merchants
+    description: Merchant fund management.
+  - name: health
+    description: Operational health checks.
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+paths:
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness check
+      tags: [health]
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /subscriptions:
+    post:
+      operationId: createSubscription
+      summary: Create a new subscription
+      description: |
+        Registers a new prepaid subscription between a subscriber and a merchant.
+        The subscriber must sign the transaction on-chain; the API relays the
+        signed XDR to the Soroban contract.
+      tags: [subscriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionRequest"
+      responses:
+        "201":
+          description: Subscription created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /subscriptions/{subscriptionId}:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    get:
+      operationId: getSubscription
+      summary: Get subscription details
+      tags: [subscriptions]
+      responses:
+        "200":
+          description: Subscription found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /subscriptions/{subscriptionId}/deposit:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    post:
+      operationId: depositFunds
+      summary: Top up a subscription's prepaid balance
+      description: |
+        Transfers USDC from the subscriber's wallet into the subscription vault.
+        The deposit must meet the contract's `min_topup` threshold.
+      tags: [subscriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositRequest"
+      responses:
+        "200":
+          description: Deposit accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /subscriptions/{subscriptionId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    post:
+      operationId: cancelSubscription
+      summary: Cancel a subscription
+      description: |
+        Either the subscriber or the merchant may cancel. The authorizer address
+        must match the signer in the request body.
+      tags: [subscriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizerRequest"
+      responses:
+        "200":
+          description: Subscription cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /subscriptions/{subscriptionId}/pause:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    post:
+      operationId: pauseSubscription
+      summary: Pause an active subscription
+      tags: [subscriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizerRequest"
+      responses:
+        "200":
+          description: Subscription paused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /subscriptions/{subscriptionId}/resume:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    post:
+      operationId: resumeSubscription
+      summary: Resume a paused subscription
+      tags: [subscriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizerRequest"
+      responses:
+        "200":
+          description: Subscription resumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /charges/{subscriptionId}:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    post:
+      operationId: chargeSubscription
+      summary: Charge a single subscription (admin only)
+      description: |
+        Executes one billing cycle for the given subscription. Requires admin
+        authorization. Fails if the interval has not elapsed or the balance is
+        insufficient.
+      tags: [charges]
+      security:
+        - AdminApiKey: []
+      responses:
+        "200":
+          description: Charge executed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChargeResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /charges/batch:
+    post:
+      operationId: batchCharge
+      summary: Charge multiple subscriptions in one call (admin only)
+      description: |
+        Iterates through the provided subscription IDs and attempts to charge
+        each. Returns per-subscription success/failure results without aborting
+        on partial failures.
+      tags: [charges]
+      security:
+        - AdminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchChargeRequest"
+      responses:
+        "200":
+          description: Batch processed (see per-item results for failures).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchChargeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /merchants/{merchantAddress}/withdraw:
+    parameters:
+      - name: merchantAddress
+        in: path
+        required: true
+        description: Stellar address (G… or C…) of the merchant.
+        schema:
+          type: string
+          pattern: "^[GC][A-Z2-7]{55}$"
+    post:
+      operationId: withdrawMerchantFunds
+      summary: Withdraw accumulated merchant funds
+      description: |
+        Transfers USDC from the merchant's vault balance to their Stellar wallet.
+        The merchant must sign the request.
+      tags: [merchants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WithdrawRequest"
+      responses:
+        "200":
+          description: Withdrawal executed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WithdrawResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+
+components:
+
+  # ---- Security schemes ---------------------------------------------------
+
+  securitySchemes:
+    AdminApiKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Api-Key
+      description: |
+        Shared secret for admin-only operations (charge, batch-charge).
+        Keep this out of client bundles; use only from server-side cron jobs.
+
+  # ---- Parameters ---------------------------------------------------------
+
+  parameters:
+    SubscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      description: Monotonically incrementing u32 subscription identifier assigned by the contract.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+
+  # ---- Request schemas ----------------------------------------------------
+
+  schemas:
+
+    CreateSubscriptionRequest:
+      type: object
+      required:
+        - subscriber
+        - merchant
+        - amount
+        - intervalSeconds
+      properties:
+        subscriber:
+          type: string
+          description: Stellar address of the subscriber.
+          pattern: "^[GC][A-Z2-7]{55}$"
+          example: "GABC1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFG"
+        merchant:
+          type: string
+          description: Stellar address of the merchant.
+          pattern: "^[GC][A-Z2-7]{55}$"
+          example: "GMERCHANT234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890AB"
+        amount:
+          type: integer
+          format: int64
+          description: Charge per interval in USDC base units (7 decimals; 1 USDC = 10_000_000).
+          minimum: 1
+          example: 10000000
+        intervalSeconds:
+          type: integer
+          format: int64
+          description: Minimum seconds between charges (e.g. 2592000 = 30 days).
+          minimum: 1
+          example: 2592000
+        expiration:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Optional Unix timestamp (seconds) after which the subscription is
+            treated as expired. Omit or set null for no expiry.
+          example: 1800000000
+        usageEnabled:
+          type: boolean
+          description: |
+            Reserved for future usage-billing mode. Set false for standard
+            interval billing.
+          default: false
+
+    DepositRequest:
+      type: object
+      required:
+        - subscriber
+        - amount
+      properties:
+        subscriber:
+          type: string
+          description: Stellar address of the subscriber authorising the transfer.
+          pattern: "^[GC][A-Z2-7]{55}$"
+        amount:
+          type: integer
+          format: int64
+          description: Amount to deposit in USDC base units. Must meet min_topup.
+          minimum: 1
+
+    AuthorizerRequest:
+      type: object
+      required:
+        - authorizer
+      properties:
+        authorizer:
+          type: string
+          description: |
+            Stellar address of the authorising party (subscriber or merchant
+            depending on the operation).
+          pattern: "^[GC][A-Z2-7]{55}$"
+
+    BatchChargeRequest:
+      type: object
+      required:
+        - subscriptionIds
+      properties:
+        subscriptionIds:
+          type: array
+          description: List of subscription IDs to attempt charging.
+          minItems: 1
+          maxItems: 500
+          items:
+            type: integer
+            format: int64
+            minimum: 0
+
+    WithdrawRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Amount to withdraw in USDC base units.
+          minimum: 1
+
+    # ---- Response schemas -------------------------------------------------
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          description: API server version string.
+
+    SubscriptionResponse:
+      type: object
+      required:
+        - subscriptionId
+        - subscriber
+        - merchant
+        - amount
+        - intervalSeconds
+        - lastPaymentTimestamp
+        - status
+        - prepaidBalance
+        - usageEnabled
+      properties:
+        subscriptionId:
+          type: integer
+          format: int64
+          minimum: 0
+        subscriber:
+          type: string
+          pattern: "^[GC][A-Z2-7]{55}$"
+        merchant:
+          type: string
+          pattern: "^[GC][A-Z2-7]{55}$"
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+        intervalSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+        lastPaymentTimestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp of the last successful charge (0 if never charged).
+        status:
+          $ref: "#/components/schemas/SubscriptionStatus"
+        prepaidBalance:
+          type: integer
+          format: int64
+          minimum: 0
+        expiration:
+          type: integer
+          format: int64
+          nullable: true
+        usageEnabled:
+          type: boolean
+
+    SubscriptionStatus:
+      type: string
+      description: |
+        Lifecycle state of the subscription. See docs/subscription_lifecycle.md
+        for the full state machine and permitted transitions.
+      enum:
+        - Active
+        - Paused
+        - Cancelled
+        - InsufficientBalance
+        - GracePeriod
+
+    ChargeResult:
+      type: object
+      required:
+        - subscriptionId
+        - success
+      properties:
+        subscriptionId:
+          type: integer
+          format: int64
+          minimum: 0
+        success:
+          type: boolean
+        errorCode:
+          type: string
+          nullable: true
+          description: Machine-readable error code from docs/errors.md when success is false.
+        amountCharged:
+          type: integer
+          format: int64
+          nullable: true
+          description: Amount transferred (USDC base units) when success is true.
+
+    BatchChargeResponse:
+      type: object
+      required:
+        - results
+        - successCount
+        - failureCount
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChargeResult"
+        successCount:
+          type: integer
+          minimum: 0
+        failureCount:
+          type: integer
+          minimum: 0
+
+    WithdrawResponse:
+      type: object
+      required:
+        - merchantAddress
+        - amountWithdrawn
+      properties:
+        merchantAddress:
+          type: string
+          pattern: "^[GC][A-Z2-7]{55}$"
+        amountWithdrawn:
+          type: integer
+          format: int64
+          minimum: 1
+        remainingBalance:
+          type: integer
+          format: int64
+          minimum: 0
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code (see docs/errors.md).
+          example: InvalidAmount
+        message:
+          type: string
+          description: Human-readable description of the error.
+        details:
+          type: object
+          nullable: true
+          description: Optional structured context (e.g. field name, constraint violated).
+          additionalProperties: true
+
+  # ---- Shared responses ---------------------------------------------------
+
+  responses:
+    BadRequest:
+      description: The request body or parameters are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Authentication or authorisation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: The operation conflicts with current state (e.g. invalid status transition).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: The request is well-formed but cannot be processed (e.g. insufficient balance).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

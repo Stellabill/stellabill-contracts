@@ -61,3 +61,9 @@ tarpaulin-report.html
 test_snapshots/
 **/test_snapshots/
 .coverage
+
+# Buf
+.buf/
+buf-lint-output.txt
+# Generated code (uncomment when buf generate is enabled)
+# gen/

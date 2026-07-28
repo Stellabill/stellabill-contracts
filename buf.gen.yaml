@@ -1,0 +1,59 @@
+# buf.gen.yaml — Buf code-generation configuration for Stellabill
+# https://buf.build/docs/configuration/v2/buf-gen-yaml
+#
+# Current state: OpenAPI linting only.
+# When proto files are added under proto/, uncomment the relevant plugins.
+version: v2
+
+# ---------------------------------------------------------------------------
+# Managed mode
+# ---------------------------------------------------------------------------
+# Managed mode automatically sets standard options (go_package, java_package,
+# etc.) so you don't have to specify them in each .proto file.
+managed:
+  enabled: true
+  # Override go_package_prefix when the Go module path is known:
+  # override:
+  #   - file_option: go_package_prefix
+  #     value: github.com/stellabill/stellabill-backend/gen
+
+# ---------------------------------------------------------------------------
+# Plugins
+# ---------------------------------------------------------------------------
+plugins:
+  # -- OpenAPI linting -------------------------------------------------------
+  # buf-plugin-openapi validates openapi/openapi.yaml against the OpenAPI 3.x
+  # specification. No output is generated; it runs as a lint side-effect.
+  # See: https://github.com/bufbuild/bufplugin-go (openapi plugin)
+  - plugin: buf.build/bufbuild/openapi
+    # No `out` needed for pure lint; include when generating client SDKs.
+    # out: gen/openapi
+    opt:
+      - strict=true
+
+  # -- Future: Go server stubs (connect-go) ----------------------------------
+  # Uncomment when proto/ contains service definitions.
+  # - plugin: buf.build/connectrpc/go
+  #   out: gen/go
+  #   opt:
+  #     - paths=source_relative
+
+  # -- Future: TypeScript client (connect-web) --------------------------------
+  # - plugin: buf.build/connectrpc/es
+  #   out: gen/ts
+  #   opt:
+  #     - target=ts
+
+  # -- Future: gRPC-Gateway (REST ↔ gRPC transcoding) ------------------------
+  # - plugin: buf.build/grpc-ecosystem/gateway/v2
+  #   out: gen/go
+  #   opt:
+  #     - paths=source_relative
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+# Explicit input list so `buf generate` works without positional args.
+inputs:
+  - directory: openapi
+  # - directory: proto   # uncomment when proto files are added

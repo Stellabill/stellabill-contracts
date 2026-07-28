@@ -1,0 +1,8 @@
+# This directory is a placeholder for future Protobuf service definitions.
+#
+# When adding proto files:
+#   1. Follow the package convention: stellabill.<service>.<version>
+#      e.g.  package stellabill.billing.v1;
+#   2. Uncomment the proto module in buf.yaml.
+#   3. Uncomment the generator plugins in buf.gen.yaml.
+#   4. See docs/buf-conventions.md for the full style guide.

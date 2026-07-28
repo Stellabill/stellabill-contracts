@@ -1,0 +1,81 @@
+name: Buf lint
+
+# Run on every PR and on pushes to main.
+# The breaking-change check compares against the main branch baseline so it
+# only fires in PRs (where HEAD diverges from main).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "openapi/**"
+      - "proto/**"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - ".github/workflows/buf-lint.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "openapi/**"
+      - "proto/**"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - ".github/workflows/buf-lint.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  buf-lint:
+    name: Buf lint & breaking-change check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+        with:
+          # Fetch full history so `buf breaking --against` can reach the
+          # main branch tip even on a PR with many commits.
+          fetch-depth: 0
+
+      # bufbuild/buf-action pins buf to a specific release and caches the
+      # binary between runs.  Pin the version explicitly so a silent upstream
+      # update cannot break CI.
+      - name: Set up Buf
+        uses: bufbuild/buf-action@v1.0.0
+        with:
+          version: "1.47.2"
+          setup_only: true
+
+      # ------------------------------------------------------------------
+      # Lint: enforce naming, casing, and completeness rules from buf.yaml.
+      # Failures here block the merge.
+      # ------------------------------------------------------------------
+      - name: buf lint
+        run: buf lint
+
+      # ------------------------------------------------------------------
+      # Breaking-change check: compare the current branch against the tip
+      # of main.  Only meaningful on PRs; on direct pushes to main the
+      # comparison is a no-op (HEAD == baseline) and exits 0.
+      #
+      # The `.git#branch=main` syntax tells buf to load the spec from the
+      # git history rather than fetching over the network, so no external
+      # access is required.
+      # ------------------------------------------------------------------
+      - name: buf breaking change check
+        run: |
+          buf breaking --against '.git#branch=main'
+
+      # ------------------------------------------------------------------
+      # (Optional) Generate a lint summary for the PR comment thread.
+      # This step is best-effort; failures here do not block the merge.
+      # ------------------------------------------------------------------
+      - name: Upload lint report
+        if: failure()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: buf-lint-report
+          path: |
+            buf-lint-output.txt
+          if-no-files-found: ignore

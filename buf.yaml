@@ -1,0 +1,56 @@
+# buf.yaml — Buf workspace configuration for Stellabill
+# https://buf.build/docs/configuration/v2/buf-yaml
+version: v2
+
+# ---------------------------------------------------------------------------
+# Modules
+# ---------------------------------------------------------------------------
+# Each entry maps a directory to a buf module. The openapi/ module is linted
+# via the openapi-lint plugin (see buf.gen.yaml). The proto/ module is a
+# skeleton for future Protobuf definitions — add .proto files there when
+# needed without any config changes.
+
+modules:
+  - path: openapi
+    # No deps required for OpenAPI linting; kept explicit for clarity.
+
+  # Future proto module — uncomment and add .proto files when ready.
+  # - path: proto
+  #   name: buf.build/stellabill/api
+  #   deps:
+  #     - buf.build/googleapis/googleapis
+
+# ---------------------------------------------------------------------------
+# Linting
+# ---------------------------------------------------------------------------
+lint:
+  # The DEFAULT group enforces the standard Buf style guide:
+  # https://buf.build/docs/lint/rules
+  use:
+    - DEFAULT
+
+  # Exceptions for this repo:
+  # PACKAGE_VERSION_SUFFIX – not applicable to OpenAPI; suppress until proto
+  # files are added.
+  except:
+    - PACKAGE_VERSION_SUFFIX
+
+  # Ignore generated or vendored directories.
+  ignore:
+    - proto/vendor
+
+# ---------------------------------------------------------------------------
+# Breaking-change detection
+# ---------------------------------------------------------------------------
+breaking:
+  # FILE group catches the widest set of wire-breaking changes (removing
+  # fields, renaming required fields, changing types, removing paths).
+  use:
+    - FILE
+
+  # Allow adding new enum values — not wire-breaking for well-behaved clients.
+  except:
+    - ENUM_VALUE_NO_DELETE_UNLESS_NAME_RESERVED
+
+  ignore:
+    - proto/vendor
