@@ -199,7 +199,7 @@ pub fn build_metadata_signed_message(
     network_id: &BytesN<32>,
 ) -> Bytes {
     let mut buf = Bytes::new(env);
-    buf.extend_from_slice(&DOMAIN_METADATA_SIGNED[..]);
+    buf.extend_from_slice(&SIGNED_MSG_DOMAIN_TAG[..]);
 
     let sub_id_bytes = payload.subscription_id.to_be_bytes();
     buf.extend_from_slice(&sub_id_bytes);
