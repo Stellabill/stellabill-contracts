@@ -202,6 +202,7 @@ mod test_oracle_liveness {
         assert!(!event.healthy);
 
         // Test with very long max age (1000 seconds)
+        env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
         let oracle2 = Address::generate(&env);
         client.set_oracle_config(&admin, &true, &Some(oracle2), &1000);
         let result = client.emit_oracle_liveness(&env);
