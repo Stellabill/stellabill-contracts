@@ -1636,7 +1636,7 @@ pub fn do_charge_one_off(
         merchant_amount,
         BillingChargeKind::OneOff,
     )?;
-    if fee_amount > 0 {
+    let should_emit_fee_event = if fee_amount > 0 {
         if let Some(ref treasury) = treasury_opt {
             crate::merchant::credit_merchant_balance_for_token(
                 env,
@@ -1645,24 +1645,38 @@ pub fn do_charge_one_off(
                 fee_amount,
                 BillingChargeKind::OneOff,
             )?;
-            env.events().publish(
-                (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                crate::types::ProtocolFeeChargedEvent {
-                    subscription_id,
-                    merchant: sub.merchant.clone(),
-                    token: sub.token.clone(),
-                    fee_amount,
-                    treasury: treasury.clone(),
-                    timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                },
-            );
+            Some((treasury.clone(), fee_amount))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+    }
 
+    write_subscription(env, subscription_id, &sub);
+
+    // Emit protocol fee event after state is written
+    if let Some((treasury, fee)) = should_emit_fee_event {
+        env.events().publish(
+            (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+            crate::types::ProtocolFeeChargedEvent {
+                subscription_id,
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                fee_amount: fee,
+                treasury,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
+
+    // Emit lifetime cap reached event after state is written
+    if cap_reached {
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
                 (symbol_short!("cap_reach"), subscription_id),
@@ -1676,8 +1690,6 @@ pub fn do_charge_one_off(
             );
         }
     }
-
-    write_subscription(env, subscription_id, &sub);
     append_statement(
         env,
         subscription_id,
