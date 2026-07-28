@@ -2812,6 +2812,8 @@ mod test_usage_limits_required;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
+mod test_reentrancy_invariants;
+#[cfg(test)]
 mod test_metadata_signed;
 
 #[cfg(test)]
