@@ -6,7 +6,7 @@
 
 use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error,
-    RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    FeeTokenConfiguredEvent, RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -91,8 +91,11 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
-    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
-    env.crypto().sha256(&label_bytes)
+    let mut label_bytes = soroban_sdk::Bytes::new(env);
+    for &b in key_label.as_bytes() {
+        label_bytes.push_back(b);
+    }
+    env.crypto().sha256(&label_bytes).into()
 }
 
 /// Enforce a per-key cooldown on protocol-wide admin config mutations.
@@ -600,6 +603,45 @@ pub fn get_protocol_fee_bps(env: &Env) -> u32 {
 /// Return the configured treasury address, or None if not set.
 pub fn get_treasury(env: &Env) -> Option<Address> {
     read_config(env, &DataKey::Treasury)
+}
+
+/// Set the fee-token override address. Admin only.
+///
+/// When set, protocol fees are charged in `fee_token` instead of the
+/// subscription's settlement token, converted through the oracle at charge
+/// time. Pass `None` to clear the override and revert to the default behaviour
+/// (fees paid in the subscription's settlement token).
+pub fn set_fee_token(
+    env: &Env,
+    admin: Address,
+    fee_token: Option<Address>,
+) -> Result<(), crate::types::Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(crate::types::Error::Unauthorized);
+    }
+    enforce_config_cooldown(env, "FeeToken")?;
+    if let Some(ref token) = fee_token {
+        write_config(env, &DataKey::FeeToken, token);
+    } else {
+        remove_config(env, &DataKey::FeeToken);
+    }
+    env.events().publish(
+        (Symbol::new(env, "fee_token_configured"),),
+        FeeTokenConfiguredEvent {
+            admin,
+            fee_token,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+/// Return the configured fee-token override address, or `None` if not set.
+pub fn get_fee_token(env: &Env) -> Option<Address> {
+    read_config(env, &DataKey::FeeToken)
 }
 
 /// Return the configured buyout premium in basis points, defaulting to 0.
