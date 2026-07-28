@@ -2798,6 +2798,8 @@ mod test_utils;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
+mod test_charge_event_exclusivity;
+#[cfg(test)]
 mod test_metadata_signed;
 
 #[cfg(test)]
