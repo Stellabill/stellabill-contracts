@@ -124,7 +124,10 @@ fn test_empty_period_sets_empty_flag() {
         assert!(write_period_snapshot(&env, snapshot).is_ok());
 
         let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
-        assert_eq!(fetched.status_flags, SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_EMPTY);
+        assert_eq!(
+            fetched.status_flags,
+            SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_EMPTY
+        );
     });
 }
 
@@ -191,7 +194,10 @@ fn test_integrity_checks() {
             status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
             finalized_at: 150,
         };
-        assert_eq!(write_period_snapshot(&env, bad_bounds), Err(Error::InvalidInput));
+        assert_eq!(
+            write_period_snapshot(&env, bad_bounds),
+            Err(Error::InvalidInput)
+        );
 
         // Interval charge requires period_start < period_end
         let bad_interval = BillingPeriodSnapshot {
@@ -204,6 +210,9 @@ fn test_integrity_checks() {
             status_flags: SNAPSHOT_FLAG_INTERVAL_CHARGED,
             finalized_at: 100,
         };
-        assert_eq!(write_period_snapshot(&env, bad_interval), Err(Error::InvalidInput));
+        assert_eq!(
+            write_period_snapshot(&env, bad_interval),
+            Err(Error::InvalidInput)
+        );
     });
 }
