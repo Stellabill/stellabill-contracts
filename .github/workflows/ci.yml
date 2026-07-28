@@ -13,11 +13,11 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -33,11 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit-tests
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -46,19 +46,22 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Run performance budget tests
+      - name: Run query performance budget tests
         run: cargo test -p subscription_vault --test query_performance -- --nocapture
         # --nocapture prints [Perf] metrics to CI log for review
+      - name: Run gas and storage budget regression tests
+        run: cargo test -p subscription_vault --test gas_budget -- --nocapture
+        # --nocapture prints [Budget] lines for CI delta graphing (closes #489)
 
   coverage:
     runs-on: ubuntu-latest
     needs: [unit-tests, performance-budgets]
     steps:
-      - uses: actions/checkout@v4.2.1
+      - uses: actions/checkout@v4.2.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
-        uses: actions/cache@v4.2.0
+        uses: actions/cache@v4.2.2
         with:
           path: |
             ~/.cargo/bin/
@@ -72,7 +75,7 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.txt
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5.3.1
         with:
           files: lcov.txt
           fail_ci_if_error: false

@@ -19,6 +19,7 @@ fn test_create_subscription_emits_event() {
                 interval_seconds: 3600,
                 lifetime_cap: None,
                 expires_at: None,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             }.into_val(&env)
         )
     );
@@ -44,6 +45,7 @@ fn test_create_subscription_emits_event() {
                 interval_seconds: 3600,
                 lifetime_cap: None,
                 expires_at: None,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
             }.into_val(&env)
         )
     );
@@ -59,5 +61,6 @@ env.events().publish(
         interval_seconds,
         lifetime_cap: None, // Update if your logic supports caps
         expires_at: expiration,
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
     },
 );

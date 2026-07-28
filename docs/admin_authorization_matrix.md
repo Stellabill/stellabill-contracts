@@ -57,6 +57,32 @@ the host layer when no signature is present.
 | `operator_charge_usage` | Explicit `operator` arg must equal stored operator | `Unauthorized` | `Unauthorized` | Emergency-stop gated; reentrancy guard |
 | `operator_charge_usage_with_reference` | Explicit `operator` arg must equal stored operator | `Unauthorized` | `Unauthorized` | Emergency-stop gated; reentrancy guard |
 
+## Dual-role (admin **or** operator) entrypoints
+
+These operational-hygiene endpoints accept **either** the stored admin or the
+stored operator as `caller`, authorized by `require_admin_or_operator_auth`
+(`caller.require_auth()` runs first, then the address must equal the stored admin
+or operator; anything else is `Unauthorized`). They exist so an operator can pause
+or cancel many subscriptions when a merchant is offboarded or compromised, without
+needing the full admin key.
+
+| Entrypoint | Authorization model | Unauthorized caller | Nonce | Notes |
+| --- | --- | --- | --- | --- |
+| `bulk_pause_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | Partial-failure tolerant; skips already-paused/missing/expired ids; **not** emergency-stop gated (mirrors `pause_subscription`); rejects > `BATCH_MAX_SIZE` ids with `BatchTooLarge`; empty list is a no-op (no nonce, no event) |
+| `bulk_cancel_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | As above, plus refunds each cancelled subscription's prepaid balance; wrapped in a reentrancy guard because the loop performs token transfers; duplicate/already-cancelled ids are skipped so no double refund |
+
+Each call returns a `Vec<BulkSubscriptionResult>` — one entry per requested id, in
+request order — and emits one `BulkPauseEvent`/`BulkCancelEvent` envelope plus the
+usual per-id `SubscriptionPausedEvent`/`SubscriptionCancelledEvent` for ids that
+actually transitioned.
+
+> **Nonce sharing.** The per-batch nonce reuses the `DOMAIN_OPERATOR_BATCH_CHARGE`
+> (domain `2`) counter, which is keyed by `(signer, domain)`. Admin and operator
+> therefore each maintain an independent monotonic sequence, but for a *single*
+> signer this counter is shared across `operator_batch_charge`,
+> `bulk_pause_subscriptions`, and `bulk_cancel_subscriptions`. Read the next
+> expected value with `get_operator_nonce(op)` or `get_admin_nonce(signer, 2)`.
+
 ### Read-only operator helpers (no auth)
 
 | Entrypoint | Returns |

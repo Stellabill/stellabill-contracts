@@ -69,3 +69,29 @@ limit is reached; only new subscriptions and additional prepaid exposure are blo
     explain why the operation failed and what adjustments are needed (e.g. lower amount, cancel
     other subscriptions, or raise the limit).
 
+### Invariants and testing
+
+Exposure is summed with `safe_math::safe_add` (checked addition), so a malicious merchant
+cannot wrap the `i128` exposure counter: a sum that would exceed `i128::MAX` returns
+`Error::Overflow` instead of silently overflowing.
+
+The following invariants are locked by
+[`tests/credit_limit_invariant.rs`](../contracts/subscription_vault/tests/credit_limit_invariant.rs):
+
+1. **No-overflow summation** — `get_subscriber_exposure` equals the sum of prepaid balances
+   plus active-subscription amounts, and returns `Error::Overflow` rather than a wrapped value
+   at the `i128` boundary.
+2. **No over-extension** — an exposure-increasing operation is rejected with
+   `Error::CreditLimitExceeded` exactly when it would push exposure above a configured non-zero
+   limit; after any accepted increase, `exposure <= limit`.
+3. **No claw-back** — lowering a limit below current exposure succeeds and never mutates
+   existing exposure; it only blocks *future* increases.
+4. **Per-token isolation** — exposure and limits for one settlement token are independent of
+   subscriptions denominated in another token.
+
+The headline test drives a randomized 500-step sequence of create / cancel / set-limit
+operations against an independently-tracked model. Sequences are deterministic in a `u64` seed;
+seeds are pinned under
+[`tests/fixtures/credit_limit/`](../contracts/subscription_vault/tests/fixtures/credit_limit/)
+so any discovered failure is replayed as a permanent regression guard.
+

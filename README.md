@@ -158,7 +158,27 @@ Set up the repository pre-commit hook to enforce code formatting (`cargo fmt`) a
 | Run tests | `cargo test` |
 | Build contract WASM | `soroban contract build` |
 | Install Git hooks | `./scripts/install_git_hooks.sh` |
+| One-command local deploy | `./scripts/deploy_local.sh` |
 | Run with Soroban CLI (e.g. testnet) | See [Stellar docs](https://developers.stellar.org/docs/tools/soroban-cli) for `soroban contract deploy` and `invoke`. |
+
+### One-command local deployment
+
+[`scripts/deploy_local.sh`](scripts/deploy_local.sh) automates the full workflow:
+building the contract, starting a local Soroban network (via Docker
+`stellar/quickstart`), deploying, initializing, and running a smoke test.
+
+```bash
+./scripts/deploy_local.sh              # full flow
+./scripts/deploy_local.sh --skip-build # reuse existing WASM
+./scripts/deploy_local.sh --skip-smoke # deploy + init only
+./scripts/deploy_local.sh --help       # full option reference
+```
+
+**Prerequisites:** `rust`, `soroban`/`stellar` CLI, `docker`, and `curl` (all checked at startup).
+
+The script creates three test identities (`admin`, `subscriber`, `merchant`),
+wraps the native Stellar asset as a test token, and validates the deployment
+by creating, funding, and charging a subscription.
 
 ---
 

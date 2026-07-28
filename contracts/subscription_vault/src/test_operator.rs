@@ -43,14 +43,14 @@ fn set_operator_by_admin_stores_address_and_emits_event() {
     te.env.ledger().with_mut(|li| li.timestamp = 1_000);
     te.client.set_operator(&te.admin, &operator);
 
-    assert_eq!(te.client.get_operator(), Some(operator.clone()));
-
     let events = te.env.events().all();
     let last = events.last().expect("no events");
     let payload: OperatorSetEvent = last.2.into_val(&te.env);
     assert_eq!(payload.admin, te.admin);
-    assert_eq!(payload.operator, operator);
+    assert_eq!(payload.operator, operator.clone());
     assert_eq!(payload.timestamp, 1_000);
+
+    assert_eq!(te.client.get_operator(), Some(operator));
 }
 
 #[test]
@@ -60,6 +60,9 @@ fn set_operator_replaces_previous_operator() {
     let op2 = Address::generate(&te.env);
 
     te.client.set_operator(&te.admin, &op1);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.set_operator(&te.admin, &op2);
 
     assert_eq!(te.client.get_operator(), Some(op2));
@@ -108,15 +111,18 @@ fn remove_operator_clears_address_and_emits_event() {
 
     te.env.ledger().with_mut(|li| li.timestamp = 2_000);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
-
-    assert_eq!(te.client.get_operator(), None);
 
     let events = te.env.events().all();
     let last = events.last().expect("no events");
     let payload: OperatorRemovedEvent = last.2.into_val(&te.env);
     assert_eq!(payload.admin, te.admin);
     assert_eq!(payload.timestamp, 2_000);
+
+    assert_eq!(te.client.get_operator(), None);
 }
 
 #[test]
@@ -345,7 +351,7 @@ fn operator_charge_usage_succeeds() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 
@@ -374,7 +380,7 @@ fn operator_charge_usage_wrong_operator_rejected() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 
@@ -393,6 +399,9 @@ fn remove_operator_revokes_batch_charge_immediately() {
 
     let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
 
     te.jump(INTERVAL + 1);
@@ -414,6 +423,9 @@ fn remove_operator_revokes_single_charge_immediately() {
 
     let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
 
     te.jump(INTERVAL + 1);
@@ -565,7 +577,13 @@ fn new_admin_can_replace_operator_after_rotation() {
     let new_op = Address::generate(&te.env);
 
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.rotate_admin(&te.admin, &new_admin, &0u64);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.set_operator(&new_admin, &new_op);
 
     assert_eq!(te.client.get_operator(), Some(new_op));
@@ -649,7 +667,7 @@ fn get_operator_nonce_increments_per_call() {
 
         // Re-fund so the next charge can succeed.
         te.stellar_token_client().mint(&subscriber, &AMOUNT);
-        te.client.deposit_funds(&sub_id, &subscriber, &AMOUNT);
+        te.client.deposit_funds(&sub_id, &subscriber, &AMOUNT, &None::<soroban_sdk::BytesN<32>>);
     }
     assert_eq!(te.client.get_operator_nonce(&operator), 3u64);
 }
@@ -673,7 +691,7 @@ fn operator_charge_usage_with_reference_succeeds() {
         &None::<u64>,
     );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
     te.client.set_operator(&te.admin, &operator);
 

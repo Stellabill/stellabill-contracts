@@ -18,10 +18,7 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use subscription_vault::{DataKey, Error, SubscriptionVault, SubscriptionVaultClient};
 
 // ── shared constants ──────────────────────────────────────────────────────────
@@ -43,7 +40,13 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address) {
 
     let vault_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &vault_id);
-    client.init(&token, &6u32, &admin, &1_000_000i128, &(7 * 24 * 60 * 60u64));
+    client.init(
+        &token,
+        &6u32,
+        &admin,
+        &1_000_000i128,
+        &(7 * 24 * 60 * 60u64),
+    );
 
     (env, client, token)
 }
@@ -51,7 +54,7 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address) {
 /// Seed `DataKey::NextId` to `value` directly in contract storage.
 fn seed_next_id(env: &Env, contract: &Address, value: u32) {
     env.as_contract(contract, || {
-        env.storage().instance().set(&DataKey::NextId, &value);
+        env.storage().persistent().set(&DataKey::NextId, &value);
     });
 }
 
@@ -59,7 +62,7 @@ fn seed_next_id(env: &Env, contract: &Address, value: u32) {
 fn read_next_id(env: &Env, contract: &Address) -> u32 {
     env.as_contract(contract, || {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::NextId)
             .unwrap_or(0u32)
     })
