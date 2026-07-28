@@ -4,8 +4,9 @@ use crate::{
         BillingPeriodSnapshot, Error, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
         SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
     },
+    SubscriptionVault,
 };
-use soroban_sdk::{testutils::Ledger, Env};
+use soroban_sdk::{testutils::Ledger, Address, Env};
 
 fn setup() -> (Env, soroban_sdk::Address) {
     let env = Env::default();
@@ -20,16 +21,16 @@ fn test_write_and_get_snapshot() {
     let sub_id = 1;
     let period_index = 0;
 
-    let snapshot = BillingPeriodSnapshot {
-        subscription_id: sub_id,
-        period_index,
-        period_start: 100,
-        period_end: 200,
-        total_charged: 500,
-        total_usage_units: 50,
-        status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
-        finalized_at: 200,
-    };
+        let snapshot = BillingPeriodSnapshot {
+            subscription_id: sub_id,
+            period_index,
+            period_start: 100,
+            period_end: 200,
+            total_charged: 500,
+            total_usage_units: 50,
+            status_flags: SNAPSHOT_FLAG_USAGE_CHARGED,
+            finalized_at: 200,
+        };
 
     env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
@@ -75,16 +76,16 @@ fn test_overwrite_closed_snapshot_rejected() {
     let sub_id = 3;
     let period_index = 0;
 
-    let mut snapshot = BillingPeriodSnapshot {
-        subscription_id: sub_id,
-        period_index,
-        period_start: 100,
-        period_end: 200,
-        total_charged: 500,
-        total_usage_units: 0,
-        status_flags: SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_INTERVAL_CHARGED,
-        finalized_at: 200,
-    };
+        let mut snapshot = BillingPeriodSnapshot {
+            subscription_id: sub_id,
+            period_index,
+            period_start: 100,
+            period_end: 200,
+            total_charged: 500,
+            total_usage_units: 0,
+            status_flags: SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_INTERVAL_CHARGED,
+            finalized_at: 200,
+        };
 
     env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
@@ -102,16 +103,16 @@ fn test_empty_period_sets_empty_flag() {
     let sub_id = 4;
     let period_index = 0;
 
-    let snapshot = BillingPeriodSnapshot {
-        subscription_id: sub_id,
-        period_index,
-        period_start: 100,
-        period_end: 200,
-        total_charged: 0,
-        total_usage_units: 0,
-        status_flags: SNAPSHOT_FLAG_CLOSED,
-        finalized_at: 200,
-    };
+        let snapshot = BillingPeriodSnapshot {
+            subscription_id: sub_id,
+            period_index,
+            period_start: 100,
+            period_end: 200,
+            total_charged: 0,
+            total_usage_units: 0,
+            status_flags: SNAPSHOT_FLAG_CLOSED,
+            finalized_at: 200,
+        };
 
     env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot).is_ok());

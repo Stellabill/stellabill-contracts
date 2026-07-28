@@ -8,9 +8,7 @@
 //! Both tests validate that `prepaid_balance` is never modified when the operation fails,
 //! confirming the Checks-Effects-Interactions pattern is followed.
 
-use crate::{
-    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
-};
+use crate::{Error, SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -36,7 +34,7 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 fn create_sub(
     env: &Env,
     client: &SubscriptionVaultClient,
-    token: &Address,
+    _token: &Address,
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
@@ -69,14 +67,21 @@ fn test_deposit_insufficient_token_balance_reverts() {
     let sub_before = client.get_subscription(&id);
 
     // Subscriber has 0 tokens — the token.transfer inside deposit_funds must revert
-    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
-    assert!(result.is_err(), "deposit with zero subscriber balance must fail");
+    let result = client.try_deposit_funds(
+        &id,
+        &subscriber,
+        &5_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert!(
+        result.is_err(),
+        "deposit with zero subscriber balance must fail"
+    );
 
     // State invariant: prepaid_balance and vault balance unchanged
     let sub_after = client.get_subscription(&id);
     assert_eq!(
-        sub_after.prepaid_balance,
-        sub_before.prepaid_balance,
+        sub_after.prepaid_balance, sub_before.prepaid_balance,
         "prepaid_balance must not change on failed deposit"
     );
     assert_eq!(
@@ -96,21 +101,27 @@ fn test_deposit_insufficient_partial_balance_reverts() {
 
     // Mint just enough for authorization but not the full deposit
     let short_amount = 1_000i128;
-    soroban_sdk::token::StellarAssetClient::new(&env, &token)
-        .mint(&subscriber, &short_amount);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &short_amount);
 
     let vault_before = token_client.balance(&client.address);
     let sub_before = client.get_subscription(&id);
 
     // Try to deposit more than the subscriber holds
-    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
-    assert!(result.is_err(), "deposit exceeding subscriber balance must fail");
+    let result = client.try_deposit_funds(
+        &id,
+        &subscriber,
+        &5_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assert!(
+        result.is_err(),
+        "deposit exceeding subscriber balance must fail"
+    );
 
     // State invariant: nothing changed
     let sub_after = client.get_subscription(&id);
     assert_eq!(
-        sub_after.prepaid_balance,
-        sub_before.prepaid_balance,
+        sub_after.prepaid_balance, sub_before.prepaid_balance,
         "prepaid_balance must not change on failed deposit"
     );
     assert_eq!(
@@ -140,7 +151,12 @@ fn test_deposit_rejected_when_credit_limit_exceeded() {
 
     // Deposit min_topup (1_000_000) should be rejected since
     // exposure (10_000_000) + 1_000_000 > limit (1_000_000)
-    let result = client.try_deposit_funds(&id, &subscriber, &1_000_000i128);
+    let result = client.try_deposit_funds(
+        &id,
+        &subscriber,
+        &1_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
     assert_eq!(
         result,
         Err(Ok(Error::CreditLimitExceeded)),
@@ -150,8 +166,7 @@ fn test_deposit_rejected_when_credit_limit_exceeded() {
     // State unchanged
     let sub_after = client.get_subscription(&id);
     assert_eq!(
-        sub_after.prepaid_balance,
-        sub_before.prepaid_balance,
+        sub_after.prepaid_balance, sub_before.prepaid_balance,
         "prepaid_balance must not change on credit-limit rejection"
     );
 }
@@ -164,8 +179,7 @@ fn test_deposit_allowed_within_credit_limit() {
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     // Mint enough tokens to the subscriber
-    soroban_sdk::token::StellarAssetClient::new(&env, &token)
-        .mint(&subscriber, &PREPAID);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &PREPAID);
 
     // Set a generous credit limit: 100_000_000
     // Exposure = 0 (prepaid) + AMOUNT (10_000_000) = 10_000_000
@@ -174,7 +188,8 @@ fn test_deposit_allowed_within_credit_limit() {
 
     let vault_before = token_client.balance(&client.address);
 
-    let result = client.try_deposit_funds(&id, &subscriber, &PREPAID);
+    let result =
+        client.try_deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_ok(), "deposit within credit limit should succeed");
 
     // Verify deposit was applied
@@ -213,7 +228,12 @@ fn test_deposit_credit_limit_aggregate_two_subs() {
     let sub1_before = client.get_subscription(&id1);
     let sub2_before = client.get_subscription(&id2);
 
-    let result = client.try_deposit_funds(&id1, &subscriber, &1_000_000i128);
+    let result = client.try_deposit_funds(
+        &id1,
+        &subscriber,
+        &1_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
     assert_eq!(
         result,
         Err(Ok(Error::CreditLimitExceeded)),

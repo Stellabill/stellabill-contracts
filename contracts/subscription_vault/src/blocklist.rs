@@ -1,6 +1,6 @@
-use soroban_sdk::{contracttype, Address, Env, String, Symbol};
-use crate::types::{DataKey, Error};
 use crate::admin::require_admin_auth;
+use crate::types::{DataKey, Error};
+use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 
 #[contracttype]
 #[derive(Clone)]
@@ -13,16 +13,22 @@ pub struct BlocklistEntry {
 pub struct BlocklistAddedEvent {
     pub subscriber: Address,
     pub reason: String,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub struct BlocklistRemovedEvent {
     pub subscriber: Address,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 pub fn is_blocklisted(env: &Env, addr: &Address) -> bool {
-    env.storage().persistent().has(&DataKey::Blocklist(addr.clone()))
+    env.storage()
+        .persistent()
+        .has(&DataKey::Blocklist(addr.clone()))
 }
 
 pub fn require_not_blocklisted(env: &Env, addr: &Address) -> Result<(), Error> {
@@ -56,14 +62,16 @@ pub fn do_add_to_blocklist(
     let entry = BlocklistEntry {
         reason: reason_str.clone(),
     };
-    
-    env.storage().persistent().set(&DataKey::Blocklist(subscriber.clone()), &entry);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Blocklist(subscriber.clone()), &entry);
 
     env.events().publish(
         (Symbol::new(env, "blocklist_added"), subscriber.clone()),
         BlocklistAddedEvent {
             subscriber,
             reason: reason_str,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -81,11 +89,16 @@ pub fn do_remove_from_blocklist(
         return Err(Error::NotFound);
     }
 
-    env.storage().persistent().remove(&DataKey::Blocklist(subscriber.clone()));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Blocklist(subscriber.clone()));
 
     env.events().publish(
         (Symbol::new(env, "blocklist_removed"), subscriber.clone()),
-        BlocklistRemovedEvent { subscriber },
+        BlocklistRemovedEvent {
+            subscriber,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
     );
 
     Ok(())

@@ -1,4 +1,4 @@
-﻿//! Reentrancy guard for fund-moving entrypoints.
+//! Reentrancy guard for fund-moving entrypoints.
 //!
 //! Uses a per-entrypoint storage flag in instance storage.
 //! The flag is set before any external token transfer and cleared
@@ -10,8 +10,8 @@
 //! // _guard is dropped at end of scope, releasing the lock
 //! ```
 
-use soroban_sdk::{Env, Symbol};
 use crate::types::Error;
+use soroban_sdk::{Env, Symbol};
 
 /// RAII guard that holds a reentrancy lock for the duration of a scope.
 ///

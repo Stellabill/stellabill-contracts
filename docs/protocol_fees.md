@@ -62,3 +62,25 @@ If `fee_bps > 0` but no treasury address is stored (e.g. `set_protocol_fee` was 
 - Treasury balance accrues identically to merchant balances and is subject to the same withdrawal controls.
 - `fee_bps > 10_000` is rejected at configuration time (`InvalidInput`).
 - The fee is computed from the gross charge amount, not from the merchant's net — preventing fee-on-fee compounding.
+
+## Coupons and Discounts (Issue #474)
+
+Discounts from merchant-managed coupons are applied **before** the protocol fee is calculated. This preserves the strict accounting identity:
+
+```
+Gross Charge = Discount + Merchant Net + Treasury Fee
+```
+
+The protocol fee is always computed from the **discounted amount** (the payable amount), not the original gross amount.
+
+### Discount Ordering
+
+When a coupon is applied during a charge, discounts are evaluated in this strict order:
+1. **Percentage Discount**: `discounted = gross * (10_000 - percent_off_bps) / 10_000`
+2. **Fixed Discount**: `discounted = max(discounted - fixed_off, 0)`
+
+The total `discount = gross - discounted`. If the discount exceeds the gross charge, the payable amount is clamped to zero (a $0 charge succeeds, crediting the merchant 0 and extracting a 0 fee).
+
+### Validation at Charge Time
+
+Coupons must match the settlement token of the subscription. At charge time, if a bound coupon has been explicitly revoked by the merchant, or if its `expires_at` timestamp has passed, the discount is **silently skipped** (the charge proceeds at the full gross amount). This intentional design ensures that invalid/lapsed coupons do not cause billing outages for active subscriptions.

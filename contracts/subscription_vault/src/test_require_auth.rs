@@ -20,7 +20,7 @@
 //!  3. **correct_auth** — `mock_all_auths` + correct address → call succeeds.
 
 use crate::{DataKey, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -135,7 +135,7 @@ fn deposit_funds_missing_auth() {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
     let subscriber = Address::generate(&env);
-    let _ = client.deposit_funds(&0u32, &subscriber, &DEPOSIT);
+    let _ = client.deposit_funds(&0u32, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>, &None::<soroban_sdk::BytesN<32>>);
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn deposit_funds_wrong_subscriber() {
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&attacker, &DEPOSIT);
     // mock_all_auths satisfies require_auth(), but the contract rejects because
     // attacker != sub.subscriber.
-    let _ = client.deposit_funds(&id, &attacker, &DEPOSIT);
+    let _ = client.deposit_funds(&id, &attacker, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>, &None::<soroban_sdk::BytesN<32>>);
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn deposit_funds_correct_auth() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = make_subscription(&env, &client);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
-    client.deposit_funds(&id, &subscriber, &DEPOSIT);
+    client.deposit_funds(&id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>, &None::<soroban_sdk::BytesN<32>>);
     let sub = client.get_subscription(&id);
     assert_eq!(sub.prepaid_balance, DEPOSIT);
 }
@@ -315,7 +315,7 @@ fn withdraw_merchant_funds_correct_auth() {
 
     // Deposit so the vault holds real tokens.
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
-    client.deposit_funds(&id, &subscriber, &DEPOSIT);
+    client.deposit_funds(&id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>, &None::<soroban_sdk::BytesN<32>>);
 
     // Directly credit the merchant's ledger balance and mint matching vault tokens
     // so the withdrawal transfer can complete.  (A real charge flow would do this
@@ -332,6 +332,60 @@ fn withdraw_merchant_funds_correct_auth() {
 
     let balance_before = client.get_merchant_balance(&merchant);
     assert_eq!(balance_before, withdraw_amount);
+    client.withdraw_merchant_funds(&merchant, &withdraw_amount);
+    assert_eq!(client.get_merchant_balance(&merchant), 0);
+}
+
+#[test]
+fn set_merchant_multisig_rejects_zero_threshold() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(Address::generate(&env));
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &0u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_merchant_multisig_rejects_threshold_above_signer_count() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(Address::generate(&env));
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &2u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_merchant_multisig_rejects_duplicate_signers() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let duplicate = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(duplicate.clone());
+    signers.push_back(duplicate);
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &2u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn withdraw_merchant_funds_without_multisig_config_keeps_merchant_auth_fallback() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let withdraw_amount: i128 = 1_000_000;
+
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(
+            &DataKey::MerchantBalance(merchant.clone(), token.clone()),
+            &withdraw_amount,
+        );
+    });
+    soroban_sdk::token::StellarAssetClient::new(&env, &token)
+        .mint(&client.address, &withdraw_amount);
+
     client.withdraw_merchant_funds(&merchant, &withdraw_amount);
     assert_eq!(client.get_merchant_balance(&merchant), 0);
 }
