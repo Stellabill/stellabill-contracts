@@ -2685,6 +2685,31 @@ impl SubscriptionVault {
         )
     }
 
+    /// Get the global merchant whitelist mode toggle.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Enable or disable the global merchant whitelist mode. Admin-only.
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Check whether a merchant is approved under whitelist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Approve a merchant under whitelist mode. Admin-only.
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a merchant's approval under whitelist mode. Admin-only.
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
     /// Update merchant config.
     pub fn set_merchant_config(
         env: Env,
@@ -2816,3 +2841,6 @@ mod test {
 
 #[cfg(test)]
 mod test_subscription_transfer;
+
+#[cfg(test)]
+mod test_merchant_whitelist;
