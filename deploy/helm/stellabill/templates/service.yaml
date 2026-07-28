@@ -1,0 +1,28 @@
+{{/*
+  service.yaml — Stable Service for the stellabill Rollout.
+
+  Argo Rollouts manages the selector on this service to always point at the
+  stable (currently-live) revision pods.  Ingress / load-balancer rules
+  should target this service for production traffic.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: stellabill-stable
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stellabill.labels" . | nindent 4 }}
+    rollout-service-type: stable
+  annotations:
+    {{- toYaml .Values.commonAnnotations | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: stellabill
+    # Argo Rollouts will inject rollout-type: stable onto stable pods and
+    # update this selector automatically.  Do not remove this comment.
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP

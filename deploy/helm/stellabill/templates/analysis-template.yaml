@@ -1,0 +1,166 @@
+{{/*
+  analysis-template.yaml — AnalysisTemplate for stellabill canary promotions.
+
+  Metrics evaluated:
+    1. p99 latency — measured against the canary service via Prometheus.
+       Fails if p99 exceeds .Values.analysis.latencyP99ThresholdSeconds.
+    2. 5xx error rate — ratio of HTTP 5xx responses to total responses.
+       Fails if rate exceeds .Values.analysis.errorRateThreshold.
+
+  Safety invariants:
+    • minSampleCount guard: if fewer than N data points are observed in the
+      evaluation window the metric is marked Inconclusive and the analysis
+      aborts (fail-safe for low-traffic windows or Prometheus outages).
+    • consecutiveErrorLimit: two consecutive measurement failures trigger an
+      immediate abort without waiting for the full duration.
+    • failureLimit: zero tolerance — any single failure aborts the rollout.
+
+  All numeric thresholds are supplied as arguments so they can be overridden
+  per step in the Rollout spec without touching this template.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: stellabill-canary-analysis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stellabill.labels" . | nindent 4 }}
+spec:
+  # ---------------------------------------------------------------------------
+  # Arguments — injected by each analysis step in the Rollout.
+  # Default values here serve as documentation; real values come from the
+  # Rollout args block.
+  # ---------------------------------------------------------------------------
+  args:
+    - name: service-name
+      value: "stellabill-canary"
+
+    - name: prometheus-address
+      value: {{ .Values.analysis.prometheusAddress | quote }}
+
+    # p99 latency threshold in seconds (e.g. "0.5" = 500 ms)
+    - name: latency-p99-threshold
+      value: {{ .Values.analysis.latencyP99ThresholdSeconds | quote }}
+
+    # Maximum fraction of 5xx responses (e.g. "0.01" = 1 %)
+    - name: error-rate-threshold
+      value: {{ .Values.analysis.errorRateThreshold | quote }}
+
+    # Minimum samples required; analysis aborts if fewer are seen.
+    - name: min-sample-count
+      value: {{ .Values.analysis.minSampleCount | quote }}
+
+  # ---------------------------------------------------------------------------
+  # Metrics
+  # ---------------------------------------------------------------------------
+  metrics:
+
+    # -------------------------------------------------------------------------
+    # Metric 1: p99 request latency
+    # -------------------------------------------------------------------------
+    - name: p99-latency
+      # Collect once, evaluate over the full duration window.
+      interval: {{ .Values.analysis.durationSeconds }}s
+      count: 1
+      # Zero failures allowed — any breach aborts immediately.
+      failureLimit: 0
+      consecutiveErrorLimit: 2
+
+      provider:
+        prometheus:
+          address: "{{ `{{args.prometheus-address}}` }}"
+          # histogram_quantile over the canary service pods for the analysis
+          # duration window.  The metric name assumes a standard Go/Prometheus
+          # HTTP histogram named `http_request_duration_seconds`.
+          # Adjust the metric name and labels to match your instrumentation.
+          query: |
+            histogram_quantile(
+              0.99,
+              sum(
+                rate(
+                  http_request_duration_seconds_bucket{
+                    service="{{ `{{args.service-name}}` }}"
+                  }[{{ .Values.analysis.durationSeconds }}s]
+                )
+              ) by (le)
+            )
+
+      successCondition: >-
+        len(result) > 0
+        && asFloat(result[0]) < asFloat("{{ `{{args.latency-p99-threshold}}` }}")
+
+      # If the query returns no data (e.g. Prometheus is unavailable or the
+      # canary received zero traffic) treat it as an error rather than a pass.
+      # Combined with consecutiveErrorLimit: 2 this safely aborts low-traffic
+      # or observability-dark canaries instead of silently promoting them.
+      inconclusiveLimit: 0
+
+    # -------------------------------------------------------------------------
+    # Metric 2: 5xx error rate
+    # -------------------------------------------------------------------------
+    - name: error-rate-5xx
+      interval: {{ .Values.analysis.durationSeconds }}s
+      count: 1
+      failureLimit: 0
+      consecutiveErrorLimit: 2
+
+      provider:
+        prometheus:
+          address: "{{ `{{args.prometheus-address}}` }}"
+          # Rate of 5xx responses divided by rate of all responses.
+          # Adjust the metric name to match your HTTP server instrumentation.
+          query: |
+            sum(
+              rate(
+                http_requests_total{
+                  service="{{ `{{args.service-name}}` }}",
+                  status=~"5.."
+                }[{{ .Values.analysis.durationSeconds }}s]
+              )
+            )
+            /
+            sum(
+              rate(
+                http_requests_total{
+                  service="{{ `{{args.service-name}}` }}"
+                }[{{ .Values.analysis.durationSeconds }}s]
+              )
+            )
+
+      # Pass only if:
+      #   • the query returned a value (non-empty result), AND
+      #   • the error rate is below the configured threshold.
+      # An empty result means no traffic reached the canary; abort safely.
+      successCondition: >-
+        len(result) > 0
+        && asFloat(result[0]) < asFloat("{{ `{{args.error-rate-threshold}}` }}")
+
+      inconclusiveLimit: 0
+
+    # -------------------------------------------------------------------------
+    # Metric 3: minimum sample guard
+    # Ensures Prometheus has seen enough traffic before declaring a pass.
+    # If total requests in the window < minSampleCount the analysis aborts.
+    # -------------------------------------------------------------------------
+    - name: min-traffic-guard
+      interval: {{ .Values.analysis.durationSeconds }}s
+      count: 1
+      failureLimit: 0
+      consecutiveErrorLimit: 1
+
+      provider:
+        prometheus:
+          address: "{{ `{{args.prometheus-address}}` }}"
+          query: |
+            sum(
+              increase(
+                http_requests_total{
+                  service="{{ `{{args.service-name}}` }}"
+                }[{{ .Values.analysis.durationSeconds }}s]
+              )
+            )
+
+      # Abort (fail) if sample count is too low — do NOT silently pass.
+      successCondition: >-
+        len(result) > 0
+        && asFloat(result[0]) >= asFloat("{{ `{{args.min-sample-count}}` }}")

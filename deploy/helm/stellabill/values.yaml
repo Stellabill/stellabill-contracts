@@ -1,0 +1,136 @@
+# deploy/helm/stellabill/values.yaml
+# Default values for the stellabill Helm chart.
+# Override per-environment with -f values.<env>.yaml or --set flags.
+
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/stellabill/stellabill-backend
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Replica counts
+# ---------------------------------------------------------------------------
+replicaCount: 3          # stable replica count
+canaryReplicaCount: 1    # canary replica count during analysis steps
+
+# ---------------------------------------------------------------------------
+# Argo Rollouts canary strategy
+# ---------------------------------------------------------------------------
+rollout:
+  # Traffic weights for each canary step (must end at 100).
+  # Each step is gated by an AnalysisRun; if any analysis fails the rollout
+  # is automatically aborted and traffic reverts to the stable revision.
+  steps:
+    - setWeight: 10
+      pauseDuration: ""          # no manual pause; analysis governs promotion
+    - analysis:
+        templates:
+          - templateName: stellabill-canary-analysis
+    - setWeight: 25
+      pauseDuration: ""
+    - analysis:
+        templates:
+          - templateName: stellabill-canary-analysis
+    - setWeight: 50
+      pauseDuration: ""
+    - analysis:
+        templates:
+          - templateName: stellabill-canary-analysis
+    - setWeight: 100
+
+  # How long to wait for the rollout to complete before marking it degraded.
+  progressDeadlineSeconds: 600
+
+  # Revision history kept for rollback.
+  revisionHistoryLimit: 5
+
+# ---------------------------------------------------------------------------
+# Analysis thresholds
+# These values are injected into the AnalysisTemplate as arguments so they
+# can be tuned per environment without editing the template itself.
+# ---------------------------------------------------------------------------
+analysis:
+  # Prometheus endpoint accessible from inside the cluster.
+  prometheusAddress: "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+
+  # Analysis window: how long to collect metrics before making a decision.
+  durationSeconds: 120
+
+  # p99 latency upper bound in seconds (e.g. 0.5 = 500 ms).
+  latencyP99ThresholdSeconds: "0.5"
+
+  # Maximum acceptable 5xx error rate as a fraction (e.g. 0.01 = 1 %).
+  errorRateThreshold: "0.01"
+
+  # Minimum number of successful measurements required before a pass verdict.
+  # An AnalysisRun with fewer samples will abort (fail-safe for low-traffic).
+  minSampleCount: "10"
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  # The stable service selector label added by Argo Rollouts.
+  # Do not change unless you know what you're doing.
+  stableLabel: "stable"
+  canaryLabel: "canary"
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Labels / annotations applied to all managed resources
+# ---------------------------------------------------------------------------
+commonLabels:
+  app.kubernetes.io/name: stellabill
+  app.kubernetes.io/part-of: stellabill
+
+commonAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# Pod security context
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 2000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

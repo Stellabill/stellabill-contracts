@@ -1,0 +1,160 @@
+{{/*
+  rollout.yaml — Argo Rollouts Rollout resource for stellabill-backend.
+
+  Replaces the plain Deployment with a canary rollout that shifts traffic in
+  four steps (10 → 25 → 50 → 100 %) and gates each increment behind an
+  automated AnalysisRun.  On analysis failure the controller automatically
+  aborts and reverts to the stable revision — no human intervention required
+  for rollback.
+
+  Prerequisites in the cluster:
+    • argo-rollouts controller installed (argoproj/argo-rollouts)
+    • Prometheus reachable at .Values.analysis.prometheusAddress
+    • The AnalysisTemplate "stellabill-canary-analysis" in the same namespace
+      (rendered by analysis-template.yaml in this chart)
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: stellabill
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stellabill.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.commonAnnotations | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.rollout.revisionHistoryLimit }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stellabill
+
+  template:
+    metadata:
+      labels:
+        {{- include "stellabill.labels" . | nindent 8 }}
+      annotations:
+        # Force pod restart on ConfigMap / Secret change by hashing relevant
+        # values into an annotation.  Extend this list as needed.
+        checksum/values: {{ .Values | toJson | sha256sum | trunc 8 | quote }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # Service account — create separately or reference an existing one.
+      # serviceAccountName: stellabill
+
+      containers:
+        - name: stellabill
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # Expose the pod revision to the application for observability.
+          env:
+            - name: ROLLOUT_REVISION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['rollout.argoproj.io/revision']
+
+  # ---------------------------------------------------------------------------
+  # Canary strategy
+  # ---------------------------------------------------------------------------
+  strategy:
+    canary:
+      # The stable Service receives production traffic.
+      # The canary Service receives canary-weighted traffic.
+      stableService: stellabill-stable
+      canaryService: stellabill-canary
+
+      # Traffic is split using the Rollout's built-in weight mechanism.
+      # If you use an ingress controller or service mesh, add the
+      # trafficRouting block here (e.g. trafficRouting.nginx or .istio).
+
+      steps:
+        # Step 1 — send 10 % of traffic to the canary revision.
+        - setWeight: 10
+
+        # Step 2 — run automated analysis at 10 % weight.
+        - analysis:
+            templates:
+              - templateName: stellabill-canary-analysis
+            args:
+              - name: service-name
+                value: stellabill-canary
+              - name: prometheus-address
+                value: {{ .Values.analysis.prometheusAddress | quote }}
+              - name: latency-p99-threshold
+                value: {{ .Values.analysis.latencyP99ThresholdSeconds | quote }}
+              - name: error-rate-threshold
+                value: {{ .Values.analysis.errorRateThreshold | quote }}
+              - name: min-sample-count
+                value: {{ .Values.analysis.minSampleCount | quote }}
+
+        # Step 3 — widen to 25 % after passing analysis.
+        - setWeight: 25
+
+        # Step 4 — re-run analysis at 25 % weight.
+        - analysis:
+            templates:
+              - templateName: stellabill-canary-analysis
+            args:
+              - name: service-name
+                value: stellabill-canary
+              - name: prometheus-address
+                value: {{ .Values.analysis.prometheusAddress | quote }}
+              - name: latency-p99-threshold
+                value: {{ .Values.analysis.latencyP99ThresholdSeconds | quote }}
+              - name: error-rate-threshold
+                value: {{ .Values.analysis.errorRateThreshold | quote }}
+              - name: min-sample-count
+                value: {{ .Values.analysis.minSampleCount | quote }}
+
+        # Step 5 — widen to 50 %.
+        - setWeight: 50
+
+        # Step 6 — final analysis gate at 50 %.
+        - analysis:
+            templates:
+              - templateName: stellabill-canary-analysis
+            args:
+              - name: service-name
+                value: stellabill-canary
+              - name: prometheus-address
+                value: {{ .Values.analysis.prometheusAddress | quote }}
+              - name: latency-p99-threshold
+                value: {{ .Values.analysis.latencyP99ThresholdSeconds | quote }}
+              - name: error-rate-threshold
+                value: {{ .Values.analysis.errorRateThreshold | quote }}
+              - name: min-sample-count
+                value: {{ .Values.analysis.minSampleCount | quote }}
+
+        # Step 7 — promote to 100 % (full rollout complete).
+        - setWeight: 100
+
+      # Keep at least one canary replica during the rollout so metrics are
+      # collected even if .Values.replicaCount is 1.
+      canaryMetadata:
+        labels:
+          rollout-type: canary
+      stableMetadata:
+        labels:
+          rollout-type: stable

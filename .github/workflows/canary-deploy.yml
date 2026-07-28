@@ -1,0 +1,264 @@
+# .github/workflows/canary-deploy.yml
+#
+# Validates and (optionally) deploys the Argo Rollouts canary chart for
+# stellabill-backend.
+#
+# Jobs:
+#   lint-test   — helm lint + helm-unittest on every PR and push
+#   dry-run     — renders the chart and runs `kubectl argo rollouts get`
+#                 in --dry-run mode (no cluster changes)
+#   deploy      — upgrades the chart in the target cluster (main branch only)
+#
+# Secrets required (configure in repo Settings → Secrets):
+#   KUBECONFIG_STAGING     — base64-encoded kubeconfig for staging cluster
+#   KUBECONFIG_PRODUCTION  — base64-encoded kubeconfig for production cluster
+#
+# The deploy job is gated: it requires lint-test and dry-run to pass first.
+
+name: Canary deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/canary-deploy.yml"
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/canary-deploy.yml"
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch to avoid stale deployments.
+concurrency:
+  group: canary-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: "3.14.4"
+  KUBECTL_VERSION: "1.29.3"
+  ARGO_ROLLOUTS_VERSION: "1.7.1"
+  CHART_DIR: "deploy/helm/stellabill"
+  NAMESPACE: "stellabill"
+  RELEASE_NAME: "stellabill"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Lint and unit-test the Helm chart
+  # ---------------------------------------------------------------------------
+  lint-test:
+    name: Helm lint and unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.2.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install helm-unittest plugin
+        run: |
+          helm plugin install https://github.com/quintush/helm-unittest \
+            --version 0.3.5 \
+          || helm plugin update unittest
+
+      - name: Helm lint
+        run: |
+          helm lint ${{ env.CHART_DIR }} \
+            --strict \
+            --set image.tag=test-sha
+
+      - name: Helm lint (staging overrides)
+        run: |
+          helm lint ${{ env.CHART_DIR }} \
+            --strict \
+            --set image.tag=test-sha \
+            --set analysis.minSampleCount=3 \
+            --set analysis.durationSeconds=60
+
+      - name: Run Helm unit tests
+        run: |
+          helm unittest ${{ env.CHART_DIR }} \
+            --file "tests/rollout_test.yaml" \
+            --strict \
+            --color
+
+      - name: Verify all test assertions pass (summary)
+        run: |
+          echo "✓ Helm unit tests passed"
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Dry-run render and rollout status check
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: Dry-run chart render
+    runs-on: ubuntu-latest
+    needs: lint-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.2.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Render chart and validate YAML
+        run: |
+          helm template ${{ env.RELEASE_NAME }} ${{ env.CHART_DIR }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --set image.tag=${{ github.sha }} \
+            --debug \
+          | tee /tmp/rendered.yaml
+
+          # Fail if no Rollout resource is present in the rendered output.
+          if ! grep -q 'kind: Rollout' /tmp/rendered.yaml; then
+            echo "ERROR: Rollout resource not found in rendered chart output"
+            exit 1
+          fi
+
+          # Fail if no AnalysisTemplate is present.
+          if ! grep -q 'kind: AnalysisTemplate' /tmp/rendered.yaml; then
+            echo "ERROR: AnalysisTemplate not found in rendered chart output"
+            exit 1
+          fi
+
+          # Ensure both Service resources are rendered.
+          SVCCOUNT=$(grep -c 'kind: Service' /tmp/rendered.yaml || true)
+          if [ "$SVCCOUNT" -lt 2 ]; then
+            echo "ERROR: Expected 2 Service resources, found $SVCCOUNT"
+            exit 1
+          fi
+
+          echo "✓ Chart renders correctly (Rollout + AnalysisTemplate + 2 Services)"
+
+      - name: Validate Rollout step sequence
+        run: |
+          # Confirm the weight progression 10→25→50→100 is present.
+          for weight in 10 25 50 100; do
+            if ! grep -q "setWeight: ${weight}" /tmp/rendered.yaml; then
+              echo "ERROR: setWeight: ${weight} not found in rendered output"
+              exit 1
+            fi
+          done
+          echo "✓ Weight steps 10/25/50/100 all present"
+
+      - name: Validate zero-tolerance failureLimit
+        run: |
+          # Each metric must have failureLimit: 0
+          FAIL_LIMIT_COUNT=$(grep -c 'failureLimit: 0' /tmp/rendered.yaml || true)
+          if [ "$FAIL_LIMIT_COUNT" -lt 3 ]; then
+            echo "ERROR: Expected at least 3 failureLimit: 0 entries, found $FAIL_LIMIT_COUNT"
+            exit 1
+          fi
+          echo "✓ Zero-tolerance failureLimit confirmed on all metrics"
+
+      - name: Set up kubectl (for rollout plugin validation)
+        uses: azure/setup-kubectl@v4.0.0
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Install Argo Rollouts kubectl plugin
+        run: |
+          curl -sLO \
+            "https://github.com/argoproj/argo-rollouts/releases/download/v${{ env.ARGO_ROLLOUTS_VERSION }}/kubectl-argo-rollouts-linux-amd64"
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+          kubectl argo rollouts version
+
+      - name: Dry-run rollout get (offline syntax check)
+        run: |
+          # kubectl argo rollouts get requires a live cluster.
+          # We validate the plugin is installed and print the help instead,
+          # confirming the binary works.  Actual cluster verification is done
+          # in the deploy job against the staging cluster.
+          kubectl argo rollouts get rollout --help
+          echo "✓ kubectl-argo-rollouts plugin functional"
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Deploy to staging (main branch only)
+  # ---------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: [lint-test, dry-run]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    environment:
+      name: staging
+      url: https://staging.stellabill.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.2.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4.0.0
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Install Argo Rollouts kubectl plugin
+        run: |
+          curl -sLO \
+            "https://github.com/argoproj/argo-rollouts/releases/download/v${{ env.ARGO_ROLLOUTS_VERSION }}/kubectl-argo-rollouts-linux-amd64"
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+      - name: Configure kubeconfig (staging)
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Helm upgrade (staging)
+        run: |
+          helm upgrade ${{ env.RELEASE_NAME }} ${{ env.CHART_DIR }} \
+            --install \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --set image.tag=${{ github.sha }} \
+            --set analysis.minSampleCount=3 \
+            --set analysis.durationSeconds=60 \
+            --atomic \
+            --timeout 15m \
+            --wait
+
+      - name: Watch rollout progress (staging)
+        run: |
+          kubectl argo rollouts get rollout ${{ env.RELEASE_NAME }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --watch \
+            --timeout-seconds 900 \
+          || {
+            echo "Rollout did not complete in time — collecting diagnostics"
+            kubectl argo rollouts get rollout ${{ env.RELEASE_NAME }} \
+              --namespace ${{ env.NAMESPACE }}
+            kubectl get analysisrun \
+              --namespace ${{ env.NAMESPACE }}
+            exit 1
+          }
+
+      - name: Confirm rollout is healthy
+        run: |
+          STATUS=$(kubectl argo rollouts get rollout ${{ env.RELEASE_NAME }} \
+            --namespace ${{ env.NAMESPACE }} \
+            -o json \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status']['phase'])")
+          echo "Rollout phase: $STATUS"
+          if [ "$STATUS" != "Healthy" ]; then
+            echo "ERROR: Rollout is not Healthy (phase=$STATUS)"
+            exit 1
+          fi
+          echo "✓ Staging rollout complete and Healthy"

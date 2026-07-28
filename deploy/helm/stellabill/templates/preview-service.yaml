@@ -1,0 +1,28 @@
+{{/*
+  preview-service.yaml — Canary (preview) Service for the stellabill Rollout.
+
+  Argo Rollouts manages the selector on this service to always point at the
+  canary revision pods during an active rollout.  Internal smoke tests and
+  integration checks should target this service to validate the new revision
+  before it receives stable traffic.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: stellabill-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "stellabill.labels" . | nindent 4 }}
+    rollout-service-type: canary
+  annotations:
+    {{- toYaml .Values.commonAnnotations | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: stellabill
+    # Argo Rollouts updates this selector to target canary pods during rollout.
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP

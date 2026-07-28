@@ -1,0 +1,18 @@
+apiVersion: v2
+name: stellabill
+description: |
+  Helm chart for the stellabill-backend service.
+  Deploys an Argo Rollouts canary Rollout with automated analysis on p99
+  latency and 5xx error rate.
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - stellabill
+  - soroban
+  - stellar
+  - billing
+home: https://github.com/Stellabill/stellabill-backend
+sources:
+  - https://github.com/Stellabill/stellabill-backend
+dependencies: []

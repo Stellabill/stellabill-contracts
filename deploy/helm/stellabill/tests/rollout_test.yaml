@@ -1,0 +1,370 @@
+# deploy/helm/stellabill/tests/rollout_test.yaml
+#
+# Helm chart unit tests using helm-unittest (quintush/helm-unittest).
+#
+# Run locally:
+#   helm plugin install https://github.com/quintush/helm-unittest
+#   helm unittest deploy/helm/stellabill
+#
+# Each suite covers a critical invariant; failures surface as CI failures
+# rather than silent misconfigurations reaching the cluster.
+---
+# ===========================================================================
+# Suite 1: Rollout resource structure
+# ===========================================================================
+suite: "Rollout resource"
+templates:
+  - templates/rollout.yaml
+
+tests:
+  - it: "renders a Rollout (not a Deployment)"
+    asserts:
+      - isKind:
+          of: Rollout
+      - equal:
+          path: apiVersion
+          value: argoproj.io/v1alpha1
+
+  - it: "has the correct name"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: stellabill
+
+  - it: "uses the canary strategy"
+    asserts:
+      - isNotNull:
+          path: spec.strategy.canary
+
+  - it: "references both stable and canary services"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.stableService
+          value: stellabill-stable
+      - equal:
+          path: spec.strategy.canary.canaryService
+          value: stellabill-canary
+
+  - it: "has exactly 7 canary steps (setWeight×3, analysis×3, setWeight 100)"
+    asserts:
+      - lengthEqual:
+          path: spec.strategy.canary.steps
+          count: 7
+
+  - it: "first step sets weight to 10"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.steps[0].setWeight
+          value: 10
+
+  - it: "third step sets weight to 25"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.steps[2].setWeight
+          value: 25
+
+  - it: "fifth step sets weight to 50"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.steps[4].setWeight
+          value: 50
+
+  - it: "final step promotes to 100"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.steps[6].setWeight
+          value: 100
+
+  - it: "analysis steps reference the correct AnalysisTemplate"
+    asserts:
+      - equal:
+          path: spec.strategy.canary.steps[1].analysis.templates[0].templateName
+          value: stellabill-canary-analysis
+      - equal:
+          path: spec.strategy.canary.steps[3].analysis.templates[0].templateName
+          value: stellabill-canary-analysis
+      - equal:
+          path: spec.strategy.canary.steps[5].analysis.templates[0].templateName
+          value: stellabill-canary-analysis
+
+  - it: "analysis steps pass prometheus-address arg"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: prometheus-address
+            value: "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+
+  - it: "analysis steps pass latency-p99-threshold arg"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: latency-p99-threshold
+            value: "0.5"
+
+  - it: "analysis steps pass error-rate-threshold arg"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: error-rate-threshold
+            value: "0.01"
+
+  - it: "analysis steps pass min-sample-count arg"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: min-sample-count
+            value: "10"
+
+  - it: "pod runs as non-root"
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+
+  - it: "container disallows privilege escalation"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+
+  - it: "container drops ALL capabilities"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: "respects custom replica count"
+    set:
+      replicaCount: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+
+  - it: "respects custom image tag"
+    set:
+      image.tag: "v1.2.3"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ":v1.2.3$"
+
+  - it: "custom latency threshold propagates to analysis args"
+    set:
+      analysis.latencyP99ThresholdSeconds: "0.25"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: latency-p99-threshold
+            value: "0.25"
+
+  - it: "custom error rate threshold propagates to analysis args"
+    set:
+      analysis.errorRateThreshold: "0.005"
+    asserts:
+      - contains:
+          path: spec.strategy.canary.steps[1].analysis.args
+          content:
+            name: error-rate-threshold
+            value: "0.005"
+
+---
+# ===========================================================================
+# Suite 2: AnalysisTemplate resource
+# ===========================================================================
+suite: "AnalysisTemplate resource"
+templates:
+  - templates/analysis-template.yaml
+
+tests:
+  - it: "renders an AnalysisTemplate"
+    asserts:
+      - isKind:
+          of: AnalysisTemplate
+      - equal:
+          path: apiVersion
+          value: argoproj.io/v1alpha1
+
+  - it: "is named stellabill-canary-analysis"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: stellabill-canary-analysis
+
+  - it: "defines exactly 3 metrics"
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 3
+
+  - it: "first metric is p99-latency"
+    asserts:
+      - equal:
+          path: spec.metrics[0].name
+          value: p99-latency
+
+  - it: "second metric is error-rate-5xx"
+    asserts:
+      - equal:
+          path: spec.metrics[1].name
+          value: error-rate-5xx
+
+  - it: "third metric is min-traffic-guard"
+    asserts:
+      - equal:
+          path: spec.metrics[2].name
+          value: min-traffic-guard
+
+  - it: "p99-latency has zero failure tolerance"
+    asserts:
+      - equal:
+          path: spec.metrics[0].failureLimit
+          value: 0
+
+  - it: "error-rate-5xx has zero failure tolerance"
+    asserts:
+      - equal:
+          path: spec.metrics[1].failureLimit
+          value: 0
+
+  - it: "min-traffic-guard has zero failure tolerance"
+    asserts:
+      - equal:
+          path: spec.metrics[2].failureLimit
+          value: 0
+
+  - it: "p99-latency uses Prometheus provider"
+    asserts:
+      - isNotNull:
+          path: spec.metrics[0].provider.prometheus
+
+  - it: "error-rate-5xx uses Prometheus provider"
+    asserts:
+      - isNotNull:
+          path: spec.metrics[1].provider.prometheus
+
+  - it: "min-traffic-guard uses Prometheus provider"
+    asserts:
+      - isNotNull:
+          path: spec.metrics[2].provider.prometheus
+
+  - it: "all metrics declare successCondition"
+    asserts:
+      - isNotNull:
+          path: spec.metrics[0].successCondition
+      - isNotNull:
+          path: spec.metrics[1].successCondition
+      - isNotNull:
+          path: spec.metrics[2].successCondition
+
+  - it: "all metrics declare inconclusiveLimit 0 (fail-safe)"
+    asserts:
+      - equal:
+          path: spec.metrics[0].inconclusiveLimit
+          value: 0
+      - equal:
+          path: spec.metrics[1].inconclusiveLimit
+          value: 0
+
+  - it: "defines latency-p99-threshold arg"
+    asserts:
+      - contains:
+          path: spec.args
+          content:
+            name: latency-p99-threshold
+            value: "0.5"
+
+  - it: "defines error-rate-threshold arg"
+    asserts:
+      - contains:
+          path: spec.args
+          content:
+            name: error-rate-threshold
+            value: "0.01"
+
+  - it: "defines min-sample-count arg"
+    asserts:
+      - contains:
+          path: spec.args
+          content:
+            name: min-sample-count
+            value: "10"
+
+---
+# ===========================================================================
+# Suite 3: Services
+# ===========================================================================
+suite: "Service resources"
+templates:
+  - templates/service.yaml
+  - templates/preview-service.yaml
+
+tests:
+  - it: "renders exactly 2 Services"
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: "stable service is named stellabill-stable"
+    documentIndex: 0
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: stellabill-stable
+
+  - it: "canary service is named stellabill-canary"
+    documentIndex: 0
+    template: templates/preview-service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: stellabill-canary
+
+  - it: "stable service has rollout-service-type: stable label"
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.rollout-service-type
+          value: stable
+
+  - it: "canary service has rollout-service-type: canary label"
+    template: templates/preview-service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.rollout-service-type
+          value: canary
+
+  - it: "stable service exposes correct port"
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 80
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 8080
+
+  - it: "canary service exposes correct port"
+    template: templates/preview-service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 80
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 8080
+
+  - it: "custom service port propagates to stable service"
+    set:
+      service.port: 8000
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8000
