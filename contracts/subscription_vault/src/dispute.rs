@@ -26,7 +26,7 @@ use crate::admin;
 use crate::merchant;
 use crate::queries;
 use crate::types::{
-    DataKey, Dispute, DisputeOpenedEvent, DisputeRespondedEvent, DisputeResolvedEvent,
+    DataKey, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, DISPUTE_WINDOW_SECS,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Symbol};
@@ -238,9 +238,7 @@ pub fn do_resolve_dispute(
     if resolution == DisputeStatus::ResolvedToMerchant {
         // Return escrowed funds to merchant balance
         let current = merchant::get_merchant_balance_by_token(env, &dispute.merchant, token_addr);
-        let new_balance = current
-            .checked_add(escrow_amount)
-            .ok_or(Error::Overflow)?;
+        let new_balance = current.checked_add(escrow_amount).ok_or(Error::Overflow)?;
         merchant::set_merchant_balance(env, &dispute.merchant, token_addr, &new_balance);
     } else {
         // Transfer escrowed funds to subscriber
