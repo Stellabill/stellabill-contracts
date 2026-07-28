@@ -26,6 +26,7 @@ use crate::types::{
     MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, PayoutSchedule, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
+    MerchantWhitelistModeEvent, MerchantApprovedEvent, MerchantRevokedEvent,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -87,6 +88,94 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
     Ok(())
 }
 
+// ── Whitelist mode ───────────────────────────────────────────────────────────
+
+/// Returns `true` if the global whitelist mode is enabled.
+pub fn get_whitelist_mode(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::MerchantWhitelistMode)
+        .unwrap_or(false)
+}
+
+/// Enable or disable the global merchant whitelist mode. Admin-only.
+pub fn set_whitelist_mode(env: &Env, admin: Address, enabled: bool) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantWhitelistMode;
+    env.storage().instance().set(&key, &enabled);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_whitelist_toggled"),),
+        MerchantWhitelistModeEvent {
+            enabled,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Returns `true` if `merchant` has been approved under whitelist mode.
+pub fn is_merchant_approved(env: &Env, merchant: &Address) -> bool {
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().get(&key).unwrap_or(false)
+}
+
+/// Approve a merchant under whitelist mode. Admin-only.
+///
+/// When whitelist mode is enabled, `initialize_merchant_config` will reject
+/// merchants that have not been approved. Existing approvals are preserved
+/// when whitelist mode is toggled on.
+pub fn approve_merchant(env: &Env, admin: Address, merchant: Address) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().set(&key, &true);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_approved"), merchant.clone()),
+        MerchantApprovedEvent {
+            merchant,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Revoke a merchant's approval under whitelist mode. Admin-only.
+pub fn revoke_merchant(env: &Env, admin: Address, merchant: Address) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantApproved(merchant.clone());
+    env.storage().instance().set(&key, &false);
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_revoked"), merchant.clone()),
+        MerchantRevokedEvent {
+            merchant,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Gate check: returns `Ok(())` if whitelist is disabled or merchant is approved.
+fn require_whitelist_approval(env: &Env, merchant: &Address) -> Result<(), Error> {
+    if get_whitelist_mode(env) && !is_merchant_approved(env, merchant) {
+        return Err(Error::MerchantNotApproved);
+    }
+    Ok(())
+}
+
 fn validate_merchant_config_input(
     _payout_address: &Address,
     fee_bips: i32,
@@ -114,6 +203,7 @@ pub fn initialize_merchant_config(
     redirect_url: String,
 ) -> Result<MerchantConfig, Error> {
     merchant.require_auth();
+    require_whitelist_approval(env, &merchant)?;
     validate_merchant_config_input(&payout_address, fee_bips, allowed_operations)?;
 
     let config = MerchantConfig {

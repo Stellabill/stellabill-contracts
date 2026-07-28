@@ -215,6 +215,10 @@ pub enum DataKey {
     Credential(u32),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
+    /// Global whitelist mode toggle. When true, merchants must be approved before registering. Discriminant 61.
+    MerchantWhitelistMode,
+    /// Per-merchant approval status under whitelist mode. Discriminant 62.
+    MerchantApproved(Address),
 }
 
 impl DataKey {
@@ -282,6 +286,8 @@ impl DataKey {
             DataKey::Credential(_) => 58,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
+            DataKey::MerchantWhitelistMode => 61,
+            DataKey::MerchantApproved(_) => 62,
         }
     }
 
@@ -333,6 +339,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
     59,
+    61, // MerchantWhitelistMode
+    62, // MerchantApproved(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -769,6 +777,8 @@ pub enum Error {
     InvalidOperations = 7002,
     /// Charge operation must be allowed for merchant.
     MustAllowChargeOperation = 7003,
+    /// Merchant is not approved under whitelist mode.
+    MerchantNotApproved = 7004,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -2017,6 +2027,33 @@ pub struct MerchantPausedEvent {
 #[derive(Clone, Debug)]
 pub struct MerchantUnpausedEvent {
     pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantWhitelistModeEvent {
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantApprovedEvent {
+    pub merchant: Address,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantRevokedEvent {
+    pub merchant: Address,
+    pub admin: Address,
     pub timestamp: u64,
     pub schema_version: u32,
 }
