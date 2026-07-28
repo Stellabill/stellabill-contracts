@@ -561,6 +561,50 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
     assert!(result.is_ok(), "valid refund must work after a rejected one");
 }
 
+/// Guard invariant: after a rejected deposit in a guarded entrypoint, the
+/// lock must be released so a later valid deposit is not blocked by stale state.
+#[test]
+fn test_reentrancy_guard_released_after_deposit_unauthorized_rejection() {
+    let (env, client, token, _) = setup();
+    let (id, subscriber, _) = create_sub(&env, &client, &token);
+    let attacker = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&attacker, &5_000_000i128);
+
+    let result = client.try_deposit_funds(&id, &attacker, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+
+    let success = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert!(success.is_ok(), "valid deposit must succeed after rejected deposit");
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 5_000_000i128);
+}
+
+/// Guard invariant: an expired charge rejection must not leave the lock stuck.
+#[test]
+fn test_reentrancy_guard_released_after_expired_charge_rejection() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    mint(&env, &token, &subscriber, PREPAID);
+
+    let expires_at = T0 + 1;
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+    );
+    env.ledger().set_timestamp(T0 + 2);
+
+    let first = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(first, Err(Ok(Error::SubscriptionExpired)));
+
+    let second = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(second, Err(Ok(Error::SubscriptionExpired)));
+}
+
 // =============================================================================
 // 7. NESTED CALL ATTEMPTS — panic path coverage
 // =============================================================================

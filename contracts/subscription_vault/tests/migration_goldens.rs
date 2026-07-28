@@ -10,7 +10,7 @@
 ///
 /// The golden files are stored at `tests/snapshots/migration_goldens/*.scval.hex`
 /// in deterministic hex-encoded ScVal format.
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 use std::fs;
 use std::path::PathBuf;
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
