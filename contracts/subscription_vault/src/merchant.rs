@@ -944,49 +944,10 @@ pub fn do_rotate_merchant_address(
             }
         }
     }
-
-                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
-                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
-                let accrued = earnings
-                    .accruals
-                    .interval
-                    .checked_add(earnings.accruals.usage)
-                    .unwrap_or(0)
-                    .checked_add(earnings.accruals.one_off)
-                    .unwrap_or(0);
-                let withdrawn = earnings.withdrawals;
-                let refunded = earnings.refunds;
-                let ledger_sequence = env.ledger().sequence();
-                let timestamp = env.ledger().timestamp();
-
-                let ev = MerchantBalanceSnapshotEvent {
-                    merchant: pair.0.clone(),
-                    token: pair.1.clone(),
-                    balance,
-                    accrued,
-                    withdrawn,
-                    refunded,
-                    ledger_sequence,
-                    timestamp,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                };
-
-                env.events().publish(
-                    (
-                        Symbol::new(env, "merchant_balance_snapshot"),
-                        pair.0.clone(),
-                        pair.1.clone(),
-                    ),
-                    ev.clone(),
-                );
-                out.push_back(ev);
-            }
-        }
-        storage.set(&subs_key_new, &new_sub_ids);
-    }
+    storage.set(&subs_key_new, &sub_ids);
     storage.remove(&subs_key_old);
 
-    // ── 6. Emit audit event ───────────────────────────────────────────────────
+    // ── 6. Emit audit event after all state writes are complete ───────────────
     env.events().publish(
         (soroban_sdk::Symbol::new(env, "merchant_addr_rotated"),),
         crate::types::MerchantAddressRotatedEvent {
