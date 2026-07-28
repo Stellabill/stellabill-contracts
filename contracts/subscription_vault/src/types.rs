@@ -767,6 +767,8 @@ pub enum Error {
     // Error 6018 is already defined above in Limits, but kept here for schema matching, see 1006.
     /// Subscriber has exceeded the rolling 24-hour subscription creation limit.
     SubscriberRateLimited = 6019,
+    /// Usage limits are required for subscriptions with usage enabled.
+    UsageLimitsRequired = 6020,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -1880,6 +1882,7 @@ pub enum ChargeExecutionResult {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageLimits {
+    pub merchant: Address,
     pub rate_limit_max_calls: Option<u32>,
     pub rate_window_secs: u64,
     pub burst_min_interval_secs: u64,

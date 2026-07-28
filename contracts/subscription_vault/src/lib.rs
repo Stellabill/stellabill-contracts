@@ -2790,6 +2790,8 @@ impl SubscriptionVault {
 
 #[cfg(test)]
 mod test_utils;
+#[cfg(test)]
+mod test_usage_limits_required;
 
 #[cfg(test)]
 mod test_charge_invariants;
