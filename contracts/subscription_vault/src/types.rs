@@ -213,6 +213,10 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    /// Timestamp of the most recent admin-config mutation for a given key label,
+    /// hashed to `BytesN<32>` for collision-free per-key cooldown tracking.
+    /// Discriminant 59.
+    AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
 }
 
 impl DataKey {
@@ -278,6 +282,7 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::AdminConfigLastChangedAt(_) => 59,
         }
     }
 
@@ -796,6 +801,10 @@ pub enum Error {
     TransferIntentExpired = 11002,
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
+
+    // --- Admin Config Cooldown (12000-12099) ---
+    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
+    CooldownActive = 12001,
 }
 
 impl Error {
@@ -1374,6 +1383,19 @@ pub struct OperatorSetEvent {
 #[derive(Clone, Debug)]
 pub struct OperatorRemovedEvent {
     pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a protocol-wide admin config key is mutated (after the
+/// cooldown check passes).  `key_label` is the human-readable label (e.g.
+/// `"MinTopup"`) and `prev_ts` is the timestamp of the *previous* mutation
+/// for that same key (0 if this is the first mutation).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminConfigChangedEvent {
+    pub key_label: soroban_sdk::String,
+    pub prev_ts: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2303,6 +2325,7 @@ mod known_keys_tests {
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
             (DataKey::TransferIntent(1), true),
+            (DataKey::AdminConfigLastChangedAt(soroban_sdk::BytesN::from_array(env, &[0u8; 32])), false),
         ]
     }
 
@@ -2347,7 +2370,7 @@ mod known_keys_tests {
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=54`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=59`
     /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
@@ -2367,9 +2390,9 @@ mod known_keys_tests {
         assert!(
             seen.iter().all(|&s| s),
             "discriminants are not contiguous 0..={}",
-            n - 1
+            max_discriminant
         );
-        assert!(n > 0, "variant count must be non-zero");
+        assert!(!variants.is_empty(), "variant count must be non-zero");
     }
 
     /// Consistency: the allowlist contains exactly the instance-tier
@@ -2377,8 +2400,9 @@ mod known_keys_tests {
     #[test]
     fn allowlist_matches_instance_classification() {
         let env = Env::default();
-        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
-            .into_iter()
+        let variants = all_variants(&env);
+        let expected_instance: std::vec::Vec<u32> = variants
+            .iter()
             .filter(|(_, is_instance)| *is_instance)
             .map(|(key, _)| key.canonical_discriminant())
             .collect();
@@ -2399,8 +2423,6 @@ mod known_keys_tests {
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }
-        assert!(seen.iter().all(|&s| s));
-        assert_eq!(variants.len(), 51);
     }
 }
 

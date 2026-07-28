@@ -787,6 +787,9 @@ mod admin_rotation_invariants {
 
         te.client.enable_emergency_stop(&new_admin);
         assert!(te.client.get_emergency_stop_status());
+        te.env.ledger().with_mut(|li| {
+            li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+        });
         te.client.disable_emergency_stop(&new_admin);
         assert!(!te.client.get_emergency_stop_status());
     }
@@ -905,6 +908,9 @@ mod admin_rotation_invariants {
         let new_admin = Address::generate(&te.env);
         te.client.rotate_admin(&te.admin, &new_admin, &0u64);
 
+        te.env.ledger().with_mut(|li| {
+            li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+        });
         te.client.disable_emergency_stop(&new_admin);
         assert!(!te.client.get_emergency_stop_status());
 
