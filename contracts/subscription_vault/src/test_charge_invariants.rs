@@ -62,7 +62,11 @@ impl ChargeModel {
             return false;
         }
         // Interval guard: INV-1
-        if now < self.last_payment_timestamp.saturating_add(self.interval_seconds) {
+        if now
+            < self
+                .last_payment_timestamp
+                .saturating_add(self.interval_seconds)
+        {
             return false;
         }
         // Balance guard: INV-2
