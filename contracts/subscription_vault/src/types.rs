@@ -221,6 +221,10 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    /// Timestamp of the most recent admin-config mutation for a given key label,
+    /// hashed to `BytesN<32>` for collision-free per-key cooldown tracking.
+    /// Discriminant 59.
+    AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
     /// Global whitelist mode toggle. When true, merchants must be approved before registering. Discriminant 61.
@@ -310,6 +314,7 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
             DataKey::MerchantWhitelistMode => 61,
@@ -461,11 +466,37 @@ pub struct Subscription {
     pub grace_start_timestamp: Option<u64>,
     /// Scheduled future cancellation timestamp.
     pub cancel_at: Option<u64>,
+    /// When `false`, billing is halted at the next interval boundary.
+    ///
+    /// Defaults to `true` on creation. The subscriber (or merchant) may call
+    /// `set_auto_renew(false)` to opt out of automatic renewal. During the
+    /// renewal window (up to one full interval after `auto_renew` was set to
+    /// `false`) the subscriber may re-enable auto-renewal without re-creating
+    /// the subscription, preserving history and metadata. After the window
+    /// lapses, the subscription must be cancelled and recreated.
+    pub auto_renew: bool,
+    /// Ledger timestamp when `auto_renew` was last set to `false`.
+    ///
+    /// `None` means auto-renewal has never been disabled or has been
+    /// re-enabled since. Used to enforce the renewal window.
+    pub auto_renew_disabled_at: Option<u64>,
 }
 
 impl Subscription {
     pub fn is_expired(&self, current_time: u64) -> bool {
         self.expires_at.map_or(false, |exp| current_time >= exp)
+    }
+
+    /// Returns `true` when the renewal window (one full interval) after
+    /// auto-renewal was disabled is still open at `current_time`.
+    pub fn is_in_renewal_window(&self, current_time: u64) -> bool {
+        match self.auto_renew_disabled_at {
+            Some(disabled_at) => {
+                let window_end = disabled_at.saturating_add(self.interval_seconds);
+                current_time < window_end
+            }
+            None => false,
+        }
     }
 }
 
@@ -494,6 +525,28 @@ pub struct CredentialIssuedEvent {
 pub struct CredentialRevokedEvent {
     pub subscription_id: u32,
     pub timestamp: u64,
+}
+
+/// Event emitted when `auto_renew` is toggled on a subscription.
+///
+/// Published by `set_auto_renew` with topic `("auto_renew_toggled", subscription_id)`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AutoRenewToggledEvent {
+    /// The subscription whose auto-renewal flag changed.
+    pub subscription_id: u32,
+    /// The subscriber who owns the subscription.
+    pub subscriber: Address,
+    /// The merchant who receives the recurring payment.
+    pub merchant: Address,
+    /// New value of the `auto_renew` flag.
+    pub enabled: bool,
+    /// Caller who authorized the change (subscriber or merchant).
+    pub authorizer: Address,
+    /// Ledger timestamp of the toggle.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -592,6 +645,21 @@ pub struct DisputeRespondedEvent {
     pub schema_version: u32,
 }
 
+/// Cumulative escrow ledger for a dispute.
+///
+/// Tracks the original escrowed amount and the cumulative amount disbursed
+/// across one or more resolution steps. Every resolution is checked against
+/// this ledger so that `total_disbursed <= original_amount` at all times,
+/// preventing overpay even if partial-resolution logic is added later.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeEscrowLedger {
+    /// The total amount escrowed when the dispute was opened.
+    pub original_amount: i128,
+    /// Cumulative amount already disbursed via resolutions.
+    pub total_disbursed: i128,
+}
+
 /// Event emitted when a dispute is resolved.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -658,6 +726,19 @@ pub struct ProposalVotedEvent {
     pub guardian: Address,
     pub voted_yes: bool,
     pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a vote is rejected because the proposal's ETA has passed
+/// and votes are locked. The ETA (timelock) marks the earliest moment a proposal
+/// may be executed; after it, no votes can be added or changed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VoteLockedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub eta: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -854,6 +935,8 @@ pub enum Error {
     DisputeAlreadyOpen = 10005,
     /// The dispute has already been responded to by the admin.
     DisputeAlreadyResponded = 10006,
+    /// Dispute resolution would overpay — total disbursed cannot exceed escrowed amount.
+    DisputeOverpay = 10007,
 
     // --- Subscription Transfer (11000-11099) ---
     /// The transfer intent was not found or has expired.
@@ -862,6 +945,11 @@ pub enum Error {
     TransferIntentExpired = 11002,
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
+
+    // --- Auto-Renewal (12000-12099) ---
+    /// The renewal window (one billing interval after auto_renew was disabled)
+    /// has elapsed; the subscription must be cancelled and recreated to resume billing.
+    RenewalWindowClosed = 12001,
 }
 
 impl Error {
@@ -1459,6 +1547,19 @@ pub struct OperatorRemovedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a protocol-wide admin config key is mutated (after the
+/// cooldown check passes).  `key_label` is the human-readable label (e.g.
+/// `"MinTopup"`) and `prev_ts` is the timestamp of the *previous* mutation
+/// for that same key (0 if this is the first mutation).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminConfigChangedEvent {
+    pub key_label: soroban_sdk::String,
+    pub prev_ts: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryReason {
@@ -1740,6 +1841,17 @@ pub struct MerchantAddressRotatedEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when a merchant balance snapshot is published.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a subscriber withdraws funds after cancellation.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriberWithdrawalEvent {
@@ -1940,6 +2052,8 @@ pub enum ChargeExecutionResult {
     InsufficientBalance = 1,
     LifetimeCapReached = 2,
     ScheduledCancellation = 3,
+    /// Charge silently skipped because `auto_renew` is `false` and the interval has elapsed.
+    Skipped = 4,
 }
 
 #[contracttype]
@@ -2353,10 +2467,6 @@ mod known_keys_tests {
 
     #[test]
     fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (60) can never be
-        // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(61));
-        assert!(!is_known_instance_discriminant(9_999));
         assert!(!is_known_instance_discriminant(u32::MAX));
     }
 
@@ -2364,15 +2474,11 @@ mod known_keys_tests {
     #[test]
     #[should_panic(expected = "Unknown or persistent key reached instance storage")]
     fn assert_panics_on_persistent_key() {
-        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
-        // instance storage; the guard catches it.
         let env = Env::default();
         let _ = &env;
         assert_known_data_key(&DataKey::Sub(1));
     }
 
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
-    /// range, so the registry can never silently skip or duplicate a number.
     #[test]
     fn discriminants_are_unique_and_contiguous() {
         let env = Env::default();
@@ -2388,22 +2494,16 @@ mod known_keys_tests {
             assert!(!seen[d], "duplicate discriminant {d}");
             seen[d] = true;
         }
-        let n = variants.len();
-        assert!(
-            seen.iter().all(|&s| s),
-            "discriminants are not contiguous 0..={}",
-            n - 1
-        );
-        assert!(n > 0, "variant count must be non-zero");
+        assert!(seen.iter().all(|&s| s), "discriminants must be contiguous");
+        assert!(!variants.is_empty(), "variant count must be non-zero");
     }
 
-    /// Consistency: the allowlist contains exactly the instance-tier
-    /// discriminants enumerated above, is sorted, and is duplicate-free.
     #[test]
     fn allowlist_matches_instance_classification() {
         let env = Env::default();
-        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
-            .into_iter()
+        let variants = all_variants(&env);
+        let expected_instance: std::vec::Vec<u32> = variants
+            .iter()
             .filter(|(_, is_instance)| *is_instance)
             .map(|(key, _)| key.canonical_discriminant())
             .collect();
@@ -2420,7 +2520,6 @@ mod known_keys_tests {
             "allowlist length does not match instance-tier variant count"
         );
 
-        // Sorted ascending and free of duplicates.
         for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
             assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
         }

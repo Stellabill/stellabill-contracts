@@ -62,6 +62,9 @@ pub const DOMAIN_DEPOSIT_FUNDS: u32 = 6;
 /// Domain constant for charge_one_off operations.
 pub const DOMAIN_CHARGE_ONEOFF: u32 = 7;
 
+/// Domain constant for merchant address rotation operations.
+pub const DOMAIN_MERCHANT_ROTATION: u32 = 10;
+
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///

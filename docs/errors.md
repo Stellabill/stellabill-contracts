@@ -74,6 +74,7 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 10004 | `DisputeWindowElapsed` | State transition | Dispute window has elapsed. | Check resolution rules. |
 | 10005 | `DisputeAlreadyOpen` | State transition | A dispute is already open for this subscription. | Wait for resolution or inspect existing dispute. |
 | 10006 | `DisputeAlreadyResponded` | State transition | Dispute is not in `Open` status. | Cannot respond twice. |
+| 12001 | `RenewalWindowClosed` | State transition | Re-enabling auto-renewal after the one-interval renewal window has elapsed. | Cancel and recreate the subscription. Do not retry `set_auto_renew(true)`. |
 
 ## Retry Guidance
 

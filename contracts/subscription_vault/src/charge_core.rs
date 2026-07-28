@@ -36,11 +36,11 @@ use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
 use crate::types::{
-    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
-    Error, GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionCancelledEvent,
-    SubscriptionChargeFailedEvent, SubscriptionChargedEvent, SubscriptionStatus,
-    UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
+    GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionChargeFailedEvent,
+    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
+    UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -215,6 +215,19 @@ pub fn charge_one(
                 now,
             ));
         }
+    }
+
+    // ── Auto-renewal gate ────────────────────────────────────────────────────
+    // When auto_renew is false the billing engine skips the charge once the
+    // interval has elapsed. The charge is silently skipped (not an error) so
+    // that batch operations can continue past non-renewing subscriptions.
+    if !sub.auto_renew {
+        let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
+        if now >= next_allowed {
+            // Interval has elapsed but auto-renewal is disabled — skip.
+            return Ok(ChargeExecutionResult::Skipped);
+        }
+        // Interval hasn't elapsed yet: fall through to IntervalNotElapsed below.
     }
 
     let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;

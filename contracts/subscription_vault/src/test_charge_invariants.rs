@@ -13,6 +13,7 @@
 //! be verified against the live Soroban client (using Env::default() + contract client).
 
 use proptest::prelude::*;
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Minimal charge model (pure Rust, no Soroban env dependency)
@@ -100,6 +101,142 @@ fn arb_op() -> impl Strategy<Value = Op> {
         (1i128..=5_000_000i128).prop_map(Op::Deposit),
         (0u64..=10_000_000u64).prop_map(Op::Charge),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Accounting parity model for merchant earnings / total_accounted
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MerchantEarningsModel {
+    accruals: i128,
+    withdrawals: i128,
+    refunds: i128,
+}
+
+impl MerchantEarningsModel {
+    fn new() -> Self {
+        Self {
+            accruals: 0,
+            withdrawals: 0,
+            refunds: 0,
+        }
+    }
+
+    fn balance(&self) -> i128 {
+        self.accruals
+            .saturating_sub(self.withdrawals)
+            .saturating_sub(self.refunds)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AccountingOp {
+    Charge { merchant: u8, token: u8, amount: i128 },
+    Withdrawal { merchant: u8, token: u8, amount: i128 },
+    Cancellation { merchant: u8, token: u8, amount: i128 },
+}
+
+fn arb_accounting_op() -> impl Strategy<Value = AccountingOp> {
+    prop_oneof![
+        (0u8..=7u8, 0u8..=3u8, 1i128..=50_000i128).prop_map(|(merchant, token, amount)| {
+            AccountingOp::Charge {
+                merchant,
+                token,
+                amount,
+            }
+        }),
+        (0u8..=7u8, 0u8..=3u8, 1i128..=25_000i128).prop_map(|(merchant, token, amount)| {
+            AccountingOp::Withdrawal {
+                merchant,
+                token,
+                amount,
+            }
+        }),
+        (0u8..=7u8, 0u8..=3u8, 1i128..=25_000i128).prop_map(|(merchant, token, amount)| {
+            AccountingOp::Cancellation {
+                merchant,
+                token,
+                amount,
+            }
+        }),
+    ]
+}
+
+#[derive(Debug, Default)]
+struct AccountingModel {
+    total_accounted: BTreeMap<u8, i128>,
+    merchant_earnings: BTreeMap<(u8, u8), MerchantEarningsModel>,
+}
+
+impl AccountingModel {
+    fn apply(&mut self, op: &AccountingOp) {
+        match op {
+            AccountingOp::Charge {
+                merchant,
+                token,
+                amount,
+            } => {
+                let entry = self
+                    .merchant_earnings
+                    .entry((*merchant, *token))
+                    .or_insert_with(MerchantEarningsModel::new);
+                entry.accruals = entry.accruals.saturating_add(*amount);
+                *self.total_accounted.entry(*token).or_insert(0) =
+                    self.total_accounted.get(token).copied().unwrap_or(0).saturating_add(*amount);
+            }
+            AccountingOp::Withdrawal {
+                merchant,
+                token,
+                amount,
+            } => {
+                let entry = self
+                    .merchant_earnings
+                    .entry((*merchant, *token))
+                    .or_insert_with(MerchantEarningsModel::new);
+                if entry.balance() >= *amount {
+                    entry.withdrawals = entry.withdrawals.saturating_add(*amount);
+                    *self.total_accounted.entry(*token).or_insert(0) =
+                        self.total_accounted.get(token).copied().unwrap_or(0).saturating_sub(*amount);
+                }
+            }
+            AccountingOp::Cancellation {
+                merchant,
+                token,
+                amount,
+            } => {
+                let entry = self
+                    .merchant_earnings
+                    .entry((*merchant, *token))
+                    .or_insert_with(MerchantEarningsModel::new);
+                if entry.balance() >= *amount {
+                    entry.refunds = entry.refunds.saturating_add(*amount);
+                    *self.total_accounted.entry(*token).or_insert(0) =
+                        self.total_accounted.get(token).copied().unwrap_or(0).saturating_sub(*amount);
+                }
+            }
+        }
+    }
+
+    fn check_parity(&self) -> bool {
+        let mut tokens = self.total_accounted.keys().copied().collect::<Vec<_>>();
+        for ((_, token), _) in &self.merchant_earnings {
+            if !tokens.contains(token) {
+                tokens.push(*token);
+            }
+        }
+
+        tokens.into_iter().all(|token| {
+            let accounted = self.total_accounted.get(&token).copied().unwrap_or(0);
+            let merchant_sum = self
+                .merchant_earnings
+                .iter()
+                .filter(|((_, merchant_token), _)| *merchant_token == token)
+                .map(|(_, earnings)| earnings.balance())
+                .sum::<i128>();
+            merchant_sum == accounted
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,4 +444,27 @@ proptest! {
         );
         prop_assert!(sub.check_conservation());
     }
+}
+
+#[test]
+fn prop_merchant_earnings_sum_equals_total_accounted() {
+    fn runner(ops: Vec<AccountingOp>) {
+        let mut model = AccountingModel::default();
+
+        for (idx, op) in ops.iter().enumerate() {
+            model.apply(op);
+            assert!(
+                model.check_parity(),
+                "earnings/accounting drift after op {idx}: {:?}",
+                op
+            );
+        }
+    }
+
+    proptest::test_runner::TestRunner::default()
+        .run(&prop::collection::vec(arb_accounting_op(), 0..=80), |ops| {
+            runner(ops);
+            Ok(())
+        })
+        .unwrap();
 }

@@ -115,7 +115,7 @@ pub fn create_active_subscription(
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
 
-    env.ledger().set_timestamp(start_time);
+    env.ledger().with_mut(|l| l.timestamp = start_time);
 
     let id = client.create_subscription(
         &subscriber,
