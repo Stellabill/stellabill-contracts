@@ -1729,10 +1729,12 @@ fn test_rotate_admin() {
 
 #[test]
 fn test_emergency_stop() {
-    let (_env, client, _, admin) = setup_test_env();
+    let (env, client, _, admin) = setup_test_env();
     assert!(!client.get_emergency_stop_status());
     client.enable_emergency_stop(&admin);
     assert!(client.get_emergency_stop_status());
+    env.ledger()
+        .with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(!client.get_emergency_stop_status());
 }
@@ -5125,6 +5127,9 @@ fn test_billing_retention_rapid_config_changes() {
         .client
         .set_billing_retention(&test_env.admin, &1u32);
     assert_eq!(test_env.client.get_billing_retention().keep_recent, 1);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env
         .client
         .set_billing_retention(&test_env.admin, &u32::MAX);
@@ -5132,6 +5137,9 @@ fn test_billing_retention_rapid_config_changes() {
         test_env.client.get_billing_retention().keep_recent,
         u32::MAX
     );
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env
         .client
         .set_billing_retention(&test_env.admin, &12u32);
@@ -5726,6 +5734,9 @@ fn test_all_admin_operations_after_rotation() {
         &String::from_str(&test_env.env, "rec_2"),
         &RecoveryReason::AccidentalTransfer,
     );
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&new_admin, &next_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), next_admin);
 }
@@ -5738,7 +5749,13 @@ fn test_multiple_admin_rotations() {
     let admin_d = Address::generate(&test_env.env);
 
     test_env.client.rotate_admin(&test_env.admin, &admin_b, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin_b, &admin_c, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin_c, &admin_d, &0u64);
 
     assert_eq!(test_env.client.get_admin(), admin_d);
@@ -5851,7 +5868,13 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 2: rotate to admin2.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.set_min_topup(&admin2, &2_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -5863,7 +5886,13 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 3: rotate to admin3.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin2, &admin3, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.set_min_topup(&admin3, &3_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -6004,6 +6033,9 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
         .client
         .add_to_blocklist(&test_env.admin, &blocklisted_subscriber, &None::<String>);
     test_env.client.enable_emergency_stop(&test_env.admin);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     assert_eq!(
@@ -6114,6 +6146,9 @@ fn test_get_admin_before_and_after_rotation() {
     test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
     assert_eq!(test_env.client.get_admin(), admin2);
 
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     let admin3 = Address::generate(&test_env.env);
     test_env.client.rotate_admin(&admin2, &admin3, &0u64);
     assert_eq!(test_env.client.get_admin(), admin3);
@@ -6198,6 +6233,9 @@ fn test_rotate_admin_allowed_during_emergency_stop() {
     assert_eq!(test_env.client.get_admin(), new_admin);
 
     // New admin can disable the emergency stop.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.disable_emergency_stop(&new_admin);
     assert!(!test_env.client.get_emergency_stop_status());
 }
@@ -8151,6 +8189,7 @@ fn test_merchant_token_bucket_reconciliation() {
 
     client.init(&token_a, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
     client.add_accepted_token(&admin, &token_b, &6);
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.add_accepted_token(&admin, &token_c, &6);
 
     let merchant = Address::generate(&env);
@@ -8696,6 +8735,7 @@ fn test_oneoff_blocked_by_emergency_stop() {
     assert_eq!(res, Err(Ok(Error::EmergencyStopActive)));
 
     // Disable and verify charge works again
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     client.charge_one_off(&id, &merchant, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     let sub = client.get_subscription(&id);
