@@ -42,7 +42,9 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    BillingChargeKind, DataKey, DelegatedDepositEvent, DelegatedPayerGrantedEvent,
+    DelegatedPayerGrant, DelegatedPayerRevokedEvent, Error,
+    FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, SubscriberCreateWindow,
@@ -2861,4 +2863,217 @@ pub fn do_veto_transfer(
     );
 
     Ok(())
+}
+
+// ── Delegated payer ────────────────────────────────────────────────────────
+
+/// Grant a third-party payer the right to deposit funds into this subscriber's
+/// subscription vault. The payer never gains withdrawal rights.
+///
+/// # Authorization
+/// Only the subscription's `subscriber` may grant this authorization.
+///
+/// # Storage
+/// The grant is stored in instance storage under `DataKey::DelegatedPayerGrant(subscriber, payer)`.
+/// Only one grant per (subscriber, payer) pair is allowed; calling again
+/// overwrites the previous grant.
+///
+/// # Arguments
+/// * `subscriber` — Must match the subscription's subscriber and provide auth.
+/// * `payer` — The third-party address being authorized.
+/// * `expires_at` — Optional ledger timestamp after which the grant expires.
+///   Must be strictly greater than the current ledger time if provided.
+/// * `max_amount` — Optional per-call deposit ceiling in token base units.
+///   `None` means no per-call limit beyond the subscription's lifetime cap.
+///
+/// # Errors
+/// * `Error::Unauthorized` — `subscriber` does not match the subscription's subscriber.
+/// * `Error::NotFound` — `subscription_id` does not exist.
+/// * `Error::InvalidInput` — `expires_at` is at or before the current ledger time.
+///
+/// # Events
+/// Emits [`DelegatedPayerGrantedEvent`].
+pub fn do_grant_delegated_payer(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+    payer: Address,
+    expires_at: Option<u64>,
+    max_amount: Option<i128>,
+) -> Result<(), Error> {
+    subscriber.require_auth();
+
+    let sub = get_subscription(env, subscription_id)?;
+
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
+
+    if sub.is_expired(env.ledger().timestamp()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    let now = env.ledger().timestamp();
+    if let Some(exp) = expires_at {
+        if exp <= now {
+            return Err(Error::InvalidInput);
+        }
+    }
+
+    if let Some(max) = max_amount {
+        if max <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let grant = DelegatedPayerGrant {
+        subscriber: sub.subscriber.clone(),
+        payer: payer.clone(),
+        expires_at,
+        max_amount,
+    };
+
+    let key = DataKey::DelegatedPayerGrant(sub.subscriber.clone(), payer.clone());
+    env.storage().instance().set(&key, &grant);
+
+    env.events().publish(
+        (
+            Symbol::new(env, "delegated_payer_granted"),
+            sub.subscriber.clone(),
+            payer.clone(),
+        ),
+        DelegatedPayerGrantedEvent {
+            subscriber: sub.subscriber,
+            payer,
+            expires_at,
+            max_amount,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Revoke a previously granted delegated payer authorization.
+///
+/// Safe to call even if no grant exists (idempotent no-op).
+///
+/// # Authorization
+/// Only the subscription's `subscriber` may revoke.
+///
+/// # Events
+/// Emits [`DelegatedPayerRevokedEvent`] when a grant is actually removed.
+pub fn do_revoke_delegated_payer(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+    payer: Address,
+) -> Result<(), Error> {
+    subscriber.require_auth();
+
+    let sub = get_subscription(env, subscription_id)?;
+
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
+
+    let key = DataKey::DelegatedPayerGrant(sub.subscriber.clone(), payer.clone());
+    if env.storage().instance().has(&key) {
+        env.storage().instance().remove(&key);
+
+        env.events().publish(
+            (
+                Symbol::new(env, "delegated_payer_revoked"),
+                sub.subscriber.clone(),
+                payer.clone(),
+            ),
+            DelegatedPayerRevokedEvent {
+                subscriber: sub.subscriber,
+                payer,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+/// Read a delegated payer grant, if one exists.
+///
+/// Returns `None` when no grant has been established for the given pair.
+pub fn get_delegated_payer_grant(
+    env: &Env,
+    subscriber: &Address,
+    payer: &Address,
+) -> Option<DelegatedPayerGrant> {
+    env.storage()
+        .instance()
+        .get(&DataKey::DelegatedPayerGrant(subscriber.clone(), payer.clone()))
+}
+
+/// Deposit funds into a subscriber's vault on their behalf, consuming a
+/// delegated payer grant.
+///
+/// The payer must have an active (non-expired) grant from the subscriber. The
+/// deposit follows the same CEI pattern and validation rules as a direct
+/// [`do_deposit_funds`] call, except authorization is checked against the
+/// grant rather than requiring `subscriber.require_auth()`.
+///
+/// # Authorization
+/// The `payer` must provide auth and must hold a valid delegated payer grant.
+///
+/// # Security
+/// - Grant expiry is checked against the current ledger timestamp.
+/// - Per-call `max_amount` limit is enforced.
+/// - Lifetime cap, credit limit, blocklist, and merchant-pause checks are all
+///   applied identically to a self-deposit.
+/// - The payer **never** gains withdrawal rights; those remain exclusively
+///   with the subscriber.
+///
+/// # Errors
+/// * `Error::DelegatedGrantNotFound` — No grant exists for (subscriber, payer).
+/// * `Error::DelegatedGrantExpired` — The grant has expired.
+/// * `Error::DelegatedDepositExceedsMax` — Deposit exceeds grant's `max_amount`.
+/// * All errors from [`do_deposit_funds`] (blocklist, expired sub, below min topup, etc.)
+pub fn do_deposit_funds_on_behalf(
+    env: &Env,
+    subscription_id: u32,
+    payer: Address,
+    subscriber: Address,
+    amount: i128,
+    idem_key: Option<soroban_sdk::BytesN<32>>,
+) -> Result<(), Error> {
+    payer.require_auth();
+    crate::blocklist::require_not_blocklisted(env, &payer)?;
+
+    // CHECKS: Validate grant exists and is active.
+    let key = DataKey::DelegatedPayerGrant(subscriber.clone(), payer.clone());
+    let grant: DelegatedPayerGrant = env
+        .storage()
+        .instance()
+        .get(&key)
+        .ok_or(Error::DelegatedGrantNotFound)?;
+
+    let now = env.ledger().timestamp();
+
+    // Grant expiry check.
+    if let Some(exp) = grant.expires_at {
+        if now >= exp {
+            return Err(Error::DelegatedGrantExpired);
+        }
+    }
+
+    // Per-call max_amount check.
+    if let Some(max) = grant.max_amount {
+        if amount > max {
+            return Err(Error::DelegatedDepositExceedsMax);
+        }
+    }
+
+    // Delegate to the standard deposit path for all remaining checks and effects.
+    // This reuses the same validation, CEI pattern, token transfer, and event
+    // emission as a self-deposit.
+    do_deposit_funds(env, subscription_id, subscriber, amount, idem_key)
 }

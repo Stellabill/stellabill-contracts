@@ -536,7 +536,8 @@ pub use types::{
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    ChargeExecutionResult, ContractSnapshot, DataKey, DelegatedDepositEvent, DelegatedPayerGrant,
+    DelegatedPayerGrantedEvent, DelegatedPayerRevokedEvent, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
@@ -1715,6 +1716,95 @@ impl SubscriptionVault {
         subscription::do_veto_transfer(&env, subscription_id, merchant)
     }
 
+    // ── Delegated Payer ────────────────────────────────────────────────────
+
+    /// Grant a third-party payer the right to deposit funds into your
+    /// subscription vault. The payer never gains withdrawal rights.
+    ///
+    /// # Arguments
+    /// * `subscriber` — Must be the subscription's registered subscriber.
+    /// * `payer` — Third-party address to authorize.
+    /// * `expires_at` — Optional expiry timestamp (must be > now).
+    /// * `max_amount` — Optional per-call deposit ceiling.
+    pub fn grant_delegated_payer(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        payer: Address,
+        expires_at: Option<u64>,
+        max_amount: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_grant_delegated_payer(
+            &env,
+            subscription_id,
+            subscriber,
+            payer,
+            expires_at,
+            max_amount,
+        )
+    }
+
+    /// Revoke a previously granted delegated payer authorization.
+    ///
+    /// Safe to call even if no grant exists (idempotent).
+    pub fn revoke_delegated_payer(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        payer: Address,
+    ) -> Result<(), Error> {
+        subscription::do_revoke_delegated_payer(&env, subscription_id, subscriber, payer)
+    }
+
+    /// Read a delegated payer grant, if one exists.
+    pub fn get_delegated_payer_grant(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+    ) -> Option<crate::types::DelegatedPayerGrant> {
+        subscription::get_delegated_payer_grant(&env, &subscriber, &payer)
+    }
+
+    /// Deposit funds into a subscriber's vault on their behalf.
+    ///
+    /// Requires a valid delegated payer grant from the subscriber. The payer
+    /// never gains withdrawal rights.
+    pub fn deposit_funds_on_behalf(
+        env: Env,
+        subscription_id: u32,
+        payer: Address,
+        subscriber: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds_on_behalf")?;
+        subscription::do_deposit_funds_on_behalf(
+            &env,
+            subscription_id,
+            payer.clone(),
+            subscriber.clone(),
+            amount,
+            idem_key,
+        )?;
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        env.events().publish(
+            (Symbol::new(&env, "delegated_deposit"), subscription_id),
+            crate::types::DelegatedDepositEvent {
+                subscription_id,
+                subscriber,
+                payer,
+                token: sub.token,
+                amount,
+                new_balance: sub.prepaid_balance,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        Ok(())
+    }
+
     /// Merchant-initiated one-off charge.
     pub fn charge_one_off(
         env: Env,
@@ -2862,3 +2952,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_merchant_whitelist;
+
+#[cfg(test)]
+mod test_delegated_payer;

@@ -220,6 +220,8 @@ pub enum DataKey {
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
     ChargeSalt(u32),
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    DelegatedPayerGrant(Address, Address),
 }
 
 impl DataKey {
@@ -289,6 +291,7 @@ impl DataKey {
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
             DataKey::ChargeSalt(_) => 61,
+            DataKey::DelegatedPayerGrant(_, _) => 62,
         }
     }
 
@@ -341,6 +344,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     54, // TransferIntent(u32)
     59,
     61, // ChargeSalt(u32)
+    62, // DelegatedPayerGrant(Address, Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -819,6 +823,14 @@ pub enum Error {
     // --- Admin Config Cooldown (12000-12099) ---
     /// A protocol-wide config mutation was attempted within the per-key cooldown window.
     CooldownActive = 12001,
+
+    // --- Delegated Payer (13000-13099) ---
+    /// The delegated payer grant has expired.
+    DelegatedGrantExpired = 13001,
+    /// The deposit amount exceeds the grant's per-call maximum.
+    DelegatedDepositExceedsMax = 13002,
+    /// No delegated payer grant exists for the given (subscriber, payer) pair.
+    DelegatedGrantNotFound = 13003,
 }
 
 impl Error {
@@ -2376,6 +2388,7 @@ mod known_keys_tests {
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
             (DataKey::ChargeSalt(1), true),
+            (DataKey::DelegatedPayerGrant(a.clone(), b.clone()), true),
         ]
     }
 
@@ -2477,9 +2490,69 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 62);
+        assert_eq!(variants.len(), 63);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Delegated payer types ───────────────────────────────────────────────────
+
+/// On-chain authorization record granting a third-party payer the right to
+/// deposit funds into a subscriber's vault. The payer never gains withdrawal
+/// rights; this grant is strictly deposit-only.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegatedPayerGrant {
+    /// The subscriber who granted this authorization.
+    pub subscriber: Address,
+    /// The third-party payer who is authorized to deposit.
+    pub payer: Address,
+    /// Ledger timestamp after which this grant is no longer valid.
+    /// `None` means the grant does not expire.
+    pub expires_at: Option<u64>,
+    /// Maximum amount (in token base units) the payer may deposit per call.
+    /// `None` means no per-call limit (only bounded by the vault's lifetime cap).
+    pub max_amount: Option<i128>,
+}
+
+/// Event emitted when a subscriber grants a delegated payer authorization.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrantedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: Option<u64>,
+    pub max_amount: Option<i128>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscriber revokes a delegated payer authorization.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerRevokedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer deposits funds into a subscriber's vault.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedDepositEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub payer: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
