@@ -37,9 +37,6 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-mod nonce;
-mod coupon;
-mod invariants;
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
@@ -543,9 +540,10 @@ pub use types::{
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof, ReconciliationSummaryPage,
-    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof, 
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberCapReachedEvent, 
+    SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -1494,6 +1492,18 @@ impl SubscriptionVault {
         subscription::get_subscriber_active_count(&env, &subscriber)
     }
 
+    pub fn set_subscriber_create_cap(
+        env: Env,
+        admin: Address,
+        cap: u32,
+    ) -> Result<(), Error> {
+        admin::do_set_subscriber_create_cap(&env, admin, cap)
+    }
+
+    pub fn get_subscriber_create_cap(env: Env) -> u32 {
+        admin::get_subscriber_create_cap(&env)
+    }
+
     /// Get current subscriber exposure.
     pub fn get_subscriber_exposure(
         env: Env,
@@ -1600,8 +1610,6 @@ impl SubscriptionVault {
             (Symbol::new(&env, "sub_paused"), subscription_id),
             SubscriptionPausedEvent {
                 subscription_id,
-                subscriber: sub.subscriber,
-                merchant: sub.merchant,
                 authorizer,
                 timestamp,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
