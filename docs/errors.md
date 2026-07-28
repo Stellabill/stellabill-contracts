@@ -160,8 +160,8 @@ Column definitions:
 | 7001 | `InvalidFeeBips` | Merchant Config | `merchant.rs` | Fix fee_bips to be in range [0, 10000]. | MerchantConfigUpdatedEvent |
 | 7002 | `InvalidOperations` | Merchant Config | `merchant.rs` | Fix allowed_operations bitmap to use only valid OP_* bits. | MerchantConfigUpdatedEvent |
 | 7003 | `MustAllowChargeOperation` | Merchant Config | `merchant.rs` | Set OP_CHARGE bit in allowed_operations; merchants must accept charges. | MerchantConfigUpdatedEvent |
-| 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs`, `types.rs` | Fix token_decimals; must be in [1, 19]. | — |
-| 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs`, `types.rs` | Provide an accepted token address from list_accepted_tokens. | — |
+| 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs` | Fix token_decimals; must be in [1, 19]. | — |
+| 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs` | Provide an accepted token address from list_accepted_tokens. | — |
 | 9001 | `CannotChangeUsageMode` | Subscription Update | `subscription.rs` | Cannot toggle usage_enabled on an existing subscription; create a new one. | — |
 | 9101 | `SchemaMigrationDowngrade` | Schema Migration | `admin.rs`, `test.rs`, `test_config_migration.rs` | Downgrade rejected; deploy the correct binary version. | SchemaMigratedEvent |
 | 10001 | `DisputeNotFound` | Dispute | `dispute.rs`, `lib.rs`, `test.rs` | Verify dispute ID before retrying. | — |
