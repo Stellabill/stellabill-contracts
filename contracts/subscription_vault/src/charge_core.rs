@@ -218,6 +218,19 @@ pub fn charge_one(
         }
     }
 
+    // ── Auto-renewal gate ────────────────────────────────────────────────────
+    // When auto_renew is false the billing engine skips the charge once the
+    // interval has elapsed. The charge is silently skipped (not an error) so
+    // that batch operations can continue past non-renewing subscriptions.
+    if !sub.auto_renew {
+        let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
+        if now >= next_allowed {
+            // Interval has elapsed but auto-renewal is disabled — skip.
+            return Ok(ChargeExecutionResult::Skipped);
+        }
+        // Interval hasn't elapsed yet: fall through to IntervalNotElapsed below.
+    }
+
     let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
     let period_start = sub
         .start_time
