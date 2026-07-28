@@ -97,7 +97,7 @@ pub fn patch_status(
     let mut sub = client.get_subscription(&id);
     sub.status = status;
     env.as_contract(&client.address, || {
-        env.storage().persistent().set(&DataKey::Sub(id), &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -106,7 +106,7 @@ pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balanc
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().persistent().set(&DataKey::Sub(id), &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 

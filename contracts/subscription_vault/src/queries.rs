@@ -71,6 +71,7 @@ pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 /// allowing full enumeration via chaining.
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
+/// **Emergency Stop Audit**: Safe — Reads public subscription data; does not reveal admin address, timelocks, or privileged state.
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     env.storage()
         .persistent()
@@ -78,6 +79,7 @@ pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription,
         .ok_or(Error::NotFound)
 }
 
+/// **Emergency Stop Audit**: Safe — Reads public subscription parameters; does not reveal admin address, timelocks, or privileged state.
 pub fn estimate_topup_for_intervals(
     env: &Env,
     subscription_id: u32,
@@ -103,6 +105,8 @@ pub fn estimate_topup_for_intervals(
 /// Returns subscriptions for a merchant, paginated by offset into the merchant id index.
 ///
 /// `limit` must be in `1..=MAX_SUBSCRIPTION_LIST_PAGE`. Ordering is stable index order (insertion order).
+///
+/// **Emergency Stop Audit**: Safe — Reads public merchant subscription index; does not reveal admin address, timelocks, or privileged state.
 pub fn get_subscriptions_by_merchant(
     env: &Env,
     merchant: Address,
@@ -139,6 +143,8 @@ pub fn get_subscriptions_by_merchant(
 }
 
 /// Returns the number of subscriptions for a given merchant.
+///
+/// **Emergency Stop Audit**: Safe — Reads public count; does not reveal admin address, timelocks, or privileged state.
 pub fn get_merchant_subscription_count(env: &Env, merchant: Address) -> u32 {
     let key = DataKey::MerchantSubs(merchant);
     let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
@@ -146,6 +152,8 @@ pub fn get_merchant_subscription_count(env: &Env, merchant: Address) -> u32 {
 }
 
 /// Number of subscription ids indexed for this token (length of the `token_subs` list).
+///
+/// **Emergency Stop Audit**: Safe — Reads public count; does not reveal admin address, timelocks, or privileged state.
 pub fn get_token_subscription_count(env: &Env, token: Address) -> u32 {
     let key = DataKey::TokenSubs(token);
     let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
@@ -155,6 +163,8 @@ pub fn get_token_subscription_count(env: &Env, token: Address) -> u32 {
 /// Returns subscriptions for a settlement token, paginated by offset into the token id index.
 ///
 /// `limit` must be in `1..=MAX_SUBSCRIPTION_LIST_PAGE`. Ordering is stable index order (insertion order).
+///
+/// **Emergency Stop Audit**: Safe — Reads public token subscription index; does not reveal admin address, timelocks, or privileged state.
 pub fn get_subscriptions_by_token(
     env: &Env,
     token: Address,
@@ -188,12 +198,16 @@ pub fn get_subscriptions_by_token(
 }
 
 /// Returns full next charge information for a subscription.
+///
+/// **Emergency Stop Audit**: Safe — Reads public charge calculation info; does not reveal admin address, timelocks, or privileged state.
 pub fn get_next_charge_info(env: &Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
     let sub = get_subscription(env, subscription_id)?;
     Ok(compute_next_charge_info(env, &sub))
 }
 
 /// Computes the estimated next charge timestamp and status for a subscription.
+///
+/// **Emergency Stop Audit**: Safe — Computes charge timing from subscription struct; pure function, does not expose privileged state.
 pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextChargeInfo {
     let next_charge_timestamp = subscription
         .last_payment_timestamp
@@ -217,13 +231,6 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Cancelled => soroban_sdk::symbol_short!("cancelled"),
         SubscriptionStatus::Expired => soroban_sdk::symbol_short!("expired"),
         SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
-        SubscriptionStatus::Active => Symbol::new(env, "active"),
-        SubscriptionStatus::GracePeriod => Symbol::new(env, "grace"),
-        SubscriptionStatus::InsufficientBalance => Symbol::new(env, "insuf_bal"),
-        SubscriptionStatus::Paused => Symbol::new(env, "paused"),
-        SubscriptionStatus::Cancelled => Symbol::new(env, "cancelled"),
-        SubscriptionStatus::Expired => Symbol::new(env, "expired"),
-        SubscriptionStatus::Archived => Symbol::new(env, "archived"),
     };
 
     NextChargeInfo {
@@ -237,6 +244,8 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
 }
 
 /// Returns lifetime cap information for a subscription.
+///
+/// **Emergency Stop Audit**: Safe — Reads subscription cap tracking data; does not reveal admin address, timelocks, or privileged state.
 pub fn get_cap_info(env: &Env, subscription_id: u32) -> Result<CapInfo, Error> {
     let sub = get_subscription(env, subscription_id)?;
 
@@ -260,6 +269,8 @@ pub fn get_cap_info(env: &Env, subscription_id: u32) -> Result<CapInfo, Error> {
 ///
 /// A return value of `0` means no limit is enforced for that plan.
 /// The plan must exist; returns `0` if no limit has been explicitly set.
+///
+/// **Emergency Stop Audit**: Safe — Reads public plan configuration limit; does not reveal admin address, timelocks, or privileged state.
 pub fn get_plan_max_active_subs(env: &Env, plan_template_id: u32) -> u32 {
     let key = DataKey::PlanMaxActive(plan_template_id);
     env.storage().instance().get(&key).unwrap_or(0)
@@ -295,6 +306,8 @@ pub struct SubscriptionsPage {
 /// of storage reads under adversarial conditions (e.g. an account with millions of
 /// subscriptions).  The cap does **not** affect correctness — it only splits work
 /// across more calls.
+///
+/// **Emergency Stop Audit**: Safe — Reads subscriber subscription list; does not reveal admin address, timelocks, or privileged state.
 pub fn list_subscriptions_by_subscriber(
     env: &Env,
     subscriber: Address,
@@ -380,6 +393,8 @@ pub const MAX_TOKEN_SUMMARIES_PER_PAGE: u32 = 50;
 /// This function scans all subscriptions and all merchants, which can be expensive
 /// for large contracts. For bounded compute, use [`query_prepaid_balances_paginated`]
 /// and aggregate off-chain.
+///
+/// **Emergency Stop Audit**: Safe — Reads aggregated token accounting balance; does not reveal admin address, timelocks, or privileged state.
 pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     let token_client = soroban_sdk::token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
@@ -425,6 +440,8 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
 /// # Returns
 ///
 /// A [`ReconciliationSummaryPage`] with token summaries and pagination cursor.
+///
+/// **Emergency Stop Audit**: Safe — Reads contract reconciliation summaries; does not reveal admin address, timelocks, or privileged state.
 pub fn get_contract_reconciliation_summary(
     env: &Env,
     start_token_index: u32,
@@ -489,6 +506,8 @@ pub fn get_contract_reconciliation_summary(
 /// This is a read-only function that cannot modify state. The proof is generated
 /// at the current ledger state and includes the ledger sequence for temporal
 /// anchoring.
+///
+/// **Emergency Stop Audit**: Safe — Generates read-only accounting proof; does not reveal admin address, timelocks, or privileged state.
 pub fn generate_reconciliation_proof(env: &Env, token: Address) -> ReconciliationProof {
     let token_client = soroban_sdk::token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
@@ -543,6 +562,8 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
 /// 1. Call with `start_subscription_id = 0`
 /// 2. Sum `partial_total` from each response
 /// 3. Use `next_start_id` for subsequent calls until `has_more` is false
+///
+/// **Emergency Stop Audit**: Safe — Reads paginated prepaid totals; does not reveal admin address, timelocks, or privileged state.
 pub fn query_prepaid_balances_paginated(
     env: &Env,
     request: PrepaidQueryRequest,

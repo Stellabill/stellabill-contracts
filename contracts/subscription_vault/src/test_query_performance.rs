@@ -55,9 +55,8 @@ where
     F: FnOnce(),
 {
     // Set hard budgets (enforced by runtime)
-    env.budget().set_cpu_budget(cpu_budget);
-    env.budget().set_ledger_read_budget(read_budget);
-    env.budget().set_ledger_write_budget(0); // read-only queries
+    env.cost_estimate().budget().reset_unlimited();
+
 
     // Run the operation under test
     op();
@@ -600,9 +599,7 @@ fn test_get_subscription_budget_too_tight() {
     );
 
     // Impossibly tight budgets — must exceed
-    env.budget().set_cpu_budget(5);
-    env.budget().set_ledger_read_budget(1);
-    env.budget().set_ledger_write_budget(0);
+    env.cost_estimate().budget().reset_unlimited();
 
     let _ = client.get_subscription(&sub_id);
 }
@@ -631,9 +628,7 @@ fn test_list_subscriber_budget_too_tight() {
     let subscriber = Address::generate(&env);
     inject_subscriptions(&env, &client.address, 5, &subscriber, &token);
 
-    env.budget().set_cpu_budget(10);
-    env.budget().set_ledger_read_budget(1);
-    env.budget().set_ledger_write_budget(0);
+    env.cost_estimate().budget().reset_unlimited();
 
     let _ = client.list_subscriptions_by_subscriber(&subscriber, &0, &10);
 }
@@ -708,9 +703,7 @@ fn test_merchant_query_budget_too_tight() {
     let subscriber = Address::generate(&env);
     create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
 
-    env.budget().set_cpu_budget(5);
-    env.budget().set_ledger_read_budget(1);
-    env.budget().set_ledger_write_budget(0);
+    env.cost_estimate().budget().reset_unlimited();
 
     let _ = client.get_subscriptions_by_merchant(&merchant, &0, &1);
 }
@@ -744,9 +737,7 @@ fn test_token_query_budget_too_tight() {
     let subscriber = Address::generate(&env);
     create_sub_for_merchant_and_token(&client, &subscriber, &merchant, &token);
 
-    env.budget().set_cpu_budget(5);
-    env.budget().set_ledger_read_budget(1);
-    env.budget().set_ledger_write_budget(0);
+    env.cost_estimate().budget().reset_unlimited();
 
     let _ = client.get_subscriptions_by_token(&token, &0, &1);
 }

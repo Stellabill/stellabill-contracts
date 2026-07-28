@@ -13,9 +13,10 @@
 //! - Cross-function reentrancy simulation (not possible in Soroban test env).
 //! - Live token callback injection (Soroban mock auths prevent this).
 
+use crate::{
     Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env};
 
 // ── constants ────────────────────────────────────────────────────────────────
 const T0: u64 = 1_000;
