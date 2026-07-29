@@ -1693,6 +1693,242 @@ pub fn do_bulk_cancel_subscriptions(
     Ok(results)
 }
 
+/// Deposit funds into a single subscription on behalf of a treasury operator.
+///
+/// Never aborts: returns a [`BulkDepositResult`] describing the outcome.
+/// Missing, expired, or otherwise invalid subscriptions are reported as failures
+/// without halting the batch.
+///
+/// The caller address is used as the source of token transfer (they have
+/// already been authorized at the batch level). The subscription's recovery
+/// transition (InsufficientBalance/GracePeriod -> Active) is handled here
+/// just like [`do_deposit_funds`] does.
+fn bulk_deposit_one(
+    env: &Env,
+    subscription_id: u32,
+    caller: &Address,
+    amount: i128,
+) -> crate::types::BulkDepositResult {
+    let mut sub = match get_subscription(env, subscription_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return crate::types::BulkDepositResult {
+                subscription_id,
+                success: false,
+                error_code: e.to_code(),
+            }
+        }
+    };
+
+    if amount < 0 {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: Error::InvalidAmount.to_code(),
+        };
+    }
+
+    let min_topup = match crate::admin::get_min_topup(env) {
+        Ok(m) => m,
+        Err(e) => {
+            return crate::types::BulkDepositResult {
+                subscription_id,
+                success: false,
+                error_code: e.to_code(),
+            }
+        }
+    };
+    if amount < min_topup {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: Error::BelowMinimumTopup.to_code(),
+        };
+    }
+
+    // Bulk deposits skip subscriber blocklist check since the caller
+    // (admin/operator) is the depositor, not the subscriber.
+
+    // Block deposits to subscriptions whose merchant is paused.
+    if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: Error::MerchantPaused.to_code(),
+        };
+    }
+
+    crate::blocklist::require_not_blocklisted(env, &sub.merchant).unwrap_or(());
+
+    let now = env.ledger().timestamp();
+    // Expiration guard
+    if sub.is_expired(now) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: Error::SubscriptionExpired.to_code(),
+        };
+    }
+
+    let token_addr = sub.token.clone();
+
+    // Enforce credit limit for additional prepaid balance being loaded.
+    if let Err(e) = enforce_credit_limit_for_delta(env, &sub.subscriber, &token_addr, amount) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: e.to_code(),
+        };
+    }
+
+    // Enforce lifetime cap.
+    if let Err(e) = enforce_deposit_cap(&sub, amount) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: e.to_code(),
+        };
+    }
+
+    // CHECKS-EFFECTS-INTERACTIONS: update state before token transfer.
+    let new_balance = match safe_add_balance(sub.prepaid_balance, amount) {
+        Ok(b) => b,
+        Err(e) => {
+            return crate::types::BulkDepositResult {
+                subscription_id,
+                success: false,
+                error_code: e.to_code(),
+            }
+        }
+    };
+    sub.prepaid_balance = new_balance;
+    env.storage()
+        .instance()
+        .remove(&DataKey::ChargeFailureCounter(subscription_id));
+    write_subscription(env, subscription_id, &sub);
+
+    // INTERACTIONS: transfer tokens from caller to contract.
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+    token_client.transfer(caller, &env.current_contract_address(), &amount);
+
+    let _ = crate::accounting::add_total_accounted(env, &token_addr, amount);
+
+    // Emit per-subscription deposited event.
+    env.events().publish(
+        (Symbol::new(env, "deposited"), subscription_id),
+        crate::types::FundsDepositedEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            token: token_addr.clone(),
+            amount,
+            new_balance,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // Handle recovery transition: if subscription was in a failed state and
+    // the deposit brings the balance above the interval amount, emit
+    // recovery_ready so the billing engine can pick it up.
+    if (sub.status == SubscriptionStatus::InsufficientBalance
+        || sub.status == SubscriptionStatus::GracePeriod)
+        && new_balance >= sub.amount
+    {
+        env.events().publish(
+            (Symbol::new(env, "recovery_ready"), subscription_id),
+            crate::types::SubscriptionRecoveryReadyEvent {
+                subscription_id,
+                subscriber: sub.subscriber.clone(),
+                prepaid_balance: new_balance,
+                required_amount: sub.amount,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
+
+    crate::types::BulkDepositResult {
+        subscription_id,
+        success: true,
+        error_code: 0,
+    }
+}
+
+/// Bulk-deposit funds into multiple subscriptions. Admin or operator only.
+///
+/// Treasury operators can top up many subscriptions in a single call, reducing
+/// gas cost for centralized customer-success workflows. Each entry is processed
+/// independently; the returned vector has exactly one [`BulkDepositResult`] per
+/// entry, in request order.
+///
+/// # Arguments
+///
+/// * `caller` — The admin or operator whose tokens will be transferred.
+/// * `entries` — A vector of `(subscription_id, amount)` tuples, capped at
+///   [`BATCH_MAX_SIZE`].
+/// * `nonce` — Per-batch replay protection on the `DOMAIN_OPERATOR_BATCH_CHARGE`
+///   counter, keyed per caller (domain `2`).
+///
+/// # Errors
+///
+/// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+/// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] entries supplied.
+/// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+///
+/// # Events
+///
+/// Emits one [`FundsDepositedEvent`] per successfully deposited subscription,
+/// plus a single [`BulkDepositEvent`] envelope summarising the batch.
+pub fn do_bulk_deposit_funds(
+    env: &Env,
+    caller: Address,
+    entries: &Vec<(u32, i128)>,
+    nonce: u64,
+) -> Result<Vec<crate::types::BulkDepositResult>, Error> {
+    // Extract just the subscription IDs for the bulk precheck (validates
+    // admin/operator auth and batch size limits).
+    let mut ids = Vec::new(env);
+    for (id, _) in entries.iter() {
+        ids.push_back(id);
+    }
+    if !bulk_precheck(env, &caller, &ids, nonce)? {
+        return Ok(Vec::new(env));
+    }
+
+    let mut results = Vec::new(env);
+    let mut deposited = 0u32;
+    let mut failed = 0u32;
+    let mut total_amount: i128 = 0;
+
+    for entry in entries.iter() {
+        let (subscription_id, amount) = entry;
+        let r = bulk_deposit_one(env, subscription_id, &caller, amount);
+        if r.success {
+            deposited += 1;
+            total_amount = total_amount.saturating_add(amount);
+        } else {
+            failed += 1;
+        }
+        results.push_back(r);
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "bulk_deposited"), caller.clone()),
+        crate::types::BulkDepositEvent {
+            caller,
+            requested: entries.len(),
+            deposited,
+            failed,
+            total_amount,
+            nonce,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(results)
+}
+
 /// Merchant-initiated one-off charge: debits `amount` from the subscription's prepaid balance.
 ///
 /// One-off charges also count toward the lifetime cap when one is configured.

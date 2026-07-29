@@ -313,7 +313,7 @@ pub mod statements {
         newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage {
-            statements: soroban_sdk::Vec::new(_env),
+            statements: soroban_sdk::Vec::new(&env),
             next_cursor: None,
             total: 0,
         })
@@ -571,7 +571,7 @@ pub use types::{
     DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
-    CapInfo, Coupon, OracleKind,
+    CapInfo, Coupon,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
@@ -916,6 +916,46 @@ impl SubscriptionVault {
     ) -> Result<Vec<BulkSubscriptionResult>, Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_cancel_subscriptions")?;
         subscription::do_bulk_cancel_subscriptions(&env, caller, &subscription_ids, nonce)
+    }
+
+    /// Bulk-deposit funds into multiple subscriptions. Admin or operator only.
+    ///
+    /// Treasury operators can top up many subscriptions in a single call,
+    /// reducing gas cost for centralized customer-success workflows. Each entry
+    /// is processed independently; the returned vector has exactly one
+    /// [`BulkDepositResult`] per entry, in request order.
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` — The admin or operator whose tokens will be transferred to
+    ///   each subscription's vault. Must be authorized.
+    /// * `entries` — A vector of `(subscription_id, amount)` tuples. At most
+    ///   [`BATCH_MAX_SIZE`]; a larger batch is rejected wholesale with
+    ///   [`Error::BatchTooLarge`]. An empty list is a no-op (no nonce consumed,
+    ///   no event).
+    /// * `nonce` — Per-batch replay protection on the
+    ///   `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller (domain `2`).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+    /// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] entries supplied.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+    ///
+    /// # Events
+    ///
+    /// Emits one [`FundsDepositedEvent`] per successfully deposited subscription,
+    /// plus a single [`BulkDepositEvent`] envelope summarising the batch.
+    pub fn bulk_deposit_funds(
+        env: Env,
+        caller: Address,
+        entries: Vec<(u32, i128)>,
+        nonce: u64,
+    ) -> Result<Vec<crate::types::BulkDepositResult>, Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_deposit_funds")?;
+        caller.require_auth();
+        subscription::do_bulk_deposit_funds(&env, caller, &entries, nonce)
     }
 
     // ── Emergency Stop ────────────────────────────────────────────────────────
@@ -2456,7 +2496,7 @@ impl SubscriptionVault {
     }
 
     /// Emit oracle liveness event.
-    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
+    pub fn emit_oracle_liveness(env: Env) -> Result<crate::types::OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
     }
 

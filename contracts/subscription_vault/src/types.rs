@@ -237,6 +237,20 @@ pub enum DataKey {
     ChargeFailureCounter(u32),
     /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
     AutoPauseThreshold,
+    /// Buyout premium in basis points.
+    BuyoutPremiumBps,
+    /// Coupon binding keyed by subscription ID.
+    SubCoupon(u32),
+    /// Global tag allowlist.
+    TagAllowlist,
+    /// Per-merchant compliance tags.
+    MerchantTags(Address),
+    /// Per-merchant multisig configuration.
+    MerchantMultiSig(Address),
+    /// Per-subscriber active subscription count.
+    SubscriberActiveCount(Address),
+    /// Per-subscriber active cap override.
+    SubscriberActiveCapOverride(Address),
 }
 
 impl DataKey {
@@ -305,9 +319,18 @@ impl DataKey {
             DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::ChargeSalt(_) => 61,
-            DataKey::ChargeFailureCounter(_) => 62,
-            DataKey::AutoPauseThreshold => 63,
+            DataKey::MerchantWhitelistMode => 61,
+            DataKey::MerchantApproved(_) => 62,
+            DataKey::ChargeSalt(_) => 63,
+            DataKey::ChargeFailureCounter(_) => 64,
+            DataKey::AutoPauseThreshold => 65,
+            DataKey::BuyoutPremiumBps => 66,
+            DataKey::SubCoupon(_) => 67,
+            DataKey::TagAllowlist => 68,
+            DataKey::MerchantTags(_) => 69,
+            DataKey::MerchantMultiSig(_) => 70,
+            DataKey::SubscriberActiveCount(_) => 71,
+            DataKey::SubscriberActiveCapOverride(_) => 72,
         }
     }
 
@@ -925,6 +948,10 @@ pub enum Error {
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
     RenewalWindowClosed = 12001,
+
+    // --- Admin Config Cooldown (13000-13099) ---
+    /// Admin config mutation was rejected because the cooldown period has not yet elapsed.
+    CooldownActive = 13001,
 }
 
 impl Error {
@@ -1723,6 +1750,30 @@ pub struct BulkCancelEvent {
     pub schema_version: u32,
 }
 
+/// Per-id outcome of a bulk deposit operation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkDepositResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    /// Numeric error code from the `Error` enum, or `0` on success.
+    pub error_code: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-deposit batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkDepositEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub deposited: u32,
+    pub failed: u32,
+    pub total_amount: i128,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GracePeriodEnteredEvent {
@@ -1813,16 +1864,6 @@ pub struct MerchantAddressRotatedEvent {
     pub old_merchant: Address,
     pub new_merchant: Address,
     pub subscriptions_updated: u32,
-    pub timestamp: u64,
-}
-
-/// Event emitted when a merchant balance snapshot is published.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct MerchantBalanceSnapshotEvent {
-    pub merchant: Address,
-    pub token: Address,
-    pub balance: i128,
     pub timestamp: u64,
 }
 
@@ -2543,30 +2584,6 @@ pub struct TransferVetoedEvent {
 pub enum KycKey {
     Required,
     Merchant(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantBalanceSnapshotEvent {
-    pub merchant: Address,
-    pub token: Address,
-    pub balance: i128,
-    pub accrued: i128,
-    pub withdrawn: i128,
-    pub refunded: i128,
-    pub ledger_sequence: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantAddressRotatedEvent {
-    pub admin: Address,
-    pub old_merchant: Address,
-    pub new_merchant: Address,
-    pub subscriptions_updated: u32,
-    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is automatically paused after N consecutive
