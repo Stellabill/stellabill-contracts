@@ -243,6 +243,9 @@ pub enum DataKey {
     ChargeFailureCounter(u32),
     /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
     AutoPauseThreshold,
+    /// Per-merchant protocol fee override in basis points. When present, supersedes the
+    /// global `FeeBps` for charges routed through this merchant. Discriminant 64.
+    MerchantFeeBps(Address),
 }
 
 impl DataKey {
@@ -309,11 +312,14 @@ impl DataKey {
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
             DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 59,
-            DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::ChargeSalt(_) => 61,
-            DataKey::ChargeFailureCounter(_) => 62,
-            DataKey::AutoPauseThreshold => 63,
+            DataKey::SubscriberCreateCap => 60,
+            DataKey::SubscriberCreateWindow(_) => 61,
+            DataKey::MerchantWhitelistMode => 62,
+            DataKey::MerchantApproved(_) => 63,
+            DataKey::ChargeSalt(_) => 64,
+            DataKey::ChargeFailureCounter(_) => 65,
+            DataKey::AutoPauseThreshold => 66,
+            DataKey::MerchantFeeBps(_) => 67,
         }
     }
 
@@ -364,10 +370,15 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
-    59,
-    61, // ChargeSalt(u32)
-    62, // ChargeFailureCounter(u32)
-    63, // AutoPauseThreshold
+    59, // AdminConfigLastChangedAt(BytesN<32>)
+    60, // SubscriberCreateCap
+    // 61 = SubscriberCreateWindow — persistent, not in allowlist
+    62, // MerchantWhitelistMode
+    63, // MerchantApproved(Address)
+    64, // ChargeSalt(u32)
+    65, // ChargeFailureCounter(u32)
+    66, // AutoPauseThreshold
+    67, // MerchantFeeBps(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -2344,6 +2355,23 @@ pub struct MerchantRevokedEvent {
     pub schema_version: u32,
 }
 
+/// Emitted when the admin sets or clears a per-merchant protocol fee override.
+///
+/// `fee_bps` is `Some(value)` when an override is set, and `None` when it is cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantFeeOverrideSetEvent {
+    /// Merchant whose override was changed.
+    pub merchant: Address,
+    /// Admin who authorized the change.
+    pub admin: Address,
+    /// The new override value in basis points, or `None` when cleared.
+    pub fee_bps: Option<u32>,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 /// Emitted when the admin replaces the global merchant tag allowlist
 /// (`merchant::set_tag_allowlist`).
 #[contracttype]
@@ -2545,6 +2573,7 @@ mod known_keys_tests {
             (DataKey::ChargeSalt(1), true),
             (DataKey::ChargeFailureCounter(1), true),
             (DataKey::AutoPauseThreshold, true),
+            (DataKey::MerchantFeeBps(a.clone()), true),
         ]
     }
 
@@ -2629,7 +2658,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 64);
+        assert_eq!(variants.len(), 65);
     }
 }
 

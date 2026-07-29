@@ -616,7 +616,7 @@ pub use types::{
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
@@ -2676,6 +2676,54 @@ impl SubscriptionVault {
         admin::get_protocol_fee_bps(&env)
     }
 
+    /// Set a per-merchant protocol fee override in basis points. Admin only.
+    ///
+    /// When set, this value supersedes the global `FeeBps` for all charges
+    /// routed through `merchant`. Use this to grant a merchant a discounted
+    /// protocol fee.
+    ///
+    /// Constraints:
+    /// - `fee_bps` must be ≤ `MAX_FEE_BIPS` (10 000).
+    /// - `fee_bps` must be ≤ the current global fee bps (discount, not surcharge).
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the stored admin.
+    /// - [`Error::InvalidFeeBips`] — `fee_bps` exceeds `MAX_FEE_BIPS` or the
+    ///   current global fee.
+    ///
+    /// # Events
+    /// Emits [`MerchantFeeOverrideSetEvent`] with `fee_bps = Some(value)`.
+    pub fn set_merchant_fee_override(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        fee_bps: u32,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_fee_override(&env, admin, merchant, fee_bps)
+    }
+
+    /// Clear the per-merchant fee override, reverting to the global fee. Admin only.
+    ///
+    /// Idempotent: clearing a non-existent override is a no-op (no error).
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the stored admin.
+    ///
+    /// # Events
+    /// Emits [`MerchantFeeOverrideSetEvent`] with `fee_bps = None`.
+    pub fn clear_merchant_fee_override(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+    ) -> Result<(), Error> {
+        merchant::clear_merchant_fee_override(&env, admin, merchant)
+    }
+
+    /// Get the per-merchant fee override in basis points, or `None` if not set.
+    pub fn get_merchant_fee_override(env: Env, merchant: Address) -> Option<u32> {
+        merchant::get_merchant_fee_override_bps(&env, &merchant)
+    }
+
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
 
     /// Submit a governance proposal for a privileged action.
@@ -3083,3 +3131,6 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_merchant_tags;
+
+#[cfg(test)]
+mod test_merchant_fee_override;
