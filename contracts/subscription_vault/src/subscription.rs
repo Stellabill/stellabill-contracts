@@ -4,6 +4,30 @@
 //!
 //! **PRs that only change subscription lifecycle or billing should edit this file only.**
 //!
+//! # Auth Ownership
+//!
+//! Every `require_auth()` call in this module lives in a `pub fn do_*` entrypoint.
+//! Internal helpers never call `require_auth()` — they inherit auth from their
+//! caller. The table below maps each helper to the entrypoint that owns auth.
+//!
+//! | Helper function | Auth-owning entrypoint | Auth mechanism |
+//! |---|---|---|
+//! | `apply_cancellation` | `do_cancel_subscription` | `authorizer.require_auth()` + identity |
+//! | `apply_cancellation` | `do_bulk_cancel_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `apply_pause` | `do_pause_subscription` | `authorizer.require_auth()` + identity |
+//! | `apply_pause` | `do_bulk_pause_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_pause_one` | `do_bulk_pause_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_cancel_one` | `do_bulk_cancel_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_deposit_one` | `do_bulk_deposit_funds` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_precheck` | `do_bulk_*` entrypoints | `require_admin_or_operator_auth` (self-owned) |
+//!
+//! `bulk_precheck` is the only private helper that performs auth; it is called
+//! from `do_bulk_pause_subscriptions`, `do_bulk_cancel_subscriptions`, and
+//! `do_bulk_deposit_funds`. None of those callers duplicate the check — the
+//! public entrypoint in `lib.rs` for `bulk_deposit_funds` formerly had a
+//! redundant `caller.require_auth()` that was removed in favour of the
+//! check inside `bulk_precheck`.
+//!
 //! # Reentrancy Protection
 //!
 //! This module contains two critical external calls to the token contract:
