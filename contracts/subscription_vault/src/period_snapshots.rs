@@ -6,7 +6,8 @@ use crate::types::{
 use soroban_sdk::{Env, Vec};
 
 pub(crate) fn extend_snapshot_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         key,
         BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
         BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
@@ -14,7 +15,8 @@ pub(crate) fn extend_snapshot_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn extend_index_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         key,
         BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD,
         BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,

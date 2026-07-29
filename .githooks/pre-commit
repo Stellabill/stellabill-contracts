@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: runs cargo fmt --check and cargo clippy on staged Rust files.
+#
+# Security & Quality Controls:
+# - Strict mode: set -euo pipefail
+# - Runs fmt check and clippy (-D warnings) against staged files
+# - Bypassing is permitted via standard `git commit --no-verify` (Git native flag) or SKIP_PRE_COMMIT=1
+
+set -euo pipefail
+
+echo "==> Running pre-commit hooks..."
+
+# Check if hook bypass environment variable is explicitly set
+if [ "${SKIP_PRE_COMMIT:-0}" = "1" ] || [ "${NO_VERIFY:-0}" = "1" ]; then
+    echo "[pre-commit] WARNING: Pre-commit checks bypassed via environment variable."
+    exit 0
+fi
+
+# Retrieve staged .rs files (Added, Copied, Modified, Renamed)
+STAGED_RS_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.rs$' || true)
+
+if [ -z "$STAGED_RS_FILES" ]; then
+    echo "[pre-commit] No staged Rust files detected. Skipping fmt and clippy checks."
+    exit 0
+fi
+
+echo "[pre-commit] Staged Rust files detected:"
+echo "$STAGED_RS_FILES" | sed 's/^/  - /'
+
+# Read staged files into array safely
+mapfile -t FILES_ARRAY <<< "$STAGED_RS_FILES"
+
+# 1. Run cargo fmt --check against staged files
+echo "[pre-commit] Running cargo fmt check..."
+if ! cargo fmt --check -- "${FILES_ARRAY[@]}"; then
+    echo ""
+    echo "❌ Error: Code formatting check failed on staged files."
+    echo "💡 Fix by running: cargo fmt"
+    exit 1
+fi
+
+# 2. Run cargo clippy against staged targets / workspace
+echo "[pre-commit] Running cargo clippy..."
+if ! cargo clippy --all-targets -- -D warnings; then
+    echo ""
+    echo "❌ Error: Cargo clippy found compiler warnings or errors."
+    echo "💡 Fix the clippy issues before committing."
+    exit 1
+fi
+
+echo "✅ Pre-commit checks passed successfully!"
+exit 0
