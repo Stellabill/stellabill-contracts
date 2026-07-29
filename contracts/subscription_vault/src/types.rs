@@ -234,6 +234,32 @@ pub enum DataKey {
     SplitPayees(u32),
     /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
     BuyoutPremiumBps,
+    /// Coupon code bound to a subscription (persistent). Discriminant 68.
+    SubCoupon(u32),
+    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
+    MerchantMultiSig(Address),
+    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 70.
+    SubscriberActiveCount(Address),
+    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 71.
+    SubscriberActiveCapOverride(Address),
+    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
+    /// global). Discriminant 72.
+    TagAllowlist,
+    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
+    /// (instance). Discriminant 73.
+    MerchantTags(Address),
+    /// Optional fee-token override: when set, protocol fees are paid in this
+    /// token instead of the subscription's settlement token, converted through
+    /// the oracle at charge time. Discriminant 64.
+    FeeToken,
+    /// Cancellation refund escrow record keyed by subscription ID. Discriminant 75.
+    CancellationEscrow(u32),
+    /// Per-merchant protocol-fee override in basis points (instance). Discriminant 76.
+    MerchantFeeBps(Address),
+    /// Per-token oracle price history ring-buffer metadata (instance). Discriminant 77.
+    OraclePriceHistoryMeta(Address),
+    /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
+    OraclePriceHistoryEntry(Address, u32),
 }
 
 impl DataKey {
@@ -301,12 +327,25 @@ impl DataKey {
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
             DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 59,
-            DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::ChargeSalt(_) => 61,
-            DataKey::DelegatedPayerGrant(_, _) => 62,
-            DataKey::SplitPayees(_) => 59,
-            DataKey::BuyoutPremiumBps => 60,
+            DataKey::SubscriberCreateCap => 60,
+            DataKey::SubscriberCreateWindow(_) => 61,
+            DataKey::MerchantWhitelistMode => 62,
+            DataKey::MerchantApproved(_) => 63,
+            DataKey::ChargeSalt(_) => 64,
+            DataKey::ChargeFailureCounter(_) => 65,
+            DataKey::AutoPauseThreshold => 66,
+            DataKey::BuyoutPremiumBps => 67,
+            DataKey::SubCoupon(_) => 68,
+            DataKey::MerchantMultiSig(_) => 69,
+            DataKey::SubscriberActiveCount(_) => 70,
+            DataKey::SubscriberActiveCapOverride(_) => 71,
+            DataKey::TagAllowlist => 72,
+            DataKey::MerchantTags(_) => 73,
+            DataKey::FeeToken => 74,
+            DataKey::CancellationEscrow(_) => 75,
+            DataKey::MerchantFeeBps(_) => 76,
+            DataKey::OraclePriceHistoryMeta(_) => 77,
+            DataKey::OraclePriceHistoryEntry(_, _) => 78,
         }
     }
 
@@ -357,10 +396,24 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
-    59, // BuyoutPremiumBps
-    61, // MerchantMultiSig(Address)
-    62, // MerchantSubAccount(Address, Symbol)
-    63, // MerchantSubAccountList(Address)
+    59, // AdminConfigLastChangedAt(BytesN<32>)
+    60, // SubscriberCreateCap
+    61, // SubscriberCreateWindow(Address)
+    62, // MerchantWhitelistMode
+    63, // MerchantApproved(Address)
+    64, // ChargeSalt(u32)
+    65, // ChargeFailureCounter(u32)
+    66, // AutoPauseThreshold
+    67, // BuyoutPremiumBps
+    69, // MerchantMultiSig(Address)
+    70, // SubscriberActiveCount(Address)
+    71, // SubscriberActiveCapOverride(Address)
+    72, // TagAllowlist
+    73, // MerchantTags(Address)
+    74, // FeeToken
+    76, // MerchantFeeBps(Address)
+    77, // OraclePriceHistoryMeta(Address)
+    78, // OraclePriceHistoryEntry(Address, u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -970,17 +1023,23 @@ pub enum Error {
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
     RenewalWindowClosed = 12001,
 
-    // --- Admin Proposal (13000-13099) ---
+    // --- Admin Proposal (14000-14099) ---
     /// No admin proposal exists for claiming.
-    ProposalNotFound = 13001,
+    ProposalNotFound = 14001,
     /// The admin proposal window has expired.
-    ProposalExpired = 13002,
+    ProposalExpired = 14002,
     /// The claimant does not match the proposed new admin.
-    InvalidClaimant = 13003,
+    InvalidClaimant = 14003,
     /// An admin proposal is already active; cancel it first.
-    ProposalAlreadyExists = 13004,
+    ProposalAlreadyExists = 14004,
     /// No active proposal to cancel.
-    NoActiveProposal = 13005,
+    NoActiveProposal = 14005,
+
+    // --- Cancellation Escrow (13000-13099) ---
+    /// No cancellation escrow found for this subscription.
+    EscrowNotFound = 13001,
+    /// The cancellation escrow release window has not elapsed yet.
+    EscrowNotReleased = 13002,
 }
 
 impl Error {
@@ -1499,35 +1558,6 @@ pub struct OraclePrice {
     pub timestamp: u64,
 }
 
-/// Ring-buffer metadata for a per-token oracle price history window.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OraclePriceHistoryMeta {
-    /// Current write index in the ring buffer (0..ORACLE_PRICE_HISTORY_SIZE).
-    pub head: u32,
-    /// Total samples written (capped at ORACLE_PRICE_HISTORY_SIZE for read semantics).
-    pub count: u32,
-}
-
-/// Event emitted when an oracle price is rejected by the deviation circuit breaker.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OracleDeviationBreakerEvent {
-    pub token: Address,
-    pub latest_price: i128,
-    pub median_price: i128,
-    pub deviation_bps: u64,
-    pub threshold_bps: u32,
-    pub timestamp: u64,
-}
-
-/// Token registry entry.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1620,7 +1650,6 @@ pub struct AdminProposalCancelledEvent {
     pub timestamp: u64,
 }
 
-/// Event emitted when emergency stop is disabled.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyStopDisabledEvent {
@@ -2332,31 +2361,6 @@ pub struct MerchantRefundEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
-
-/// Event emitted when a merchant creates a new sub-account with an isolated ledger (#575).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a merchant withdraws funds from a sub-account (#575).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when protocol fee configuration is changed.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingTreasuryChange {
@@ -2374,6 +2378,7 @@ pub struct ProtocolFeeConfiguredEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct TreasuryChangeQueuedEvent {
@@ -2863,7 +2868,10 @@ mod known_keys_tests {
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
             (DataKey::ChargeSalt(1), true),
-            (DataKey::DelegatedPayerGrant(a.clone(), b.clone()), false),
+            (DataKey::ChargeFailureCounter(1), true),
+            (DataKey::AutoPauseThreshold, true),
+            (DataKey::FeeToken, true),
+            (DataKey::CancellationEscrow(1), false),
         ]
     }
 
@@ -3048,6 +3056,70 @@ pub struct SubscriptionPausedEvent {
     pub schema_version: u32,
 }
 
+/// Common scale used to compare amounts across tokens with differing decimal
+/// precision in cross-token reconciliation reports (see `queries::get_token_reconciliation`).
+pub const RECONCILIATION_DECIMALS: u32 = 9;
+
+/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
+/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
+///
+/// # Errors
+/// - `Error::InvalidToken` if the token has no registered decimals.
+/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
+/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
+/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
+///   decimals and `raw` carries precision that cannot be represented exactly
+///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
+        raw.checked_mul(scale).ok_or(Error::Overflow)
+    } else {
+        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
+        if raw % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(raw / scale)
+    }
+}
+
+/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
+/// amount back to the token's own base-unit precision.
+///
+/// # Errors
+/// Same error conditions as [`normalize_amount`], mirrored for the reverse
+/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
+/// the common scale and `normalized` cannot be represented exactly).
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
+        if normalized % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(normalized / scale)
+    } else {
+        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
+        normalized.checked_mul(scale).ok_or(Error::Overflow)
+    }
+}
+
+/// Event emitted when the fee-token override address is set or cleared.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriptionCreatedEvent {
@@ -3112,6 +3184,68 @@ pub struct SubscriptionResumedEvent {
     pub merchant: Address,
     pub authorizer: Address,
     pub previous_status: SubscriptionStatus,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+// ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
+
+/// Default window (in seconds) for the cancellation refund escrow hold.
+/// The subscriber cannot claim the refund until this window elapses,
+/// giving the merchant time to dispute the cancellation.
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+/// Escrow record created when a subscription is cancelled.
+///
+/// The remaining prepaid balance is held in escrow for
+/// [`CANCELLATION_ESCROW_WINDOW_SECS`] before the subscriber can claim it.
+/// The merchant can lodge a dispute during this window to convert the escrow
+/// into a live Dispute record.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancellationEscrow {
+    pub subscription_id: u32,
+    pub amount: i128,
+    pub token: Address,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub released_at: u64,
+}
+
+/// Event emitted when a cancellation refund is placed into escrow.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub released_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is released to the subscriber.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant lodges a dispute against a cancellation escrow,
+/// converting it into a live Dispute record.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub dispute_id: u64,
+    pub amount: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }

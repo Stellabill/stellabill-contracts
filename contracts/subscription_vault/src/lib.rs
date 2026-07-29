@@ -51,36 +51,12 @@ mod types;
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
-#[cfg(test)]
-mod test_utils;
-#[cfg(test)]
-mod test;
-#[cfg(test)]
-mod test_auth_fuzz;
-#[cfg(test)]
-mod test_expiration;
-#[cfg(test)]
-mod test_governance;
-#[cfg(test)]
-mod test_insufficient_balance;
-#[cfg(test)]
-mod test_recovery;
-#[cfg(test)]
-mod test_security;
-#[cfg(test)]
-mod test_emergency_stop_lifetime_caps;
-#[cfg(test)]
-mod test_admin_rotation_two_step;
-#[cfg(test)]
-mod test_config_migration;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
-    AdminConfigChangedEvent, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent,
-    DisputeRespondedEvent, DisputeStatus, Error, OracleLivenessEvent, Proposal,
-    ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent,
-    ProposalVotedEvent, ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
+    CancellationEscrowReleasedEvent,
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
@@ -630,19 +606,25 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
-    BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, DelegatedDepositEvent,
-    DelegatedPayerGrant, DelegatedPayerGrantedEvent, DelegatedPayerRevokedEvent,
-    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent,
-    MetadataSetSignedEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent,
-    OperatorRemovedEvent, OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice,
-    PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
+    CapInfo, Coupon, DisputeEscrowLedger,
+    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
+    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
     PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
@@ -671,7 +653,7 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
+    CANCELLATION_ESCROW_WINDOW_SECS, DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -749,7 +731,7 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
-/// Return the current (next-expected) nonce for a `(signer, domain)` pair.
+    /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
     }
@@ -2676,6 +2658,87 @@ impl SubscriptionVault {
         dispute::do_get_subscription_dispute(&env, subscription_id)
     }
 
+    // ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
+
+    /// Claim a cancellation escrow refund after the 24-hour hold window elapses.
+    ///
+    /// When a subscription is cancelled, the remaining prepaid balance is held
+    /// in escrow for [`CANCELLATION_ESCROW_WINDOW_SECS`] so the merchant has an
+    /// opportunity to dispute wrongful terminations. The subscriber calls this
+    /// entrypoint after the window elapses to release the funds.
+    ///
+    /// # Auth
+    ///
+    /// `subscriber` must match the escrow's subscriber address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow subscriber.
+    /// * [`Error::EscrowNotReleased`] — The 24-hour hold window has not elapsed.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute exists; escrow cannot be
+    ///   claimed while disputed.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowReleasedEvent`].
+    pub fn claim_cancellation_escrow(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+    ) -> Result<i128, Error> {
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "claim_cancellation_escrow")?;
+        dispute::do_claim_cancellation_escrow(&env, subscriber, subscription_id)
+    }
+
+    /// Lodge a merchant dispute against a cancellation escrow, converting it
+    /// into a live Dispute record.
+    ///
+    /// During the escrow hold window the merchant may call this to contest a
+    /// wrongful termination. The escrow is removed and a standard [`Dispute`]
+    /// is created in `Open` status, subject to the existing dispute lifecycle
+    /// (`respond_dispute` / `resolve_dispute`).
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must match the escrow's merchant address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow merchant.
+    /// * [`Error::EscrowNotReleased`] — The hold window has elapsed; cannot
+    ///   dispute after release.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute already exists.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowDisputedEvent`] and [`DisputeOpenedEvent`].
+    pub fn lodge_escrow_dispute(
+        env: Env,
+        merchant: Address,
+        subscription_id: u32,
+    ) -> Result<u64, Error> {
+        dispute::do_lodge_escrow_dispute(&env, merchant, subscription_id)
+    }
+
+    /// Read a cancellation escrow record by subscription ID.
+    ///
+    /// Returns the escrow details if one exists for the given subscription.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No cancellation escrow record found.
+    pub fn get_cancellation_escrow(
+        env: Env,
+        subscription_id: u32,
+    ) -> Result<CancellationEscrow, Error> {
+        dispute::do_get_cancellation_escrow(&env, subscription_id)
+    }
+
     // ── Queries ──────────────────────────────────────────────────────────────
 
     /// Get subscription.
@@ -3350,6 +3413,11 @@ impl SubscriptionVault {
         Ok(current)
     }
 }
+
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test_cancellation_escrow;
 
 #[cfg(test)]
 mod test_usage_limits_required;

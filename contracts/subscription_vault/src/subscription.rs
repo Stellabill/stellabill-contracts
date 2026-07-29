@@ -66,23 +66,15 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, DelegatedDepositEvent, DelegatedPayerGrantedEvent,
-    DelegatedPayerRevokedEvent, Error, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    BillingChargeKind, CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, Error,
+    FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, SubscriberCreateWindow,
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
     SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
-    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
-    BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate,
-    PlanTemplateUpdatedEvent, SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
-    SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, CANCELLATION_ESCROW_WINDOW_SECS, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -181,9 +173,8 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
 
 /// Helper to extend a persistent storage entry's TTL.
 ///
-/// The Soroban SDK `Persistent::get_ttl` is only available under `#[cfg(test)]`,
-/// so we always call `extend_ttl` unconditionally. The call is idempotent:
-/// extending an already-sufficient TTL is a harmless no-op.
+/// Delegates to `Persistent::extend_ttl` which internally only extends when
+/// the remaining TTL is below the threshold.
 pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
     env.storage()
         .persistent()
@@ -1134,20 +1125,44 @@ fn apply_cancellation(
     }
     let refund_amount = sub.prepaid_balance;
 
-    // EFFECTS: zero balance before external token transfer (CEI pattern).
+    // EFFECTS: zero balance before escrow (CEI pattern).
     sub.prepaid_balance = 0;
     let token_addr = sub.token.clone();
     write_subscription(env, subscription_id, &sub);
 
-    // INTERACTIONS: transfer remaining prepaid balance to subscriber.
+    // Instead of immediately refunding, place the refund into a time-locked
+    // escrow so the merchant has a window to dispute the cancellation (#569).
     if refund_amount > 0 {
-        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &sub.subscriber,
-            &refund_amount,
+        let now = env.ledger().timestamp();
+        let released_at = now.checked_add(CANCELLATION_ESCROW_WINDOW_SECS)
+            .ok_or(Error::Overflow)?;
+
+        let escrow = CancellationEscrow {
+            subscription_id,
+            amount: refund_amount,
+            token: token_addr.clone(),
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            released_at,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::CancellationEscrow(subscription_id), &escrow);
+
+        env.events().publish(
+            (Symbol::new(env, "cancellation_escrow_opened"), subscription_id),
+            CancellationEscrowOpenedEvent {
+                subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
+                token: token_addr,
+                amount: refund_amount,
+                released_at,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
         );
-        crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
     }
 
     // Remove from index

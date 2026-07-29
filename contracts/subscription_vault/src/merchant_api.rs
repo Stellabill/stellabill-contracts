@@ -74,7 +74,7 @@
 // under this feature group. No new ABI symbols are introduced; all public
 // contract entrypoints remain in `lib.rs` under `#[contractimpl]`.
 
-pub use crate::dispute::{do_resolve_dispute, do_respond_dispute};
+pub use crate::dispute::{do_lodge_escrow_dispute, do_resolve_dispute, do_respond_dispute};
 pub use crate::merchant::{
     do_flush_payouts, do_set_payout_schedule, get_merchant_balance, get_merchant_balance_by_token,
     get_merchant_config, get_merchant_multisig_config, get_merchant_paused,
