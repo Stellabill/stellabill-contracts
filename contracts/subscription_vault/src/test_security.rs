@@ -43,6 +43,7 @@ fn create_security_subscription(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     (id, subscriber, merchant)
 }
@@ -96,7 +97,11 @@ fn test_pause_subscription_unauthorized_stranger() {
 }
 
 #[test]
+<<<<<<< HEAD
+#[should_panic(expected = "Error(Contract, #403)")]
+=======
 #[should_panic(expected = "Error(Contract, #1001)")]
+>>>>>>> upstream/main
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_security_env();
     let stranger = Address::generate(&env);

@@ -88,6 +88,7 @@ fn create_subscription(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     let _ = token; // touch unused param to silence the lint without complaining
     (id, subscriber, merchant)
@@ -220,6 +221,7 @@ fn subscriber_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let payload = payload_for(
@@ -263,6 +265,7 @@ fn merchant_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let payload = payload_for(
@@ -298,6 +301,7 @@ fn sequential_nonces_advance() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let signer = pubkey_to_address(&env, &bytes32(&env, &sub_key.pub_bytes));
@@ -342,6 +346,7 @@ fn replayed_nonce_is_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -372,6 +377,7 @@ fn skipped_nonce_is_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -402,6 +408,7 @@ fn expires_at_equal_to_now_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let now = env.ledger().timestamp();
@@ -428,6 +435,7 @@ fn expires_at_in_past_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let now = env.ledger().timestamp();
@@ -457,6 +465,7 @@ fn expires_at_in_future_succeeds() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(
@@ -491,6 +500,7 @@ fn forged_signature_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -526,6 +536,7 @@ fn wrong_key_signature_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     // Attacker builds a fully valid signature on the right message bytes
@@ -562,6 +573,7 @@ fn chain_id_mismatch_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -637,6 +649,7 @@ fn key_too_long_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -674,6 +687,7 @@ fn value_too_long_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let long_value = String::from_str(&env, &"a".repeat(257));
@@ -707,6 +721,7 @@ fn empty_key_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = SignedMetadataPayload {
@@ -738,6 +753,7 @@ fn empty_value_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = SignedMetadataPayload {
@@ -769,6 +785,7 @@ fn key_cap_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -823,6 +840,7 @@ fn subscriber_and_merchant_nonces_independent() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -869,6 +887,7 @@ fn nonce_overflow_is_guarded() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let signer = Address::generate(&env);
@@ -930,6 +949,7 @@ fn success_emits_signed_event() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
