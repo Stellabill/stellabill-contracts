@@ -8,7 +8,8 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
+    SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -91,6 +92,8 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
+    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
+    env.crypto().sha256(&label_bytes)
     let mut label_bytes = soroban_sdk::Bytes::new(env);
     for &b in key_label.as_bytes() {
         label_bytes.push_back(b);
@@ -130,6 +133,9 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
     }
 
     env.storage().persistent().set(&storage_key, &now);
+    env.storage()
+        .persistent()
+        .extend_ttl(&storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
     crate::subscription::maybe_extend_ttl(env, &storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 
     env.events().publish(
@@ -575,7 +581,7 @@ pub fn do_recover_stranded_funds(
     };
 
     env.events().publish(
-        (Symbol::new(env, "recovery"), admin.clone()),
+        (TOPIC_RECOVERY, admin.clone()),
         recovery_event,
     );
 
@@ -747,6 +753,104 @@ pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) ->
     Ok(())
 }
 
+// ── Two-step admin proposal ──────────────────────────────────────────────────
+
+const PROPOSAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn proposal_key(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_proposal")
+}
+
+pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &current_admin)?;
+
+    if new_admin == env.current_contract_address() {
+        return Err(Error::InvalidNewAdmin);
+    }
+
+    let storage = env.storage().instance();
+    if storage.has(&proposal_key(env)) {
+        return Err(Error::ProposalAlreadyExists);
+    }
+
+    let now = env.ledger().timestamp();
+    let proposal = AdminProposal {
+        new_admin: new_admin.clone(),
+        proposed_at: now,
+        expires_at: now.saturating_add(PROPOSAL_WINDOW_SECS),
+    };
+    storage.set(&proposal_key(env), &proposal);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_created"),),
+        AdminProposalCreatedEvent {
+            old_admin: current_admin,
+            new_admin,
+            expires_at: proposal.expires_at,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
+    claimant.require_auth();
+
+    let storage = env.storage().instance();
+    let proposal: AdminProposal = storage
+        .get(&proposal_key(env))
+        .ok_or(Error::ProposalNotFound)?;
+
+    let now = env.ledger().timestamp();
+    if now > proposal.expires_at {
+        storage.remove(&proposal_key(env));
+        return Err(Error::ProposalExpired);
+    }
+
+    if claimant != proposal.new_admin {
+        return Err(Error::InvalidClaimant);
+    }
+
+    let old_admin: Address = require_admin(env)?;
+
+    storage.remove(&proposal_key(env));
+    storage.set(&Symbol::new(env, "admin"), &claimant);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_claimed"),),
+        AdminProposalClaimedEvent {
+            old_admin,
+            new_admin: claimant,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+
+    let storage = env.storage().instance();
+    if !storage.has(&proposal_key(env)) {
+        return Err(Error::NoActiveProposal);
+    }
+
+    storage.remove(&proposal_key(env));
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_cancelled"),),
+        AdminProposalCancelledEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn get_admin_proposal(env: &Env) -> Option<AdminProposal> {
+    env.storage().instance().get(&proposal_key(env))
+}
+
 /// Return the configured auto-pause threshold. `0` means disabled.
 pub fn get_auto_pause_threshold(env: &Env) -> u32 {
     env.storage()
@@ -767,6 +871,35 @@ pub fn rewrite_subscriptions_for_ledger_expiration(env: &Env) -> u32 {
             .persistent()
             .get::<_, crate::types::Subscription>(&key)
         {
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
+/// v4 → v5 migration: rewrite every `DataKey::Sub(id)` record so the new
+/// `sub_account_label: Option<Symbol>` field deserializes cleanly for
+/// subscriptions created before STORAGE_VERSION 5.  The in-memory struct
+/// already carries `sub_account_label: None` after the deserialization
+/// round-trip, so this just needs to read-write each record.
+pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            // Round-trip: deserialise populates `sub_account_label: None`,
+            // then write back so XDR encoding includes the new field.
             env.storage().persistent().set(&key, &sub);
             env.storage().persistent().extend_ttl(
                 &key,
@@ -909,13 +1042,10 @@ pub fn do_migrate(
 
     let stored_version = get_schema_version(env);
 
-    // Version mismatch guard: reject if on-chain version is neither a valid
-    // upgradable version nor the current binary version.
     if stored_version > binary_version {
         return Err(crate::types::Error::SchemaVersionMismatch);
     }
 
-    // Idempotent no-op: already at the target version.
     if stored_version == binary_version {
         return Ok(());
     }
@@ -939,6 +1069,13 @@ pub fn do_migrate(
             (3, _) => {
                 rewrite_subscriptions_for_ledger_expiration(env);
                 current = 4;
+            }
+            // v4 → v5: rewrite every `DataKey::Sub(id)` record so the new
+            // `sub_account_label: Option<Symbol>` field deserializes cleanly
+            // for subscriptions created before STORAGE_VERSION 5.
+            (4, _) => {
+                rewrite_subscriptions_for_sub_account_label(env);
+                current = 5;
             }
             _ => {
                 current += 1;
@@ -977,102 +1114,4 @@ pub fn do_migrate(
     );
 
     Ok(())
-}
-
-// ── Two-step admin proposal ──────────────────────────────────────────────────
-
-const PROPOSAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
-
-fn proposal_key(env: &Env) -> Symbol {
-    Symbol::new(env, "admin_proposal")
-}
-
-pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-    require_admin_auth(env, &current_admin)?;
-
-    if new_admin == env.current_contract_address() {
-        return Err(Error::InvalidNewAdmin);
-    }
-
-    let storage = env.storage().instance();
-    if storage.has(&proposal_key(env)) {
-        return Err(Error::ProposalAlreadyExists);
-    }
-
-    let now = env.ledger().timestamp();
-    let proposal = AdminProposal {
-        new_admin: new_admin.clone(),
-        proposed_at: now,
-        expires_at: now.saturating_add(PROPOSAL_WINDOW_SECS),
-    };
-    storage.set(&proposal_key(env), &proposal);
-
-    env.events().publish(
-        (Symbol::new(env, "admin_proposal_created"),),
-        AdminProposalCreatedEvent {
-            old_admin: current_admin,
-            new_admin,
-            expires_at: proposal.expires_at,
-            timestamp: now,
-        },
-    );
-    Ok(())
-}
-
-pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
-    claimant.require_auth();
-
-    let storage = env.storage().instance();
-    let proposal: AdminProposal = storage
-        .get(&proposal_key(env))
-        .ok_or(Error::ProposalNotFound)?;
-
-    let now = env.ledger().timestamp();
-    if now > proposal.expires_at {
-        storage.remove(&proposal_key(env));
-        return Err(Error::ProposalExpired);
-    }
-
-    if claimant != proposal.new_admin {
-        return Err(Error::InvalidClaimant);
-    }
-
-    let old_admin: Address = require_admin(env)?;
-
-    storage.remove(&proposal_key(env));
-    storage.set(&Symbol::new(env, "admin"), &claimant);
-
-    env.events().publish(
-        (Symbol::new(env, "admin_proposal_claimed"),),
-        AdminProposalClaimedEvent {
-            old_admin,
-            new_admin: claimant,
-            timestamp: now,
-        },
-    );
-    Ok(())
-}
-
-pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> {
-    require_admin_auth(env, &admin)?;
-
-    let storage = env.storage().instance();
-    if !storage.has(&proposal_key(env)) {
-        return Err(Error::NoActiveProposal);
-    }
-
-    storage.remove(&proposal_key(env));
-
-    env.events().publish(
-        (Symbol::new(env, "admin_proposal_cancelled"),),
-        AdminProposalCancelledEvent {
-            admin,
-            timestamp: env.ledger().timestamp(),
-        },
-    );
-    Ok(())
-}
-
-pub fn get_admin_proposal(env: &Env) -> Option<AdminProposal> {
-    env.storage().instance().get(&proposal_key(env))
 }

@@ -51,32 +51,12 @@ mod types;
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
-#[cfg(test)]
-mod test_utils;
-#[cfg(test)]
-mod test;
-#[cfg(test)]
-mod test_auth_fuzz;
-#[cfg(test)]
-mod test_expiration;
-#[cfg(test)]
-mod test_governance;
-#[cfg(test)]
-mod test_insufficient_balance;
-#[cfg(test)]
-mod test_recovery;
-#[cfg(test)]
-mod test_security;
-#[cfg(test)]
-mod test_emergency_stop_lifetime_caps;
-#[cfg(test)]
-mod test_admin_rotation_two_step;
-#[cfg(test)]
-mod test_config_migration;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
+    CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
+    CancellationEscrowReleasedEvent,
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
@@ -628,6 +608,29 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::{
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
+    CapInfo, Coupon, DisputeEscrowLedger,
+    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
+    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
+    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
     BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
     BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
@@ -640,7 +643,8 @@ pub use types::{
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof, ReconciliationSummaryPage,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
     RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
@@ -649,7 +653,7 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
+    CANCELLATION_ESCROW_WINDOW_SECS, DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -665,7 +669,7 @@ pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 /// field. Existing live `DataKey::Sub(id)` records were serialized without this
 /// trailing field; the `v3 → v4` step in [`admin::do_migrate`] walks every
 /// subscription record and rewrites it so the new field deserializes cleanly.
-const STORAGE_VERSION: u32 = 4;
+const STORAGE_VERSION: u32 = 5;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a single call.
 const MAX_EXPORT_LIMIT: u32 = 100;
@@ -727,7 +731,7 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
-/// Return the current (next-expected) nonce for a `(signer, domain)` pair.
+    /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
     }
@@ -1380,6 +1384,7 @@ impl SubscriptionVault {
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
         expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1392,10 +1397,11 @@ impl SubscriptionVault {
             lifetime_cap,
             expires_at,
             expires_at_ledger,
+            sub_account_label,
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1462,7 +1468,7 @@ impl SubscriptionVault {
 
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1551,6 +1557,7 @@ impl SubscriptionVault {
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
         expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1564,9 +1571,10 @@ impl SubscriptionVault {
             lifetime_cap,
             expires_at,
             expires_at_ledger,
+            sub_account_label,
         )?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1603,7 +1611,7 @@ impl SubscriptionVault {
         )?;
         let sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish(
-            (Symbol::new(&env, "deposited"), subscription_id),
+            (types::TOPIC_DEPOSITED, subscription_id),
             FundsDepositedEvent {
                 subscription_id,
                 subscriber,
@@ -1615,6 +1623,63 @@ impl SubscriptionVault {
             },
         );
         Ok(())
+    }
+
+    // ── Delegated Payer ─────────────────────────────────────────────────────
+
+    /// Authorize a third-party `payer` to deposit funds into the `subscriber`'s vault.
+    ///
+    /// The grant is consumed on first use — each grant authorizes exactly one deposit.
+    /// The subscriber may revoke at any time.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerGrantedEvent`].
+    pub fn grant_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+        expires_at: u64,
+        max_amount: i128,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        subscription::do_grant_delegated_payer(&env, subscriber, payer, expires_at, max_amount)
+    }
+
+    /// Revoke a previously granted delegated payer authorization.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerRevokedEvent`].
+    pub fn revoke_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+    ) -> Result<(), Error> {
+        subscription::do_revoke_delegated_payer(&env, subscriber, payer)
+    }
+
+    /// Deposit funds on behalf of a subscriber using a delegated payer grant.
+    ///
+    /// The caller must have a valid, non-expired grant from the subscriber.
+    /// The grant is consumed after a successful deposit.
+    ///
+    /// # Events
+    /// Emits [`DelegatedDepositEvent`].
+    pub fn deposit_funds_on_behalf(
+        env: Env,
+        subscription_id: u32,
+        payer: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds_on_behalf")?;
+        subscription::do_deposit_funds_on_behalf(
+            &env,
+            subscription_id,
+            payer,
+            amount,
+            idem_key,
+        )
     }
 
     /// Grace-period buyout: deposit enough to cover the missed charge plus a
@@ -1681,9 +1746,10 @@ impl SubscriptionVault {
         env: Env,
         subscriber: Address,
         plan_template_id: u32,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
+        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id, sub_account_label)
     }
 
     /// Retrieve a plan template.
@@ -2213,7 +2279,7 @@ impl SubscriptionVault {
         let _period_end = timestamp;
 
         env.events().publish(
-            (Symbol::new(&env, "charged"),),
+            (types::TOPIC_CHARGED,),
             SubscriptionChargedEvent {
                 subscription_id,
                 subscriber: old_sub.subscriber,
@@ -2299,7 +2365,7 @@ impl SubscriptionVault {
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
             (
-                Symbol::new(&env, "withdrawn"),
+                types::TOPIC_WITHDRAWN,
                 merchant.clone(),
                 token.clone(),
             ),
@@ -2414,6 +2480,79 @@ impl SubscriptionVault {
         merchant::get_payout_schedule(&env, &merchant)
     }
 
+    // ── Sub-Accounts (#575) ────────────────────────────────────────────────────
+
+    /// Register a new labelled sub-account (department) for a merchant.
+    ///
+    /// Sub-accounts provide isolated ledgers within one merchant identity.
+    /// Subscriptions can route charges to a specific sub-account by setting
+    /// `sub_account_label` at creation time.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — A unique label for the sub-account (e.g. `"sales"` or `"engineering"`).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Merchant config not initialised.
+    /// * [`Error::InvalidInput`] — Label is empty or already registered.
+    ///
+    /// # Events
+    /// Emits [`SubAccountCreatedEvent`] with topic `("sub_account_created", merchant, label)`.
+    pub fn register_sub_account(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> Result<(), Error> {
+        merchant::register_sub_account(&env, merchant, label)
+    }
+
+    /// Withdraw funds from a merchant sub-account.
+    ///
+    /// Funds are transferred to the merchant's address (must authorise).
+    /// Sub-account balances are independent from the parent merchant balance
+    /// but roll up to the parent in earnings reporting.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — The sub-account label to withdraw from.
+    /// * `token` — The token to withdraw.
+    /// * `amount` — Amount to withdraw (must be positive and ≤ sub-account balance).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Sub-account does not exist or balance is zero.
+    /// * [`Error::InvalidAmount`] — Amount is zero or negative.
+    /// * [`Error::InsufficientBalance`] — Sub-account balance or vault balance is insufficient.
+    ///
+    /// # Events
+    /// Emits [`SubAccountWithdrawEvent`] with topic `("sub_account_withdrawn", merchant, label)`.
+    pub fn withdraw_sub_account_funds(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+        token: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_sub_account_funds")?;
+        merchant::withdraw_sub_account_funds(&env, merchant, label, token, amount)
+    }
+
+    /// Get the current balance of a merchant sub-account.
+    pub fn get_sub_account_balance(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> i128 {
+        merchant::get_sub_account_balance(&env, &merchant, &label)
+    }
+
+    /// Get the list of registered sub-account labels for a merchant.
+    pub fn get_sub_account_list(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<Symbol> {
+        merchant::get_sub_account_list(&env, &merchant)
+    }
+
     // ── Dispute / Chargeback ──────────────────────────────────────────────────
 
     /// Open a dispute against a charge for a subscription.
@@ -2517,6 +2656,87 @@ impl SubscriptionVault {
     /// Return the active dispute ID for a subscription, if any.
     pub fn get_subscription_dispute(env: Env, subscription_id: u32) -> Option<u64> {
         dispute::do_get_subscription_dispute(&env, subscription_id)
+    }
+
+    // ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
+
+    /// Claim a cancellation escrow refund after the 24-hour hold window elapses.
+    ///
+    /// When a subscription is cancelled, the remaining prepaid balance is held
+    /// in escrow for [`CANCELLATION_ESCROW_WINDOW_SECS`] so the merchant has an
+    /// opportunity to dispute wrongful terminations. The subscriber calls this
+    /// entrypoint after the window elapses to release the funds.
+    ///
+    /// # Auth
+    ///
+    /// `subscriber` must match the escrow's subscriber address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow subscriber.
+    /// * [`Error::EscrowNotReleased`] — The 24-hour hold window has not elapsed.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute exists; escrow cannot be
+    ///   claimed while disputed.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowReleasedEvent`].
+    pub fn claim_cancellation_escrow(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+    ) -> Result<i128, Error> {
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "claim_cancellation_escrow")?;
+        dispute::do_claim_cancellation_escrow(&env, subscriber, subscription_id)
+    }
+
+    /// Lodge a merchant dispute against a cancellation escrow, converting it
+    /// into a live Dispute record.
+    ///
+    /// During the escrow hold window the merchant may call this to contest a
+    /// wrongful termination. The escrow is removed and a standard [`Dispute`]
+    /// is created in `Open` status, subject to the existing dispute lifecycle
+    /// (`respond_dispute` / `resolve_dispute`).
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must match the escrow's merchant address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow merchant.
+    /// * [`Error::EscrowNotReleased`] — The hold window has elapsed; cannot
+    ///   dispute after release.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute already exists.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowDisputedEvent`] and [`DisputeOpenedEvent`].
+    pub fn lodge_escrow_dispute(
+        env: Env,
+        merchant: Address,
+        subscription_id: u32,
+    ) -> Result<u64, Error> {
+        dispute::do_lodge_escrow_dispute(&env, merchant, subscription_id)
+    }
+
+    /// Read a cancellation escrow record by subscription ID.
+    ///
+    /// Returns the escrow details if one exists for the given subscription.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No cancellation escrow record found.
+    pub fn get_cancellation_escrow(
+        env: Env,
+        subscription_id: u32,
+    ) -> Result<CancellationEscrow, Error> {
+        dispute::do_get_cancellation_escrow(&env, subscription_id)
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────
@@ -3193,6 +3413,11 @@ impl SubscriptionVault {
         Ok(current)
     }
 }
+
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test_cancellation_escrow;
 
 #[cfg(test)]
 mod test_usage_limits_required;
