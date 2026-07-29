@@ -107,7 +107,7 @@ fn test_cleanup_and_archival() {
     token_admin.mint(&subscriber, &(min_topup * 5));
 
 <<<<<<< HEAD
-    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &INTERVAL, &false, &None::<i128>, &Some(T0 + 2 * INTERVAL));
+    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
 =======
     let sub_id = client.create_subscription_with_token(
         &subscriber,
@@ -162,7 +162,7 @@ fn test_expiration_vs_cancellation() {
 
     // Scenario 1: Cancel before expiry
 <<<<<<< HEAD
-    let sub_id1 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &INTERVAL, &false, &None::<i128>, &Some(T0 + 2 * INTERVAL));
+    let sub_id1 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
 =======
     let sub_id1 = client.create_subscription_with_token(
         &subscriber,
@@ -201,10 +201,7 @@ fn test_expiration_vs_cancellation() {
     // Flow 1: expire without cancel -> cancel rejected -> cleanup -> Archived
     // Scenario 2: Expire without cancel
 <<<<<<< HEAD
-    let sub_id2 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &INTERVAL, &false, &None::<i128>, &Some(T0 + 2 * INTERVAL));
-    
-    // Trigger expiration
-    env.ledger().with_mut(|l| l.timestamp = T0 + 2 * INTERVAL);
+    let sub_id2 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
 =======
     let sub_id2 = client.create_subscription_with_token(
         &subscriber,
@@ -216,6 +213,7 @@ fn test_expiration_vs_cancellation() {
         &None::<i128>,
         &Some(expires_at),
     );
+>>>>>>> upstream/main
     
     // Trigger expiration
     env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
@@ -243,7 +241,7 @@ fn test_deposit_rejected_when_expired() {
     token_admin.mint(&subscriber, &(min_topup * 5));
 
 <<<<<<< HEAD
-    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &INTERVAL, &false, &None::<i128>, &Some(T0 + 2 * INTERVAL));
+    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
 =======
     let sub_id = client.create_subscription_with_token(
         &subscriber,
