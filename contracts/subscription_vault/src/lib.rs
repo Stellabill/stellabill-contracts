@@ -77,38 +77,13 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_admin_rotation_two_step;
 =======
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
-#[cfg(test)]
-mod test_utils;
-#[cfg(test)]
-mod test;
-#[cfg(test)]
-mod test_auth_fuzz;
-#[cfg(test)]
-mod test_expiration;
-#[cfg(test)]
-mod test_governance;
-#[cfg(test)]
-mod test_insufficient_balance;
-#[cfg(test)]
-mod test_multi_actor;
-#[cfg(test)]
-mod test_recovery;
-#[cfg(test)]
-mod test_refactor_check;
-#[cfg(test)]
-mod test_safe_math_regression;
-#[cfg(test)]
-mod test_security;
-#[cfg(test)]
-mod test_usage_limits;
-#[cfg(test)]
-mod test_deterministic_charging;
-#[cfg(test)]
-mod test_emergency_stop_lifetime_caps;
+>>>>>>> upstream/main
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
@@ -662,11 +637,19 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
+<<<<<<< HEAD
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+=======
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
     DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
-    CapInfo, Coupon,
+    CapInfo, Coupon, OracleKind,
+>>>>>>> upstream/main
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
     FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
@@ -763,6 +746,9 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
+<<<<<<< HEAD
+    /// Updates the admin address.
+=======
     /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
@@ -858,6 +844,7 @@ impl SubscriptionVault {
     }
 
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
+>>>>>>> upstream/main
     ///
     /// Migrates every per-merchant storage key (balances, earnings, config, pause
     /// state, subscription index) and rewrites `Subscription.merchant` for all
@@ -902,6 +889,56 @@ impl SubscriptionVault {
             fixed_numerator,
             fixed_denominator,
         )
+    }
+
+    /// Propose a new admin as part of the two-step admin rotation flow.
+    ///
+    /// Creates a proposal that the `new_admin` must claim within 7 days via
+    /// [`claim_admin_role`](Self::claim_admin_role). The current admin can cancel
+    /// the proposal at any time via [`cancel_admin_proposal`](Self::cancel_admin_proposal).
+    ///
+    /// Only one proposal may be active at a time.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `InvalidNewAdmin` if `new_admin` is the contract address
+    /// - `ProposalAlreadyExists` if a proposal is already pending
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim the admin role after a proposal has been created by the current admin.
+    ///
+    /// The claimant must match the `new_admin` address in the proposal, and the
+    /// 7-day claim window must not have expired. On success the stored admin is
+    /// atomically swapped and the proposal is consumed.
+    ///
+    /// # Errors
+    /// - `ProposalNotFound` if no proposal exists
+    /// - `ProposalExpired` if the 7-day window has elapsed
+    /// - `InvalidClaimant` if the caller is not the proposed new admin
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal.
+    ///
+    /// Only the current admin may cancel. The proposal is removed from storage
+    /// and a cancellation event is emitted. After cancellation a new proposal
+    /// may be created.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `NoActiveProposal` if there is no proposal to cancel
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Read the current admin proposal, if any.
+    ///
+    /// Returns `None` when no proposal is active.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
     }
 
     /// Allows the admin to recover funds that are not tied to any subscription.

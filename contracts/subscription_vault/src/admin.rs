@@ -5,8 +5,14 @@
 #![allow(dead_code)]
 
 use crate::types::{
+<<<<<<< HEAD
+    AcceptedToken, AdminProposal, AdminProposalCancelledEvent, AdminProposalClaimedEvent,
+    AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
+    RecoveryReason,
+=======
     AcceptedToken, AdminConfigChangedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error,
-    FeeTokenConfiguredEvent, RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+>>>>>>> upstream/main
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -682,6 +688,105 @@ pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) ->
     Ok(())
 }
 
+<<<<<<< HEAD
+// ── Two-step admin proposal ──────────────────────────────────────────────────
+
+const PROPOSAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn proposal_key(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_proposal")
+}
+
+pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &current_admin)?;
+
+    if new_admin == env.current_contract_address() {
+        return Err(Error::InvalidNewAdmin);
+    }
+
+    let storage = env.storage().instance();
+    if storage.has(&proposal_key(env)) {
+        return Err(Error::ProposalAlreadyExists);
+    }
+
+    let now = env.ledger().timestamp();
+    let proposal = AdminProposal {
+        new_admin: new_admin.clone(),
+        proposed_at: now,
+        expires_at: now.saturating_add(PROPOSAL_WINDOW_SECS),
+    };
+    storage.set(&proposal_key(env), &proposal);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_created"),),
+        AdminProposalCreatedEvent {
+            old_admin: current_admin,
+            new_admin,
+            expires_at: proposal.expires_at,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
+    claimant.require_auth();
+
+    let storage = env.storage().instance();
+    let proposal: AdminProposal = storage
+        .get(&proposal_key(env))
+        .ok_or(Error::ProposalNotFound)?;
+
+    let now = env.ledger().timestamp();
+    if now > proposal.expires_at {
+        storage.remove(&proposal_key(env));
+        return Err(Error::ProposalExpired);
+    }
+
+    if claimant != proposal.new_admin {
+        return Err(Error::InvalidClaimant);
+    }
+
+    let old_admin: Address = require_admin(env)?;
+
+    storage.remove(&proposal_key(env));
+    storage.set(&Symbol::new(env, "admin"), &claimant);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_claimed"),),
+        AdminProposalClaimedEvent {
+            old_admin,
+            new_admin: claimant,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+
+    let storage = env.storage().instance();
+    if !storage.has(&proposal_key(env)) {
+        return Err(Error::NoActiveProposal);
+    }
+
+    storage.remove(&proposal_key(env));
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_cancelled"),),
+        AdminProposalCancelledEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn get_admin_proposal(env: &Env) -> Option<AdminProposal> {
+    env.storage().instance().get(&proposal_key(env))
+}
+=======
 /// Return the configured auto-pause threshold. `0` means disabled.
 pub fn get_auto_pause_threshold(env: &Env) -> u32 {
     env.storage()
@@ -888,3 +993,4 @@ pub fn do_migrate(
 
     Ok(())
 }
+>>>>>>> upstream/main

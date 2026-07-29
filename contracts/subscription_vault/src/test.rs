@@ -2532,15 +2532,13 @@ fn test_compute_next_charge_info_insufficient_balance() {
         lifetime_cap: None,
 <<<<<<< HEAD
         lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
-    };
-    let info = compute_next_charge_info(&sub);
-    assert!(info.is_charge_expected);
 =======
         lifetime_charged: 0,
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+>>>>>>> upstream/main
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -3299,6 +3297,10 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
+<<<<<<< HEAD
+        &None::<u64>,
+=======
+>>>>>>> upstream/main
     );
 
     // Old plan remains unchanged and addressable.
@@ -3338,6 +3340,10 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
+<<<<<<< HEAD
+        &None::<u64>,
+=======
+>>>>>>> upstream/main
     );
 
     let sub_id = test_env
@@ -5796,7 +5802,6 @@ fn test_admin_rotation_affects_recovery_operations() {
         &recipient,
         &1_000_000i128,
 <<<<<<< HEAD
-        &String::from_str(&test_env.env, "rec_test"),
         &RecoveryReason::UserOverpayment,
 =======
         &String::from_str(&test_env.env, "rec_1"),
@@ -5857,7 +5862,6 @@ fn test_all_admin_operations_after_rotation() {
         &recipient,
         &1_000_000i128,
 <<<<<<< HEAD
-        &String::from_str(&test_env.env, "rec_test"),
         &RecoveryReason::UserOverpayment,
 =======
         &String::from_str(&test_env.env, "rec_2"),

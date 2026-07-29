@@ -823,8 +823,16 @@ pub enum Error {
     /// The provided new admin address is invalid.
 <<<<<<< HEAD
     InvalidNewAdmin = 1037,
-    /// Oracle price deviation exceeds configured threshold (circuit breaker).
-    OracleDeviationTooHigh = 1038,
+    /// No admin proposal exists for claiming.
+    ProposalNotFound = 1038,
+    /// The admin proposal window has expired.
+    ProposalExpired = 1039,
+    /// The claimant does not match the proposed new admin.
+    InvalidClaimant = 1040,
+    /// An admin proposal is already active; cancel it first.
+    ProposalAlreadyExists = 1041,
+    /// No active proposal to cancel.
+    NoActiveProposal = 1042,
 =======
     InvalidNewAdmin = 3004,
     /// Metadata key exceeds maximum allowed length.
@@ -1032,7 +1040,11 @@ impl Error {
             Error::BurstLimitExceeded => 1035,
             Error::SelfRotation => 1036,
             Error::InvalidNewAdmin => 1037,
-            Error::OracleDeviationTooHigh => 1038,
+            Error::ProposalNotFound => 1038,
+            Error::ProposalExpired => 1039,
+            Error::InvalidClaimant => 1040,
+            Error::ProposalAlreadyExists => 1041,
+            Error::NoActiveProposal => 1042,
         }
 =======
         self as u32
@@ -1647,6 +1659,48 @@ pub struct AdminRotatedEvent {
     pub schema_version: u32,
 }
 
+<<<<<<< HEAD
+/// Two-step admin proposal stored when `propose_admin` is called.
+///
+/// The proposal must be claimed by `new_admin` before `expires_at`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposal {
+    pub new_admin: Address,
+    pub proposed_at: u64,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a two-step admin proposal is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalCreatedEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a two-step admin proposal is claimed (rotation completes).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalClaimedEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a two-step admin proposal is cancelled by the current admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposalCancelledEvent {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when emergency stop is disabled.
+=======
+>>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyStopDisabledEvent {
@@ -2218,30 +2272,35 @@ pub struct PartialRefundEvent {
 #[contracttype]
 pub struct MerchantConfig {
     pub fee_address: Option<Address>,
-    pub redirect_url: String, // e.g., for off-chain success callbacks
-    pub is_paused: bool,      // Global pause for all merchant plans
+    pub redirect_url: String,
+    pub is_paused: bool,
 }
 
-/// Event emitted when a merchant enables their blanket pause.
+/// Event emitted when protocol fee configuration is updated.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct MerchantPausedEvent {
-    pub merchant: Address,
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
     pub timestamp: u64,
 }
 
-/// Event emitted when a merchant disables their blanket pause.
+/// Event emitted when a protocol fee is charged as part of a subscription charge.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct MerchantUnpausedEvent {
-    pub merchant: Address,
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
     pub timestamp: u64,
-}
 =======
     pub token: Address,
     pub amount: i128,
     pub timestamp: u64,
     pub schema_version: u32,
+>>>>>>> upstream/main
 }
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2253,6 +2312,8 @@ pub struct MerchantRefundEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+<<<<<<< HEAD
+=======
 
 <<<<<<< HEAD
 /// Event emitted when protocol fee configuration is changed.
@@ -2811,3 +2872,4 @@ pub struct FeeConvertedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+>>>>>>> upstream/main
