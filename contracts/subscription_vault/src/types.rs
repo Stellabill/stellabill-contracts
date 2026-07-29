@@ -201,6 +201,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Pending protocol treasury/fee update queued for a later execution. Discriminant 54.
+    PendingTreasuryChange,
 }
 
 impl DataKey {
@@ -260,6 +262,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
+            DataKey::PendingTreasuryChange => 54,
         }
     }
 
@@ -565,6 +568,8 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
+    /// The scheduled treasury change has not yet reached its effective timestamp.
+    TimelockNotElapsed = 4011,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -1677,11 +1682,41 @@ pub struct MerchantRefundEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingTreasuryChange {
+    pub new_treasury: Address,
+    pub new_fee_bps: u32,
+    pub effective_at: u64,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
     pub admin: Address,
     pub treasury: Address,
     pub fee_bps: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasuryChangeQueuedEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub effective_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasuryChangeExecutedEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub effective_at: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
