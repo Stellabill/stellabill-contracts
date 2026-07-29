@@ -54,6 +54,7 @@ fn bench_batch_charge_scaling() {
                     &false,
                     &None::<i128>,
                     &None::<u64>,
+                    &None::<Address>,
                 );
 
                 if scenario == "Success" || scenario == "WithPaused" {

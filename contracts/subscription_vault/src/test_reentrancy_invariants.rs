@@ -59,6 +59,7 @@ fn create_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     (id, subscriber, merchant)
 }
@@ -595,6 +596,7 @@ fn test_reentrancy_guard_released_after_expired_charge_rejection() {
         &false,
         &None::<i128>,
         &Some(expires_at),
+        &None::<Address>,
     );
     env.ledger().set_timestamp(T0 + 2);
 

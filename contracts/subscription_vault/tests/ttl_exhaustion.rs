@@ -105,6 +105,7 @@ fn create_sub(env: &Env, client: &SubscriptionVaultClient) -> u32 {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     )
 }
 
