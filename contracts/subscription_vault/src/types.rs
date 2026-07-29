@@ -221,16 +221,10 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
-    /// Buyout premium in basis points for grace-period buyouts (#683). Instance-tier. Discriminant 59.
+    /// Split payees details for split-billing. Discriminant 59.
+    SplitPayees(u32),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
     BuyoutPremiumBps,
-    /// Maps subscription ID to bound coupon code (#594). Persistent. Discriminant 60.
-    SubCoupon(u32),
-    /// Merchant multi-signature withdrawal configuration (#679). Instance-tier. Discriminant 61.
-    MerchantMultiSig(Address),
-    /// Per-merchant sub-account balance, isolated ledger within one merchant identity (#575). Instance-tier. Discriminant 62.
-    MerchantSubAccount(Address, Symbol),
-    /// List of sub-account labels for a merchant (#575). Instance-tier. Discriminant 63.
-    MerchantSubAccountList(Address),
 }
 
 impl DataKey {
@@ -297,11 +291,8 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
-            DataKey::BuyoutPremiumBps => 59,
-            DataKey::SubCoupon(_) => 60,
-            DataKey::MerchantMultiSig(_) => 61,
-            DataKey::MerchantSubAccount(_, _) => 62,
-            DataKey::MerchantSubAccountList(_) => 63,
+            DataKey::SplitPayees(_) => 59,
+            DataKey::BuyoutPremiumBps => 60,
         }
     }
 
@@ -494,6 +485,24 @@ pub struct CredentialBadge {
     pub tier: u32,
     pub issued_at: u64,
     pub revoked: bool,
+}
+
+/// Split billing payees and their basis points weights.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitPayees {
+    pub subscription_id: u32,
+    pub entries: Vec<(Address, u32)>,
+}
+
+/// Event emitted when split charge is distributed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitChargeEvent {
+    pub subscription_id: u32,
+    pub payees: Vec<(Address, i128)>,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Event emitted when a soulbound credential is issued for a new subscription.
@@ -876,16 +885,6 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
-    /// A bulk operation was called with more ids than `BATCH_MAX_SIZE` allows.
-    // Error 6018 is already defined above in Limits, but kept here for schema matching, see 1006.
-    /// Subscriber has exceeded the rolling 24-hour subscription creation limit.
-    SubscriberRateLimited = 6019,
-    /// Usage limits are required for subscriptions with usage enabled.
-    UsageLimitsRequired = 6020,
-    /// Requested tag set exceeds `MAX_MERCHANT_TAGS` for a single merchant.
-    MerchantTagLimitExceeded = 6021,
-    /// A subscriber cannot be their own referral inviter.
-    SelfReferralNotAllowed = 6022,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.

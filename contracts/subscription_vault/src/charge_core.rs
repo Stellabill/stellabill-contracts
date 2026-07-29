@@ -189,10 +189,21 @@ pub fn charge_one(
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
-    // Validate sub-account label exists before any state mutation
-    if let Some(ref label) = sub.sub_account_label {
-        crate::merchant::require_sub_account_exists(env, &sub.merchant, label)
-            .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
+    if let Some(split_payees) = crate::subscription::get_split_payees(env, subscription_id) {
+        for entry in split_payees.entries.iter() {
+            let (payee, _) = entry;
+            crate::blocklist::require_not_blocklisted(env, &payee)
+                .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
+            if crate::merchant::get_merchant_paused(env, payee.clone()) {
+                return Err(charge_fail(
+                    env,
+                    subscription_id,
+                    Error::MerchantPaused,
+                    0,
+                    now,
+                ));
+            }
+        }
     }
 
     // Expiration guard
@@ -457,10 +468,10 @@ pub fn charge_one(
             } else {
                 (charge_amount, 0i128)
             };
-            crate::merchant::credit_merchant_balance_for_token(
+            credit_charge_payees(
                 env,
-                &sub.merchant,
-                &sub.token,
+                subscription_id,
+                &sub,
                 merchant_amount,
                 BillingChargeKind::Interval,
             )?;
@@ -780,10 +791,21 @@ pub fn charge_usage_one(
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
 
-    // Validate sub-account label exists before any state mutation
-    if let Some(ref label) = sub.sub_account_label {
-        crate::merchant::require_sub_account_exists(env, &sub.merchant, label)
-            .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
+    if let Some(split_payees) = crate::subscription::get_split_payees(env, subscription_id) {
+        for entry in split_payees.entries.iter() {
+            let (payee, _) = entry;
+            crate::blocklist::require_not_blocklisted(env, &payee)
+                .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
+            if crate::merchant::get_merchant_paused(env, payee.clone()) {
+                return Err(charge_fail(
+                    env,
+                    subscription_id,
+                    Error::MerchantPaused,
+                    0,
+                    env.ledger().timestamp(),
+                ));
+            }
+        }
     }
 
     let now = env.ledger().timestamp();
@@ -1044,10 +1066,10 @@ pub fn charge_usage_one(
             } else {
                 (usage_amount, 0i128)
             };
-            crate::merchant::credit_merchant_balance_for_token(
+            credit_charge_payees(
                 env,
-                &sub.merchant,
-                &sub.token,
+                subscription_id,
+                &sub,
                 merchant_amount,
                 BillingChargeKind::Usage,
             )?;
@@ -1232,42 +1254,74 @@ pub fn charge_usage_one(
     }
 }
 
-/// Calculates the prorated first-charge amount for a subscription starting mid-interval.
-///
-/// Proration scales `amount` linearly by `remaining_seconds / interval`.
-///
-/// # Security & Invariants
-/// - Rejects negative amounts with `Error::InvalidAmount`.
-/// - Rejects zero interval with `Error::InvalidInput`.
-/// - Caps at `amount` when `remaining_seconds >= interval`.
-/// - Guarantees result is always in `[0, amount]` without `i128` overflow or underflow.
-pub fn calculate_prorated_first_charge(
-    amount: i128,
-    interval: u64,
-    remaining_seconds: u64,
-) -> Result<i128, Error> {
-    if amount < 0 {
-        return Err(Error::InvalidAmount);
+pub(crate) fn credit_charge_payees(
+    env: &Env,
+    subscription_id: u32,
+    sub: &crate::types::Subscription,
+    net_merchant_amount: i128,
+    charge_kind: crate::types::BillingChargeKind,
+) -> Result<(), Error> {
+    if let Some(split_payees) = crate::subscription::get_split_payees(env, subscription_id) {
+        let mut total_distributed_amount = 0i128;
+        let num_payees = split_payees.entries.len();
+        
+        for i in 1..num_payees {
+            if let Some(entry) = split_payees.entries.get(i) {
+                let (payee, weight) = entry;
+                let share = net_merchant_amount * weight as i128 / 10_000i128;
+                total_distributed_amount = crate::safe_math::safe_add(total_distributed_amount, share)?;
+                crate::merchant::credit_merchant_balance_for_token(
+                    env,
+                    &payee,
+                    &sub.token,
+                    share,
+                    charge_kind,
+                )?;
+            }
+        }
+        
+        if let Some(entry) = split_payees.entries.get(0) {
+            let (payee, _) = entry;
+            let first_share = net_merchant_amount - total_distributed_amount;
+            crate::merchant::credit_merchant_balance_for_token(
+                env,
+                &payee,
+                &sub.token,
+                first_share,
+                charge_kind,
+            )?;
+        }
+        
+        let mut payees_vec = soroban_sdk::Vec::new(env);
+        for i in 0..num_payees {
+            if let Some(entry) = split_payees.entries.get(i) {
+                let (payee, weight) = entry;
+                let share = if i == 0 {
+                    net_merchant_amount - total_distributed_amount
+                } else {
+                    net_merchant_amount * weight as i128 / 10_000i128
+                };
+                payees_vec.push_back((payee, share));
+            }
+        }
+        
+        env.events().publish(
+            (soroban_sdk::Symbol::new(env, "split_charge"), subscription_id),
+            crate::types::SplitChargeEvent {
+                subscription_id,
+                payees: payees_vec,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    } else {
+        crate::merchant::credit_merchant_balance_for_token(
+            env,
+            &sub.merchant,
+            &sub.token,
+            net_merchant_amount,
+            charge_kind,
+        )?;
     }
-    if interval == 0 {
-        return Err(Error::InvalidInput);
-    }
-    if remaining_seconds == 0 {
-        return Ok(0);
-    }
-    if remaining_seconds >= interval {
-        return Ok(amount);
-    }
-
-    let int_i128 = interval as i128;
-    let q = amount / int_i128;
-    let r = amount % int_i128;
-
-    let q_part = q.saturating_mul(remaining_seconds as i128);
-    let prod_r = (r as u128).saturating_mul(remaining_seconds as u128);
-    let r_part = (prod_r / (interval as u128)) as i128;
-
-    let prorated = q_part.saturating_add(r_part).min(amount).max(0);
-    Ok(prorated)
+    Ok(())
 }
-

@@ -4,6 +4,30 @@
 //!
 //! **PRs that only change subscription lifecycle or billing should edit this file only.**
 //!
+//! # Auth Ownership
+//!
+//! Every `require_auth()` call in this module lives in a `pub fn do_*` entrypoint.
+//! Internal helpers never call `require_auth()` — they inherit auth from their
+//! caller. The table below maps each helper to the entrypoint that owns auth.
+//!
+//! | Helper function | Auth-owning entrypoint | Auth mechanism |
+//! |---|---|---|
+//! | `apply_cancellation` | `do_cancel_subscription` | `authorizer.require_auth()` + identity |
+//! | `apply_cancellation` | `do_bulk_cancel_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `apply_pause` | `do_pause_subscription` | `authorizer.require_auth()` + identity |
+//! | `apply_pause` | `do_bulk_pause_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_pause_one` | `do_bulk_pause_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_cancel_one` | `do_bulk_cancel_subscriptions` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_deposit_one` | `do_bulk_deposit_funds` → `bulk_precheck` | `require_admin_or_operator_auth` |
+//! | `bulk_precheck` | `do_bulk_*` entrypoints | `require_admin_or_operator_auth` (self-owned) |
+//!
+//! `bulk_precheck` is the only private helper that performs auth; it is called
+//! from `do_bulk_pause_subscriptions`, `do_bulk_cancel_subscriptions`, and
+//! `do_bulk_deposit_funds`. None of those callers duplicate the check — the
+//! public entrypoint in `lib.rs` for `bulk_deposit_funds` formerly had a
+//! redundant `caller.require_auth()` that was removed in favour of the
+//! check inside `bulk_precheck`.
+//!
 //! # Reentrancy Protection
 //!
 //! This module contains two critical external calls to the token contract:
@@ -1999,9 +2023,14 @@ pub fn do_charge_one_off(
     crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
 
-    // Validate sub-account label exists before any state mutation
-    if let Some(ref label) = sub.sub_account_label {
-        crate::merchant::require_sub_account_exists(env, &sub.merchant, label)?;
+    if let Some(split_payees) = get_split_payees(env, subscription_id) {
+        for entry in split_payees.entries.iter() {
+            let (payee, _) = entry;
+            crate::blocklist::require_not_blocklisted(env, &payee)?;
+            if crate::merchant::get_merchant_paused(env, payee.clone()) {
+                return Err(Error::MerchantPaused);
+            }
+        }
     }
 
     let now = env.ledger().timestamp();
@@ -2106,10 +2135,10 @@ pub fn do_charge_one_off(
     } else {
         (amount, 0i128)
     };
-    crate::merchant::credit_merchant_balance_for_token(
+    crate::charge_core::credit_charge_payees(
         env,
-        &sub.merchant,
-        &sub.token,
+        subscription_id,
+        &sub,
         merchant_amount,
         BillingChargeKind::OneOff,
     )?;
@@ -3356,4 +3385,23 @@ pub fn do_veto_transfer(
     );
 
     Ok(())
+}
+
+pub fn get_split_payees(env: &Env, subscription_id: u32) -> Option<crate::types::SplitPayees> {
+    let key = DataKey::SplitPayees(subscription_id);
+    let opt: Option<crate::types::SplitPayees> = env.storage().persistent().get(&key);
+    if opt.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+    }
+    opt
+}
+
+pub fn write_split_payees(env: &Env, subscription_id: u32, split: &crate::types::SplitPayees) {
+    let key = DataKey::SplitPayees(subscription_id);
+    env.storage().persistent().set(&key, split);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
 }
