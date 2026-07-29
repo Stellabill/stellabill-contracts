@@ -1264,7 +1264,19 @@ pub fn do_rotate_merchant_address(
             }
         }
     }
-    storage.set(&subs_key_new, &sub_ids);
+
+    if !sub_ids.is_empty() {
+        let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
+        let mut new_sub_ids: soroban_sdk::Vec<u32> = storage
+            .get(&subs_key_new)
+            .unwrap_or(soroban_sdk::Vec::new(env));
+        for id in sub_ids.iter() {
+            if !new_sub_ids.contains(&id) {
+                new_sub_ids.push_back(id);
+            }
+        }
+        storage.set(&subs_key_new, &new_sub_ids);
+    }
     storage.remove(&subs_key_old);
 
     // ── 6. Emit audit event after all state writes are complete ───────────────
