@@ -298,7 +298,7 @@ pub fn do_cancel_proposal(env: &Env, proposal_id: u64, reason: String) -> Result
 /// Get the current quorum (votes for and against).
 ///
 /// Re-validates guardian status at read time to handle guardian removal.
-fn calculate_quorum(env: &Env, proposal: &Proposal) -> (u32, u32) {
+pub(crate) fn calculate_quorum(env: &Env, proposal: &Proposal) -> (u32, u32) {
     let guardians = read_guardians(env);
     let mut votes_for: u32 = 0;
     let mut votes_against: u32 = 0;
