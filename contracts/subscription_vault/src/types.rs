@@ -1069,6 +1069,9 @@ pub struct PlanTemplate {
     pub token: Address,
     pub amount: i128,
     pub interval_seconds: u64,
+    /// Optional free-trial period in seconds. During this window the subscriber
+    /// is not charged for the first billing interval. `0` means no trial.
+    pub trial_seconds: u64,
     pub usage_enabled: bool,
     pub lifetime_cap: Option<i128>,
     pub template_key: u32,
@@ -1933,6 +1936,40 @@ pub struct PlanTemplateCreatedEvent {
 #[derive(Clone, Debug)]
 pub struct PlanTemplateDisabledEvent {
     pub plan_template_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant registers a new plan template via `register_plan`.
+///
+/// Carries the full plan definition so indexers can reconstruct the catalogue
+/// without additional storage reads.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlanRegisteredEvent {
+    /// Newly-assigned plan ID.
+    pub plan_id: u32,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    /// Free-trial period in seconds (`0` = no trial).
+    pub trial_seconds: u64,
+    pub usage_enabled: bool,
+    pub lifetime_cap: Option<i128>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant deprecates an existing plan template via `deprecate_plan`.
+///
+/// Once deprecated the plan can no longer be used to create new subscriptions.
+/// Existing subscriptions created from the plan are unaffected.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlanDeprecatedEvent {
+    pub plan_id: u32,
     pub merchant: Address,
     pub timestamp: u64,
     pub schema_version: u32,
