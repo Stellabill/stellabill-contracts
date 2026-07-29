@@ -163,6 +163,12 @@ flowchart LR
 - **Resume:** `resume_subscription(env, subscription_id, authorizer)` — validates transition to Active and enforces `prepaid_balance >= amount` when resuming from `GracePeriod` or `InsufficientBalance`. Auth: subscriber or merchant. Implemented in `subscription.rs`.
 - **Cancel:** `cancel_subscription(env, subscription_id, authorizer)` — validates transition to Cancelled, then sets `status = Cancelled`. Auth: subscriber or merchant. Implemented in `subscription.rs`.
 
+### Emergency subscriber withdrawal
+
+- **Request:** `request_emergency_withdraw(env, subscription_id, subscriber)` — allows a subscriber to lock in a 72-hour cooldown for a paused or cancelled subscription with prepaid balance.
+- **Finalize:** `finalize_emergency_withdraw(env, subscription_id, subscriber)` — only succeeds after the cooldown elapses and the subscription still matches the state captured at request time.
+- **Safety:** the intent record is removed once finalized, and the flow rejects stale or double-finalized requests to prevent unauthorized withdrawals.
+
 All three use `validate_status_transition` before updating status.
 
 ---

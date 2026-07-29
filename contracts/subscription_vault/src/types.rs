@@ -3,11 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{
-    contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
-};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
-/// Event schema version for backwards-compatible indexer decoding.
+/// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum number of metadata keys per subscription.
@@ -229,17 +227,12 @@ pub enum DataKey {
     AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
-    /// Global whitelist mode toggle. When true, merchants must be approved before registering. Discriminant 61.
-    MerchantWhitelistMode,
-    /// Per-merchant approval status under whitelist mode. Discriminant 62.
-    MerchantApproved(Address),
-    /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
     ChargeSalt(u32),
-    /// Consecutive InsufficientBalance charge failures for a subscription. Discriminant 62.
-    ChargeFailureCounter(u32),
-    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 66.
-    AutoPauseThreshold,
-    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 67.
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    DelegatedPayerGrant(Address, Address),
+    /// Split payees details for split-billing. Discriminant 59.
+    SplitPayees(u32),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
     BuyoutPremiumBps,
     /// Coupon code bound to a subscription (persistent). Discriminant 68.
     SubCoupon(u32),
@@ -500,25 +493,33 @@ pub struct Subscription {
     pub grace_start_timestamp: Option<u64>,
     /// Scheduled future cancellation timestamp.
     pub cancel_at: Option<u64>,
-    /// When `false`, billing is halted at the next interval boundary.
+    /// Optional ledger-sequence bound for expiration. When set, the subscription
+    /// also expires as soon as the ledger sequence reaches this value,
+    /// independently of the wall-clock `expires_at`. `None` disables the bound.
     ///
-    /// Defaults to `true` on creation. The subscriber (or merchant) may call
-    /// `set_auto_renew(false)` to opt out of automatic renewal. During the
-    /// renewal window (up to one full interval after `auto_renew` was set to
-    /// `false`) the subscriber may re-enable auto-renewal without re-creating
-    /// the subscription, preserving history and metadata. After the window
-    /// lapses, the subscription must be cancelled and recreated.
-    pub auto_renew: bool,
-    /// Ledger timestamp when `auto_renew` was last set to `false`.
-    ///
-    /// `None` means auto-renewal has never been disabled or has been
-    /// re-enabled since. Used to enforce the renewal window.
-    pub auto_renew_disabled_at: Option<u64>,
+    /// Either bound being met is sufficient to consider the subscription
+    /// expired for charge / deposit / state-transition purposes.
+    pub expires_at_ledger: Option<u32>,
+    /// Optional sub-account label for routing charges to an isolated merchant
+    /// sub-account ledger (#575). `None` routes to the parent merchant balance.
+    pub sub_account_label: Option<Symbol>,
 }
 
 impl Subscription {
-    pub fn is_expired(&self, current_time: u64) -> bool {
-        self.expires_at.map_or(false, |exp| current_time >= exp)
+    /// Returns true when *either* the wall-clock bound or the ledger-sequence
+    /// bound is met (or both). `None` for either bound disables that check.
+    pub fn is_expired(&self, current_time: u64, current_ledger: u32) -> bool {
+        if let Some(exp) = self.expires_at {
+            if current_time >= exp {
+                return true;
+            }
+        }
+        if let Some(exp_ledger) = self.expires_at_ledger {
+            if current_ledger >= exp_ledger {
+                return true;
+            }
+        }
+        false
     }
 
     /// Returns `true` when the renewal window (one full interval) after
@@ -534,6 +535,15 @@ impl Subscription {
     }
 }
 
+/// Pending emergency-withdraw intent for a paused or cancelled subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawIntent {
+    pub subscription_id: u32,
+    pub requested_at: u64,
+    pub requested_status: SubscriptionStatus,
+}
+
 /// A non-transferable (soulbound) credential badge linking a subscription.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -542,6 +552,24 @@ pub struct CredentialBadge {
     pub tier: u32,
     pub issued_at: u64,
     pub revoked: bool,
+}
+
+/// Split billing payees and their basis points weights.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitPayees {
+    pub subscription_id: u32,
+    pub entries: Vec<(Address, u32)>,
+}
+
+/// Event emitted when split charge is distributed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitChargeEvent {
+    pub subscription_id: u32,
+    pub payees: Vec<(Address, i128)>,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Event emitted when a soulbound credential is issued for a new subscription.
@@ -924,16 +952,6 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
-    /// A bulk operation was called with more ids than `BATCH_MAX_SIZE` allows.
-    // Error 6018 is already defined above in Limits, but kept here for schema matching, see 1006.
-    /// Subscriber has exceeded the rolling 24-hour subscription creation limit.
-    SubscriberRateLimited = 6019,
-    /// Usage limits are required for subscriptions with usage enabled.
-    UsageLimitsRequired = 6020,
-    /// Requested tag set exceeds `MAX_MERCHANT_TAGS` for a single merchant.
-    MerchantTagLimitExceeded = 6021,
-    /// A subscriber cannot be their own referral inviter.
-    SelfReferralNotAllowed = 6022,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -962,6 +980,8 @@ pub enum Error {
     // --- Schema Migration (9100-9199) ---
     /// Stored schema version is newer than the binary's STORAGE_VERSION; downgrade rejected.
     SchemaMigrationDowngrade = 9101,
+    /// Stored schema version does not match the code's expected version; migration rejected.
+    SchemaVersionMismatch = 9102,
 
     // --- Dispute / Chargeback (10000-10099) ---
     /// The requested dispute was not found.
@@ -987,6 +1007,17 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
+    // --- Admin Config Cooldown (12000-12099) ---
+    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
+    CooldownActive = 12001,
+
+    // --- Delegated Payer (13000-13099) ---
+    /// The delegated payer grant was not found.
+    DelegatedPayerGrantNotFound = 13001,
+    /// The delegated payer grant has expired.
+    DelegatedPayerGrantExpired = 13002,
+    /// The deposit amount exceeds the grant's max_amount.
+    DelegatedPayerAmountExceeded = 13003,
     // --- Auto-Renewal (12000-12099) ---
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
@@ -1089,6 +1120,9 @@ pub struct SubscriptionSummary {
     pub lifetime_charged: i128,
     pub start_time: u64,
     pub expires_at: Option<u64>,
+    /// Optional ledger-sequence bound for expiration (mirrors
+    /// `Subscription::expires_at_ledger`). `None` means no ledger bound.
+    pub expires_at_ledger: Option<u32>,
 }
 
 #[contracttype]
@@ -1561,32 +1595,6 @@ pub struct OracleLivenessEvent {
     pub schema_version: u32,
 }
 
-/// Ring-buffer metadata for a per-token oracle price history window.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OraclePriceHistoryMeta {
-    pub head: u32,
-    pub count: u32,
-}
-
-/// Event emitted when an oracle price is rejected by the deviation circuit breaker.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OracleDeviationBreakerEvent {
-    pub token: Address,
-    pub latest_price: i128,
-    pub median_price: i128,
-    pub deviation_bps: u64,
-    pub threshold_bps: u32,
-    pub timestamp: u64,
-}
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyStopEnabledEvent {
@@ -1713,6 +1721,8 @@ pub struct SubscriptionCreatedEvent {
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    /// Optional ledger-sequence expiration bound. `None` means no ledger bound.
+    pub expires_at_ledger: Option<u32>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1724,6 +1734,52 @@ pub struct ReferralAttributedEvent {
     pub subscription_id: u32,
     pub inviter: Address,
     pub subscriber: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Delegated payer grant: authorizes `payer` to deposit into `subscriber`'s vault.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrant {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+}
+
+/// Event emitted when a delegated payer grant is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrantedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer grant is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerRevokedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer deposits funds on behalf of a subscriber.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedDepositEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub payer: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1879,6 +1935,30 @@ pub struct BulkCancelEvent {
     pub schema_version: u32,
 }
 
+/// Per-id outcome of a bulk deposit operation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkDepositResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    /// Numeric error code from the `Error` enum, or `0` on success.
+    pub error_code: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-deposit batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkDepositEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub deposited: u32,
+    pub failed: u32,
+    pub total_amount: i128,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GracePeriodEnteredEvent {
@@ -1919,6 +1999,25 @@ pub struct SubscriptionResumedEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionExpiredEvent {
     pub subscription_id: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription's ledger-sequence expiration bound is
+/// updated by the subscriber or merchant.
+///
+/// Setting `expires_at_ledger` to `None` clears the bound; setting it to a
+/// concrete sequence replaces the previous bound. The wall-clock bound
+/// (`expires_at`) is unaffected by this event.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ExpirationLedgerSetEvent {
+    pub subscription_id: u32,
+    /// New ledger-sequence bound. `None` means the bound has been cleared.
+    pub expires_at_ledger: Option<u32>,
+    /// Previous ledger-sequence bound, if any. `None` if no prior bound was set.
+    pub previous_expires_at_ledger: Option<u32>,
+    pub authorizer: Address,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -1980,6 +2079,17 @@ pub struct SubscriberWithdrawalEvent {
     pub subscriber: Address,
     pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriberEmergencyWithdrawEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub cooldown_started_at: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2560,6 +2670,139 @@ pub struct PrepaidQueryResult {
 }
 
 
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    Spot,
+    Twap,
+    FixedRate,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    RotateAdmin = 0,
+    SetProtocolFee = 1,
+    UpgradeContract = 2,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub target2: Option<Address>,
+    pub target3: u32,
+    pub quorum_bps: u32,
+    pub votes: soroban_sdk::Map<Address, bool>,
+    pub eta: u64,
+    pub submitted_at: u64,
+    pub executed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalSubmittedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub quorum_bps: u32,
+    pub eta: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalVotedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub voted_yes: bool,
+    pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub total_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCancelledEvent {
+    pub proposal_id: u64,
+    pub reason: String,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SignedMetadataPayload {
+    pub subscription_id: u32,
+    pub key: String,
+    pub value: String,
+    pub nonce: u64,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MetadataSetSignedEvent {
+    pub subscription_id: u32,
+    pub key: String,
+    pub signer: Address,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    pub changed: bool,
+    pub error_code: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub paused: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub cancelled: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+pub const BATCH_MAX_SIZE: u32 = 100;
+
 #[cfg(test)]
 mod known_keys_tests {
     use super::*;
@@ -2582,8 +2825,6 @@ mod known_keys_tests {
             (DataKey::EmergencyStop, true),
             (DataKey::MerchantPaused(a.clone()), true),
             (DataKey::BillingStatement(1, 2), false),
-            (DataKey::BillingStatementsBySubscription(1), false),
-            (DataKey::BillingStatementsByMerchant(a.clone()), false),
             (DataKey::TotalAccounted(a.clone()), true),
             (DataKey::Recovery(s.clone()), false),
             (DataKey::MerchantConfig(a.clone()), true),
@@ -2613,8 +2854,6 @@ mod known_keys_tests {
             (DataKey::MetadataKeys(1), false),
             (DataKey::Operator, true),
             (DataKey::BillingRetentionConfig, true),
-            (DataKey::BillingStatementSequence(1), false),
-            (DataKey::BillingStatementAggregate(1), false),
             (DataKey::MerchantMaxSubs(a.clone()), true),
             (DataKey::Guardians, false),
             (DataKey::NextProposalId, true),
@@ -2625,14 +2864,9 @@ mod known_keys_tests {
             (DataKey::SubscriptionDispute(1), true),
             (DataKey::PayoutSchedule(a.clone()), true),
             (DataKey::TransferIntent(1), true),
-            (DataKey::Kyc(KycKey::Required), false),
-            (DataKey::Coupon(soroban_sdk::Symbol::new(env, "c")), false),
-            (DataKey::CouponRedemptions(soroban_sdk::Symbol::new(env, "c")), false),
-            (DataKey::Credential(1), false),
+            (DataKey::AdminConfigLastChangedAt(soroban_sdk::BytesN::from_array(env, &[0u8; 32])), false),
             (DataKey::SubscriberCreateCap, true),
-            (DataKey::SubscriberCreateWindow(a.clone()), true),
-            (DataKey::MerchantWhitelistMode, true),
-            (DataKey::MerchantApproved(a.clone()), true),
+            (DataKey::SubscriberCreateWindow(a.clone()), false),
             (DataKey::ChargeSalt(1), true),
             (DataKey::ChargeFailureCounter(1), true),
             (DataKey::AutoPauseThreshold, true),
@@ -2660,6 +2894,86 @@ mod known_keys_tests {
                 assert!(!key.is_known_instance_key());
             }
         }
+    }
+
+    #[test]
+    fn synthetic_unknown_key_is_rejected() {
+        // Discriminants beyond the highest registered variant (60) can never be
+        // produced by a real `DataKey`, modelling an unknown/legacy key.
+        assert!(!is_known_instance_discriminant(61));
+        assert!(!is_known_instance_discriminant(9_999));
+        assert!(!is_known_instance_discriminant(u32::MAX));
+    }
+
+    /// The debug guard must panic for an unknown key in test/debug builds.
+    #[test]
+    #[should_panic(expected = "Unknown or persistent key reached instance storage")]
+    fn assert_panics_on_persistent_key() {
+        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
+        // instance storage; the guard catches it.
+        let env = Env::default();
+        let _ = &env;
+        assert_known_data_key(&DataKey::Sub(1));
+    }
+
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=59`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
+    /// range, so the registry can never silently skip or duplicate a number.
+    #[test]
+    fn discriminants_are_unique_and_contiguous() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let max_discriminant = variants
+            .iter()
+            .map(|(key, _)| key.canonical_discriminant())
+            .max()
+            .unwrap_or(0) as usize;
+        let mut seen = vec![false; max_discriminant + 1];
+        for (key, _) in &variants {
+            let d = key.canonical_discriminant() as usize;
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
+        let n = variants.len();
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            max_discriminant
+        );
+        assert!(!variants.is_empty(), "variant count must be non-zero");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let expected_instance: std::vec::Vec<u32> = variants
+            .iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+        
+        let variants = all_variants(&env);
+        assert_eq!(variants.len(), 63);
     }
 }
 
@@ -2709,16 +3023,28 @@ pub enum KycKey {
     Merchant(Address),
 }
 
-/// Event emitted when a subscription is automatically paused after N consecutive
-/// InsufficientBalance charge failures.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub accrued: i128,
+    pub withdrawn: i128,
+    pub refunded: i128,
+    pub ledger_sequence: u32,
     pub timestamp: u64,
     pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    pub admin: Address,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+    pub subscriptions_updated: u32,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -2796,29 +3122,68 @@ pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Resul
 /// Event emitted when the fee-token override address is set or cleared.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
+pub struct SubscriptionCreatedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub lifetime_cap: Option<i128>,
+    pub expires_at: Option<u64>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
 
-/// Event emitted when a protocol fee is converted from the subscription's
-/// settlement token to the configured fee-token override.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
+pub struct FundsDepositedEvent {
     pub subscription_id: u32,
-    /// The subscription's settlement token (source).
-    pub source_token: Address,
-    /// The fee-token override (destination).
-    pub target_token: Address,
-    /// Original fee amount in `source_token` before conversion.
-    pub original_fee_amount: i128,
-    /// Converted fee amount in `target_token`.
-    pub converted_fee_amount: i128,
-    /// Oracle price used for conversion (quote per base, scaled by 10^7).
-    pub rate: u128,
+    pub subscriber: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub lifetime_charged: i128,
+    pub timestamp: u64,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelledEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub authorizer: Address,
+    pub refund_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub authorizer: Address,
+    pub previous_status: SubscriptionStatus,
     pub timestamp: u64,
     pub schema_version: u32,
 }

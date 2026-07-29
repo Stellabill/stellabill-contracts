@@ -93,6 +93,8 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
+    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
+    env.crypto().sha256(&label_bytes)
     let mut label_bytes = soroban_sdk::Bytes::new(env);
     for &b in key_label.as_bytes() {
         label_bytes.push_back(b);
@@ -132,6 +134,9 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
     }
 
     env.storage().persistent().set(&storage_key, &now);
+    env.storage()
+        .persistent()
+        .extend_ttl(&storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
     crate::subscription::maybe_extend_ttl(env, &storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 
     env.events().publish(
@@ -857,6 +862,57 @@ pub fn get_auto_pause_threshold(env: &Env) -> u32 {
 
 // ── Schema migration ──────────────────────────────────────────────────────────
 
+pub fn rewrite_subscriptions_for_ledger_expiration(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
+/// v4 → v5 migration: rewrite every `DataKey::Sub(id)` record so the new
+/// `sub_account_label: Option<Symbol>` field deserializes cleanly for
+/// subscriptions created before STORAGE_VERSION 5.  The in-memory struct
+/// already carries `sub_account_label: None` after the deserialization
+/// round-trip, so this just needs to read-write each record.
+pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            // Round-trip: deserialise populates `sub_account_label: None`,
+            // then write back so XDR encoding includes the new field.
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {
     let instance = env.storage().instance();
     let persistent = env.storage().persistent();
@@ -988,7 +1044,7 @@ pub fn do_migrate(
     let stored_version = get_schema_version(env);
 
     if stored_version > binary_version {
-        return Err(crate::types::Error::SchemaMigrationDowngrade);
+        return Err(crate::types::Error::SchemaVersionMismatch);
     }
 
     if stored_version == binary_version {
@@ -1004,6 +1060,23 @@ pub fn do_migrate(
             (2, _) => {
                 do_migrate_config_to_persistent_internal(env)?;
                 current = 3;
+            }
+            // v3 → v4: rewrite every `DataKey::Sub(id)` record so the new
+            // `expires_at_ledger: Option<u32>` field deserializes cleanly
+            // for subscriptions created before STORAGE_VERSION 4. Soroban's
+            // `#[contracttype]` serialization is positional, so old records
+            // would otherwise fail to deserialize and every `get_subscription`
+            // call would panic after the binary upgrade.
+            (3, _) => {
+                rewrite_subscriptions_for_ledger_expiration(env);
+                current = 4;
+            }
+            // v4 → v5: rewrite every `DataKey::Sub(id)` record so the new
+            // `sub_account_label: Option<Symbol>` field deserializes cleanly
+            // for subscriptions created before STORAGE_VERSION 5.
+            (4, _) => {
+                rewrite_subscriptions_for_sub_account_label(env);
+                current = 5;
             }
             _ => {
                 current += 1;

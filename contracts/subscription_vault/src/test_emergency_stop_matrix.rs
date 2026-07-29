@@ -5,6 +5,7 @@ use crate::{
     UsageChargeResult,
 };
 use soroban_sdk::testutils::{Address as _, Ledger as _};
+use crate::test_helpers::run_all_mutation_calls;
 use soroban_sdk::{Address, Env, String, Vec};
 
 const T0: u64 = 1_700_000_000;
@@ -44,8 +45,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
         &true,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
-    );
+        &None::<u32>,
+);
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     let plan_id = client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
@@ -65,8 +66,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
             &false,
             &None::<i128>,
             &None::<u64>,
-            &None::<Address>,
-        ),
+                &None::<u32>,
+),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -79,7 +80,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        ),
+                &None::<u32>,
+),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(client.try_create_subscription_from_plan(&subscriber, &plan_id), Err(Ok(Error::EmergencyStopActive)));
@@ -115,4 +117,71 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
 
     let resumed = client.create_subscription_from_plan(&subscriber, &plan_id);
     assert_eq!(client.get_subscription(&resumed).status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_emergency_stop_recovery_and_edge_cases() {
+    let (env, client, token, admin) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let operator = Address::generate(&env);
+
+    // Initial setup
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    let sub_id = client.create_subscription(&subscriber, &merchant, &1_000_000i128, &INTERVAL, &true, &None::<i128>, &None::<u64>);
+    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    let plan_id = client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
+    client.set_operator(&admin, &operator);
+
+    // Enable emergency stop and verify blocking
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+
+    // Verify mutations are blocked
+    assert_eq!(client.try_create_subscription(&subscriber, &merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_create_subscription_with_token(&subscriber, &merchant, &token, &1_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_create_subscription_from_plan(&subscriber, &plan_id), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_usage(&sub_id, &100_000i128), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_usage_with_reference(&sub_id, &100_000i128, &String::from_str(&env, "usage-ref")), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_charge_one_off(&sub_id, &merchant, &100_000i128, &None::<soroban_sdk::BytesN<32>>), Err(Ok(Error::EmergencyStopActive)));
+    let ids_vec = Vec::from_array(&env, [sub_id]);
+    assert_eq!(client.try_operator_batch_charge(&operator, &ids_vec, &0u64), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_operator_charge_subscription(&operator, &sub_id), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_operator_charge_usage(&operator, &sub_id, &100_000i128), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_operator_charge_usage_with_ref(&operator, &sub_id, &100_000i128, &String::from_str(&env, "oref")), Err(Ok(Error::EmergencyStopActive)));
+    assert_eq!(client.try_partial_refund(&admin, &sub_id, &subscriber, &1_000_000i128), Err(Ok(Error::EmergencyStopActive)));
+
+    // Disable emergency stop
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // After disabling, mutations should succeed
+    assert!(client.try_create_subscription(&subscriber, &merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>).is_ok());
+    assert!(client.try_create_subscription_with_token(&subscriber, &merchant, &token, &1_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>).is_ok());
+    assert!(client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128, &None::<soroban_sdk::BytesN<32>>).is_ok());
+    assert!(client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>).is_ok());
+    assert!(client.try_charge_usage(&sub_id, &100_000i128).is_ok());
+    assert!(client.try_charge_usage_with_reference(&sub_id, &100_000i128, &String::from_str(&env, "usage-ref")).is_ok());
+    assert!(client.try_charge_one_off(&sub_id, &merchant, &100_000i128, &None::<soroban_sdk::BytesN<32>>).is_ok());
+    assert!(client.try_operator_batch_charge(&operator, &ids_vec, &0u64).is_ok());
+    assert!(client.try_operator_charge_subscription(&operator, &sub_id).is_ok());
+    assert!(client.try_operator_charge_usage(&operator, &sub_id, &100_000i128).is_ok());
+    assert!(client.try_operator_charge_usage_with_ref(&operator, &sub_id, &100_000i128, &String::from_str(&env, "oref")).is_ok());
+    assert!(client.try_partial_refund(&admin, &sub_id, &subscriber, &1_000_000i128).is_ok());
+
+    // Edge case: clearing when already off (no panic)
+    client.disable_emergency_stop(&admin);
+    assert!(!client.get_emergency_stop_status());
+
+    // Edge case: non-admin tries to clear (should be rejected)
+    let non_admin = Address::generate(&env);
+    let clear_result = client.try_disable_emergency_stop(&non_admin);
+    assert_eq!(clear_result, Err(Ok(Error::NotAuthorized)));
+
+    // Re‑enable after clear and verify blocking again
+    client.enable_emergency_stop(&admin);
+    assert!(client.get_emergency_stop_status());
+    assert_eq!(client.try_create_subscription(&subscriber, &merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>), Err(Ok(Error::EmergencyStopActive)));
 }

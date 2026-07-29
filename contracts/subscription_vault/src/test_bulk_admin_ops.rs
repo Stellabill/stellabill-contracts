@@ -22,8 +22,8 @@ const DEPOSIT: i128 = 5_000_000; // >= init min_topup (1_000_000)
 fn funded_sub(te: &TestEnv, subscriber: &Address, merchant: &Address) -> u32 {
     let sub_id = te.client.create_subscription(
         subscriber, merchant, &AMOUNT, &INTERVAL, &false, &None, &None,
-        &None::<Address>,
-    );
+        &None::<u32>,
+);
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
     te.client
         .deposit_funds(&sub_id, subscriber, &DEPOSIT, &None);
@@ -255,8 +255,8 @@ fn bulk_pause_reports_expired_as_failure() {
         &false,
         &None,
         &Some(now + 1_000),
-        &None::<Address>,
-    );
+        &None::<u32>,
+);
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client
         .deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None);

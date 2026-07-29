@@ -47,8 +47,8 @@ fn create_and_fund_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
-    );
+        &None::<u32>,
+);
 
     let token_client = token::Client::new(env, token);
     if token_client.balance(subscriber) < DEPOSIT {
