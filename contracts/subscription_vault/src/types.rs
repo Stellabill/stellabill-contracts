@@ -220,6 +220,8 @@ pub enum DataKey {
     SubscriberCreateCap,
     SubscriberCreateWindow(Address),
     ChargeSalt(u32),
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    DelegatedPayerGrant(Address, Address),
 }
 
 impl DataKey {
@@ -289,6 +291,7 @@ impl DataKey {
             DataKey::SubscriberCreateCap => 59,
             DataKey::SubscriberCreateWindow(_) => 60,
             DataKey::ChargeSalt(_) => 61,
+            DataKey::DelegatedPayerGrant(_, _) => 62,
         }
     }
 
@@ -819,6 +822,14 @@ pub enum Error {
     // --- Admin Config Cooldown (12000-12099) ---
     /// A protocol-wide config mutation was attempted within the per-key cooldown window.
     CooldownActive = 12001,
+
+    // --- Delegated Payer (13000-13099) ---
+    /// The delegated payer grant was not found.
+    DelegatedPayerGrantNotFound = 13001,
+    /// The delegated payer grant has expired.
+    DelegatedPayerGrantExpired = 13002,
+    /// The deposit amount exceeds the grant's max_amount.
+    DelegatedPayerAmountExceeded = 13003,
 }
 
 impl Error {
@@ -1462,6 +1473,52 @@ pub struct SubscriptionCreatedEvent {
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Delegated payer grant: authorizes `payer` to deposit into `subscriber`'s vault.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrant {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+}
+
+/// Event emitted when a delegated payer grant is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrantedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer grant is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerRevokedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer deposits funds on behalf of a subscriber.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedDepositEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub payer: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2376,6 +2433,7 @@ mod known_keys_tests {
             (DataKey::SubscriberCreateCap, true),
             (DataKey::SubscriberCreateWindow(a.clone()), false),
             (DataKey::ChargeSalt(1), true),
+            (DataKey::DelegatedPayerGrant(a.clone(), b.clone()), false),
         ]
     }
 
@@ -2477,7 +2535,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 62);
+        assert_eq!(variants.len(), 63);
     }
 }
 
