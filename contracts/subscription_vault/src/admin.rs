@@ -207,7 +207,7 @@ pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     admin.require_auth();
     let stored_admin = require_admin(env)?;
     if admin != &stored_admin {
-        return Err(Error::Unauthorized);
+        return Err(Error::Forbidden);
     }
     Ok(())
 }
