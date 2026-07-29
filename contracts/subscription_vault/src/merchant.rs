@@ -25,9 +25,10 @@ use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
+    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
+    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
+    PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
+    TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -86,6 +87,110 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
+
+    Ok(())
+}
+
+// ── Merchant vacation mode ───────────────────────────────────────────────────
+//
+// Allows a merchant to declare a vacation window during which all charges to
+// their subscriptions are blocked with `Error::VacationActive`. Unlike
+// `MerchantPaused`, vacation mode auto-expires at `end_ts`.
+//
+// # Storage
+// - `DataKey::MerchantVacation(merchant)` → `MerchantVacation { start_ts, end_ts }`
+//
+// # Security
+// - Merchant must authorize the call.
+// - `end_ts` must be strictly greater than `start_ts` (no zero-length vacations).
+// - `start_ts` must be in the future or now (reject past start times).
+// - Setting a new vacation replaces any existing one.
+
+/// Returns the current vacation window for `merchant`, or `None` if not set
+/// or if the window has already expired.
+pub fn get_merchant_vacation(env: &Env, merchant: &Address) -> Option<MerchantVacation> {
+    let key = DataKey::MerchantVacation(merchant.clone());
+    env.storage().instance().get(&key)
+}
+
+/// Returns `true` if `merchant` is currently in a vacation window at `now`.
+pub fn is_merchant_in_vacation(env: &Env, merchant: &Address, now: u64) -> bool {
+    if let Some(v) = get_merchant_vacation(env, merchant) {
+        return now >= v.start_ts && now < v.end_ts;
+    }
+    false
+}
+
+/// Set a vacation window for the calling merchant.
+///
+/// # Arguments
+/// - `start_ts` — Ledger timestamp when the vacation begins (must be >= now).
+/// - `end_ts`   — Ledger timestamp when the vacation ends (must be > start_ts).
+///
+/// # Errors
+/// - [`Error::InvalidInput`] if `end_ts <= start_ts`.
+/// - [`Error::InvalidExpiration`] if `start_ts < now` (can't schedule in the past).
+///
+/// # Events
+/// Emits [`VacationStartedEvent`].
+pub fn set_merchant_vacation(
+    env: &Env,
+    merchant: Address,
+    start_ts: u64,
+    end_ts: u64,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    if end_ts <= start_ts {
+        return Err(Error::InvalidInput);
+    }
+
+    let now = env.ledger().timestamp();
+    if start_ts < now {
+        return Err(Error::InvalidExpiration);
+    }
+
+    let vacation = MerchantVacation { start_ts, end_ts };
+    let key = DataKey::MerchantVacation(merchant.clone());
+    env.storage().instance().set(&key, &vacation);
+
+    env.events().publish(
+        (Symbol::new(env, "vacation_started"), merchant.clone()),
+        VacationStartedEvent {
+            merchant,
+            start_ts,
+            end_ts,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Clear the vacation window for the calling merchant.
+///
+/// Idempotent: clearing a non-existent vacation is a no-op.
+///
+/// # Events
+/// Emits [`VacationEndedEvent`].
+pub fn clear_merchant_vacation(env: &Env, merchant: Address) -> Result<(), Error> {
+    merchant.require_auth();
+
+    let key = DataKey::MerchantVacation(merchant.clone());
+    let existed = env.storage().instance().get::<_, MerchantVacation>(&key).is_some();
+    env.storage().instance().remove(&key);
+
+    if existed {
+        env.events().publish(
+            (Symbol::new(env, "vacation_ended"), merchant.clone()),
+            VacationEndedEvent {
+                merchant,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
 
     Ok(())
 }
@@ -1240,6 +1345,14 @@ pub fn do_rotate_merchant_address(
         let pause_key_new = DataKey::MerchantPaused(new_merchant.clone());
         storage.set(&pause_key_new, &paused);
         storage.remove(&pause_key_old);
+    }
+
+    // ── 4bis. Migrate MerchantVacation ─────────────────────────────────────────
+    let vac_key_old = DataKey::MerchantVacation(old_merchant.clone());
+    if let Some(vacation) = storage.get::<_, crate::types::MerchantVacation>(&vac_key_old) {
+        let vac_key_new = DataKey::MerchantVacation(new_merchant.clone());
+        storage.set(&vac_key_new, &vacation);
+        storage.remove(&vac_key_old);
     }
 
     // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
