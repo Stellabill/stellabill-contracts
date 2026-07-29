@@ -72,12 +72,13 @@ pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
+    let key = DataKey::Sub(subscription_id);
     let sub = env
         .storage()
         .persistent()
-        .get(&DataKey::Sub(subscription_id))
+        .get(&key)
         .ok_or(Error::NotFound)?;
-    extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
+    extend_subscription_ttl(env, &key);
     Ok(sub)
 }
 
@@ -130,9 +131,7 @@ pub fn get_subscriptions_by_merchant(
     };
 
     let mut result = Vec::new(env);
-    let mut i = start;
-    while i < end {
-        let sub_id = ids.get(i).unwrap();
+    for sub_id in ids.iter().skip(start as usize).take((end - start) as usize) {
         if let Some(sub) = env
             .storage()
             .persistent()
@@ -140,7 +139,6 @@ pub fn get_subscriptions_by_merchant(
         {
             result.push_back(sub);
         }
-        i += 1;
     }
     Ok(result)
 }
@@ -183,9 +181,7 @@ pub fn get_subscriptions_by_token(
         start + limit
     };
     let mut out = Vec::new(env);
-    let mut i = start;
-    while i < end {
-        let id = ids.get(i).unwrap();
+    for id in ids.iter().skip(start as usize).take((end - start) as usize) {
         if let Some(sub) = env
             .storage()
             .persistent()
@@ -193,7 +189,6 @@ pub fn get_subscriptions_by_token(
         {
             out.push_back(sub);
         }
-        i += 1;
     }
     Ok(out)
 }
@@ -336,8 +331,7 @@ pub fn list_subscriptions_by_subscriber(
     let mut subscription_ids = Vec::new(env);
     let mut next_start_id: Option<u32> = None;
 
-    let mut id = start_from_id;
-    while id < scan_end {
+    for id in start_from_id..scan_end {
         if let Some(sub) = env
             .storage()
             .persistent()
@@ -356,7 +350,6 @@ pub fn list_subscriptions_by_subscriber(
                 }
             }
         }
-        id += 1;
     }
 
     // Scan budget exhausted.  If more IDs remain beyond the window, signal the
@@ -412,8 +405,9 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     // Compute total prepaid across all subscriptions
     let total_prepaid = compute_total_prepaid(env, &token);
 
-    // Compute total merchant liabilities
-    let total_merchant_liabilities = compute_total_merchant_liabilities(env, &token);
+    // Compute total merchant liabilities using precomputed total_prepaid
+    let total_merchant_liabilities =
+        compute_total_merchant_liabilities(env, &token, total_prepaid);
 
     // Recoverable is the difference between contract balance and accounted funds
     let accounted = total_prepaid
@@ -421,9 +415,7 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
         .unwrap_or(0i128);
     let recoverable_amount = contract_balance.saturating_sub(accounted).max(0i128);
 
-    let computed_total = total_prepaid
-        .checked_add(total_merchant_liabilities)
-        .unwrap_or(0i128)
+    let computed_total = accounted
         .checked_add(recoverable_amount)
         .unwrap_or(0i128);
 
@@ -492,11 +484,13 @@ pub fn get_contract_reconciliation_summary(
     let end_index = (start_token_index + limit).min(total_tokens);
     let mut token_summaries = Vec::new(env);
 
-    for i in start_token_index..end_index {
-        if let Some(token) = accepted_tokens.get(i) {
-            let summary = get_token_reconciliation(env, token);
-            token_summaries.push_back(summary);
-        }
+    for token in accepted_tokens
+        .iter()
+        .skip(start_token_index as usize)
+        .take((end_index - start_token_index) as usize)
+    {
+        let summary = get_token_reconciliation(env, token);
+        token_summaries.push_back(summary);
     }
 
     let next_token_index = if end_index < total_tokens {
@@ -539,7 +533,7 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
 
     // Get merchant liabilities with count
     let (total_merchant_liabilities, merchant_count) =
-        compute_total_merchant_liabilities_with_count(env, &token);
+        compute_total_merchant_liabilities_with_count(env, &token, total_prepaid);
 
     // Compute recoverable
     let accounted = total_prepaid
@@ -593,7 +587,7 @@ pub fn query_prepaid_balances_paginated(
 
     if next_id == 0 || request.start_subscription_id >= next_id {
         return PrepaidQueryResult {
-            token: request.token.clone(),
+            token: request.token,
             partial_total: 0,
             subscriptions_count: 0,
             next_start_id: None,
@@ -670,15 +664,17 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
     (total, count)
 }
 
-fn compute_total_merchant_liabilities(env: &Env, token: &Address) -> i128 {
+fn compute_total_merchant_liabilities(env: &Env, token: &Address, total_prepaid: i128) -> i128 {
     let total_accounted = crate::accounting::get_total_accounted(env, token);
-    let total_prepaid = compute_total_prepaid(env, token);
     total_accounted.saturating_sub(total_prepaid).max(0i128)
 }
 
-fn compute_total_merchant_liabilities_with_count(env: &Env, token: &Address) -> (i128, u32) {
+fn compute_total_merchant_liabilities_with_count(
+    env: &Env,
+    token: &Address,
+    total_prepaid: i128,
+) -> (i128, u32) {
     let total_accounted = crate::accounting::get_total_accounted(env, token);
-    let total_prepaid = compute_total_prepaid(env, token);
     let total = total_accounted.saturating_sub(total_prepaid).max(0i128);
 
     let mut merchant_count: u32 = 0;
