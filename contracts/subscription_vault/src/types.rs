@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec, Bytes, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -201,6 +201,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
+    /// Pending subscriber emergency withdrawal intent. Discriminant 54.
+    EmergencyWithdrawIntent(u32),
 }
 
 impl DataKey {
@@ -260,6 +262,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
+            DataKey::EmergencyWithdrawIntent(_) => 54,
         }
     }
 
@@ -313,7 +316,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
 pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
-    KNOWN_INSTANCE_KEY_DISCRIMINANTS.iter().any(|&known| known == discriminant)
+    KNOWN_INSTANCE_KEY_DISCRIMINANTS
+        .iter()
+        .any(|&known| known == discriminant)
 }
 
 /// Debug-only guard asserting that `key` belongs to the canonical instance-key
@@ -321,7 +326,11 @@ pub fn is_known_instance_discriminant(discriminant: u32) -> bool {
 #[inline]
 #[allow(dead_code)]
 pub fn assert_known_data_key(key: &DataKey) {
-    debug_assert!(key.is_known_instance_key(), "Unknown or persistent key reached instance storage: {}", key.canonical_discriminant());
+    debug_assert!(
+        key.is_known_instance_key(),
+        "Unknown or persistent key reached instance storage: {}",
+        key.canonical_discriminant()
+    );
 }
 
 /// Convenience wrapper over [`assert_known_data_key`] for instance storage helpers.
@@ -390,6 +399,15 @@ impl Subscription {
     }
 }
 
+/// Pending emergency-withdraw intent for a paused or cancelled subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawIntent {
+    pub subscription_id: u32,
+    pub requested_at: u64,
+    pub requested_status: SubscriptionStatus,
+}
+
 /// A non-transferable (soulbound) credential badge linking a subscription.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -412,7 +430,10 @@ pub struct InsufficientBalanceError {
 
 impl InsufficientBalanceError {
     pub const fn new(available: i128, required: i128) -> Self {
-        Self { available, required }
+        Self {
+            available,
+            required,
+        }
     }
     pub fn shortfall(&self) -> i128 {
         self.required - self.available
@@ -565,6 +586,14 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
+    /// A subscriber emergency withdrawal is already pending for this subscription.
+    EmergencyWithdrawCooldownActive = 4011,
+    /// No emergency-withdraw intent exists for this subscription.
+    EmergencyWithdrawNotRequested = 4012,
+    /// The subscription state changed after the emergency-withdraw request was created.
+    EmergencyWithdrawStateChanged = 4013,
+    /// Emergency withdrawals are only allowed for paused or cancelled subscriptions.
+    EmergencyWithdrawInvalidState = 4014,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -659,7 +688,9 @@ pub enum Error {
 
 impl Error {
     /// Returns the numeric code for this error.
-    pub const fn to_code(self) -> u32 { self as u32 }
+    pub const fn to_code(self) -> u32 {
+        self as u32
+    }
 }
 
 /// Normalize an amount to 9 decimal places based on token decimals.
@@ -1471,6 +1502,17 @@ pub struct SubscriberWithdrawalEvent {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct SubscriberEmergencyWithdrawEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub cooldown_started_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct OneOffChargedEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
@@ -1891,10 +1933,17 @@ pub struct PrepaidQueryResult {
 }
 
 pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         amount.checked_mul(factor).ok_or(Error::Overflow)
@@ -1905,10 +1954,17 @@ pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128
 }
 
 pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
-    let decimals: u32 = env.storage().instance().get(&DataKey::TokenDecimals(token.clone()))
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
         .ok_or(Error::InvalidToken)?;
-    if decimals == 0 || decimals > 18 { return Err(Error::InvalidTokenDecimals); }
-    if decimals == 9 { return Ok(amount); }
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
     if decimals < 9 {
         let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
         Ok(amount / factor)
@@ -2036,7 +2092,11 @@ mod known_keys_tests {
             assert!(!seen.contains(&d), "duplicate discriminant {d}");
             seen.insert(d);
         }
-        assert!(seen.iter().all(|&s| s), "discriminants are not contiguous 0..={}", n - 1);
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
         assert!(n > 0, "variant count must be non-zero");
     }
 
