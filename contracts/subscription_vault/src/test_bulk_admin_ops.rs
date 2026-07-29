@@ -12,7 +12,7 @@
 use crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE;
 use crate::test_utils::setup::TestEnv;
 use crate::types::{BulkSubscriptionResult, Error, SubscriptionStatus, BATCH_MAX_SIZE};
-use soroban_sdk::{testutils::Address as _, vec, Address, Vec};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, vec, Address, Vec};
 
 const AMOUNT: i128 = 1_000;
 const INTERVAL: u64 = 24 * 60 * 60;
@@ -22,7 +22,8 @@ const DEPOSIT: i128 = 5_000_000; // >= init min_topup (1_000_000)
 fn funded_sub(te: &TestEnv, subscriber: &Address, merchant: &Address) -> u32 {
     let sub_id = te.client.create_subscription(
         subscriber, merchant, &AMOUNT, &INTERVAL, &false, &None, &None,
-    );
+        &None::<u32>,
+);
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
     te.client
         .deposit_funds(&sub_id, subscriber, &DEPOSIT, &None);
@@ -254,7 +255,8 @@ fn bulk_pause_reports_expired_as_failure() {
         &false,
         &None,
         &Some(now + 1_000),
-    );
+        &None::<u32>,
+);
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client
         .deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None);

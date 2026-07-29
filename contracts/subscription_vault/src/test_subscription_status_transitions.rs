@@ -71,6 +71,7 @@ fn create_sub(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Add
         &false,       // usage_enabled
         &None::<i128>, // lifetime_cap
         &None::<u64>,  // expires_at
+        &None::<u32>,  // expires_at_ledger
     );
     (id, subscriber, merchant)
 }

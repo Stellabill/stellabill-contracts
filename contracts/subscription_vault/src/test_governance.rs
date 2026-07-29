@@ -669,6 +669,256 @@ fn test_merchant_refund_uninitialized_merchant_fails() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Vote-lock during timelock window — audit #632
+//
+// Verifies that guardians cannot add or change votes once the proposal's
+// timelock (ETA) is reached. Before the fix, a guardian could vote YES to
+// appear supportive during the voting window, then flip their vote to NO
+// right at execution time to grief the proposal.
+// ══════════════════════════════════════════════════════════════════════════════
+
+mod vote_lock_during_timelock {
+    use crate::types::Error;
+    use crate::{SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        Address, Env, Symbol,
+    };
+
+    fn init_vault<'a>(env: &'a Env, admin: &Address) -> SubscriptionVaultClient<'a> {
+        let token_admin = Address::generate(env);
+        let token_address = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(env, &contract_id);
+        client.init(&token_address, &6, admin, &10_000_000, &86400);
+        client
+    }
+
+    /// Test: voting succeeds when `now < proposal.eta` (before timelock).
+    #[test]
+    fn vote_before_timelock_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock — must succeed
+        let result = client.try_vote_proposal(&proposal_id, &true);
+        assert!(result.is_ok(), "voting before ETA must succeed");
+    }
+
+    /// Test: voting is rejected when `now == proposal.eta` (exact timelock start).
+    #[test]
+    fn vote_at_exact_timelock_start_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Advance ledger to exactly the ETA
+        env.ledger().set_timestamp(eta);
+
+        // Vote at exact timelock — must be rejected
+        let result = client.try_vote_proposal(&proposal_id, &true);
+        assert_eq!(result, Err(Ok(Error::InvalidInput)), "voting at exact ETA must be rejected");
+    }
+
+    /// Test: voting is rejected when `now > proposal.eta` (after timelock).
+    #[test]
+    fn vote_after_timelock_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock — succeeds
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance ledger past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Try to flip vote after timelock — must be rejected
+        let result = client.try_vote_proposal(&proposal_id, &false);
+        assert_eq!(
+            result,
+            Err(Ok(Error::InvalidInput)),
+            "flipping vote after ETA must be rejected"
+        );
+    }
+
+    /// Test: execution still works after timelock passes (no regression).
+    #[test]
+    fn execute_proposal_after_timelock_still_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000, // 50% quorum needed
+            &eta,
+        );
+
+        // Vote before timelock
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance past ETA — votes are locked
+        env.ledger().set_timestamp(eta + 100);
+
+        // Execute — must still succeed (quorum was met before lock)
+        let result = client.try_execute_proposal(&proposal_id);
+        assert!(result.is_ok(), "execution after timelock must still succeed");
+    }
+
+    /// Test: cancel proposal still works even after timelock.
+    #[test]
+    fn cancel_proposal_after_timelock_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Advance past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Cancel — must still succeed (admin override not gated by timelock)
+        let reason = soroban_sdk::String::from_str(&env, "Timelock reached, but admin cancelled");
+        let result = client.try_cancel_proposal(&proposal_id, &reason);
+        assert!(result.is_ok(), "cancelling after timelock must still succeed");
+    }
+
+    /// Test: verify VoteLockedEvent is emitted on rejected vote.
+    #[test]
+    fn vote_locked_event_emitted_on_rejected_vote() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Attempt vote — rejected
+        let _ = client.try_vote_proposal(&proposal_id, &false);
+
+        // Check events include vote_locked
+        let events = env.events().all();
+        let expected_symbol = Symbol::new(&env, "vote_locked");
+        let has_vote_locked = events.iter().any(|e| {
+            let topics = e.0;
+            topics.len() >= 1
+                && {
+                    let sym: Symbol = topics.get(0).unwrap();
+                    sym == expected_symbol
+                }
+        });
+        assert!(has_vote_locked, "VoteLockedEvent must be emitted");
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Admin rotation invariant tests
 //
 // Security model enforced by these tests:

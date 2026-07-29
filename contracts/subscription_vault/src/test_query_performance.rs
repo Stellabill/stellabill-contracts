@@ -277,7 +277,8 @@ fn test_subscriber_list_invalid_limit_overflow() {
 }
 
 fn create_sub_for_merchant_and_token(client: &SubscriptionVaultClient<'static>, subscriber: &Address, merchant: &Address, token: &Address) -> u32 {
-    client.create_subscription(subscriber, merchant, &1000, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>)
+    client.create_subscription(subscriber, merchant, &1000, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>&None::<u32>,
+)
 }
 
 #[test]
@@ -422,7 +423,8 @@ fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
 
     // This creation should fail with InvalidInput because we simulated an oversized contract
     // AND we forced the scan path by configuring a credit limit.
-    client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>);
+    client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>&None::<u32>,
+);
 }
 
 // ================================================================
@@ -456,6 +458,7 @@ mod benchmark {
             &false,
             &None,
             &None::<u64>,
+        &None::<u32>,
         );
 
         // High budgets so we never hit limit; just measure
@@ -570,6 +573,7 @@ fn test_get_subscription_within_budget() {
         &false,
         &None,
         &None::<u64>,
+    &None::<u32>,
     );
 
     with_perf_budget(
@@ -597,6 +601,7 @@ fn test_get_subscription_budget_too_tight() {
         &false,
         &None,
         &None::<u64>,
+    &None::<u32>,
     );
 
     // Impossibly tight budgets — must exceed

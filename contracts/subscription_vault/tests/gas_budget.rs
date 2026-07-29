@@ -166,6 +166,7 @@ fn budget_create_subscription() {
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
 
     let resources = env.cost_estimate().resources();
@@ -199,6 +200,7 @@ fn budget_deposit_funds() {
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
 
     env.cost_estimate().budget().reset_unlimited();
@@ -241,6 +243,7 @@ fn budget_charge_subscription() {
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -281,6 +284,7 @@ fn budget_withdraw_merchant_funds() {
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -339,6 +343,7 @@ fn budget_charge_subscription_high_id() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         vault.deposit_funds(&last_id, &subscriber, &50_000i128, &None);
     }
@@ -386,6 +391,7 @@ fn budget_withdraw_dense_merchant_earnings() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
