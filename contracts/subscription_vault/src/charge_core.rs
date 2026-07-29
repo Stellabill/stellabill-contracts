@@ -475,6 +475,16 @@ pub fn charge_one(
                 merchant_amount,
                 BillingChargeKind::Interval,
             )?;
+
+            // Route merchant amount to sub-account if subscription has one
+            if let Some(ref label) = sub.sub_account_label {
+                crate::merchant::credit_sub_account(env, &sub.merchant, label, &sub.token, merchant_amount)?;
+                // Deduct from parent balance (parent earnings stay for roll-up reporting)
+                let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
+                let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
+                crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
+            }
+
             let conversion = if fee_amount > 0 {
                 Some(convert_fee(env, &sub.token, fee_amount))
             } else {
@@ -1063,6 +1073,16 @@ pub fn charge_usage_one(
                 merchant_amount,
                 BillingChargeKind::Usage,
             )?;
+
+            // Route merchant amount to sub-account if subscription has one
+            if let Some(ref label) = sub.sub_account_label {
+                crate::merchant::credit_sub_account(env, &sub.merchant, label, &sub.token, merchant_amount)?;
+                // Deduct from parent balance (parent earnings stay for roll-up reporting)
+                let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
+                let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
+                crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
+            }
+
             let conversion = if fee_amount > 0 {
                 Some(convert_fee(env, &sub.token, fee_amount))
             } else {

@@ -64,7 +64,7 @@ fn test_expiration_timing_and_charging() {
         &Some(expires_at),
     &None::<u32>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &(amount * 5), &None::<soroban_sdk::BytesN<32>>);
+    client.deposit_funds(&sub_id, &subscriber, &(amount * 5, &None::<soroban_sdk::BytesN<32>>));
 
     // Before expiry: charge succeeds
     env.ledger().with_mut(|l| l.timestamp = T0 + INTERVAL);
@@ -149,16 +149,15 @@ fn test_expiration_vs_cancellation() {
     let expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
-    let sub_id1 = client.create_subscription_with_token(
+    let sub_id = client.create_subscription_with_token(
         &subscriber,
         &merchant,
         &token_client.address,
-        &1_000_000i128,
+        &min_topup,
         &INTERVAL,
         &false,
         &None::<i128>,
-        &Some(expires_at),
-    &None::<u32>,
+        &Some(T0 + INTERVAL),
     );
     
     client.cancel_subscription(&sub_id1, &subscriber);
