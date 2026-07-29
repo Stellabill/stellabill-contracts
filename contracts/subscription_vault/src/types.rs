@@ -8,9 +8,6 @@ use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, Stri
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
-/// Event schema version for backwards-compatible indexer decoding.
-pub const EVENT_SCHEMA_VERSION: u32 = 2;
-
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
 /// Maximum length of a metadata key in bytes.
@@ -362,6 +359,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     54, // TransferIntent(u32)
     59, // BuyoutPremiumBps
     61, // MerchantMultiSig(Address)
+    62, // MerchantSubAccount(Address, Symbol)
+    63, // MerchantSubAccountList(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -448,6 +447,9 @@ pub struct Subscription {
     /// Either bound being met is sufficient to consider the subscription
     /// expired for charge / deposit / state-transition purposes.
     pub expires_at_ledger: Option<u32>,
+    /// Optional sub-account label for routing charges to an isolated merchant
+    /// sub-account ledger (#575). `None` routes to the parent merchant balance.
+    pub sub_account_label: Option<Symbol>,
 }
 
 impl Subscription {
@@ -2327,6 +2329,29 @@ pub struct MerchantRefundEvent {
     pub subscriber: Address,
     pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant creates a new sub-account with an isolated ledger (#575).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountCreatedEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant withdraws funds from a sub-account (#575).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountWithdrawEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub token: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
