@@ -346,7 +346,7 @@ pub mod statements {
         newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage {
-            statements: soroban_sdk::Vec::new(_env),
+            statements: soroban_sdk::Vec::new(env),
             next_cursor: None,
             total: 0,
         })
@@ -376,7 +376,7 @@ pub mod oracle {
     #![allow(unused_variables, dead_code)]
     use crate::admin::{read_config, write_config};
     use crate::types::{DataKey, Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env, Symbol};
+    use soroban_sdk::{Address, Env, Symbol, Vec};
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
     ///
@@ -455,6 +455,43 @@ pub mod oracle {
             fixed_numerator: 0,
             fixed_denominator: 1,
         })
+    }
+
+    /// Set the maximum allowed oracle price deviation in basis points.
+    ///
+    /// When set, the oracle deviation circuit breaker compares the latest price
+    /// against the median of the last N recorded samples. If the deviation exceeds
+    /// this threshold, the charge is rejected with `Error::OracleDeviationTooHigh`.
+    ///
+    /// A value of `0` means any deviation is rejected (strict mode).
+    /// When unset, the deviation check is skipped entirely.
+    pub fn set_oracle_deviation_bps(env: &Env, bps: u32) {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().set(&key, &bps);
+    }
+
+    /// Read the current oracle deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: &Env) -> Option<u32> {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().get(&key)
+    }
+
+    /// Return the recorded oracle price history for a token in insertion order.
+    pub fn get_oracle_price_history(env: &Env, token: &Address) -> Vec<i128> {
+        use crate::types::OraclePriceHistoryMeta;
+        let meta_key = (token.clone(), Symbol::new(env, "oracle_price_history_meta"));
+        let meta: Option<OraclePriceHistoryMeta> = env.storage().persistent().get(&meta_key);
+        let Some(meta) = meta else {
+            return Vec::new(env);
+        };
+        let mut prices = Vec::new(env);
+        for i in 0..meta.count {
+            let entry_key = (token.clone(), Symbol::new(env, &format!("oph_{i}")));
+            if let Some(price) = env.storage().persistent().get::<_, i128>(&entry_key) {
+                prices.push_back(price);
+            }
+        }
+        prices
     }
 
     /// Emit an oracle liveness event for monitoring purposes.
@@ -558,7 +595,7 @@ pub mod operator {
     ) -> Result<ChargeExecutionResult, Error> {
         require_operator_auth(env, &op)?;
         let now = env.ledger().timestamp();
-        crate::charge_core::charge_one(env, subscription_id, now, None)
+        crate::charge_core::charge_one(env, subscription_id, now, None, None)
     }
 
     pub fn do_operator_charge_usage(
@@ -614,20 +651,24 @@ pub use types::{
     CapInfo, Coupon, OracleKind,
 >>>>>>> upstream/main
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, OracleDeviationBreakerEvent,
+    OraclePriceHistoryMeta, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
     PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+>>>>>>> upstream/main
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
@@ -1360,6 +1401,7 @@ impl SubscriptionVault {
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -1369,6 +1411,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1380,6 +1423,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1412,6 +1456,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1424,6 +1469,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1971,7 +2017,7 @@ impl SubscriptionVault {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
+        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
         let _period_start = old_sub.last_payment_timestamp;
@@ -2550,9 +2596,48 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
+    /// Configure the oracle price deviation circuit-breaker threshold.
+    ///
+    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
+    /// When the latest oracle price deviates from the median of the last N
+    /// samples by more than this amount, the charge is rejected with
+    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
+    /// is emitted.
+    ///
+    /// A value of `0` rejects **any** price change (strict mode).
+    /// When never called, the deviation check is disabled entirely.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the admin.
+    pub fn set_oracle_deviation_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_deviation_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Return the current deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
+        oracle::get_oracle_deviation_bps(&env)
+    }
+
+    /// Return the recorded oracle price history for a token (insertion order).
+    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
+        oracle::get_oracle_price_history(&env, &token)
+    }
+
     /// Emit oracle liveness event.
-    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
+    pub fn emit_oracle_liveness(env: Env) -> Result<crate::types::OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
+>>>>>>> upstream/main
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
@@ -2687,6 +2772,24 @@ impl SubscriptionVault {
     /// Get protocol fee bps.
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
+    }
+
+    /// Set the fee-token override address. Admin only.
+    ///
+    /// When set and different from the subscription's settlement token,
+    /// protocol fees are converted through the oracle and paid in
+    /// `fee_token`. Pass `None` to clear the override.
+    pub fn set_fee_token(
+        env: Env,
+        admin: Address,
+        fee_token: Option<Address>,
+    ) -> Result<(), Error> {
+        admin::set_fee_token(&env, admin, fee_token)
+    }
+
+    /// Return the configured fee-token override address, or `None` if not set.
+    pub fn get_fee_token(env: Env) -> Option<Address> {
+        admin::get_fee_token(&env)
     }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
@@ -3096,3 +3199,6 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_merchant_tags;
+
+#[cfg(test)]
+mod test_referral_self;

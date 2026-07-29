@@ -134,7 +134,13 @@ fn test_cleanup_and_archival() {
 
     let sub_archived = client.get_subscription(&sub_id);
     assert_eq!(sub_archived.status, SubscriptionStatus::Archived);
+<<<<<<< HEAD
+
+    // Archival reads - can still read it
+    assert_eq!(sub_archived.amount, 100);
+=======
     assert_eq!(sub_archived.amount, min_topup);
+>>>>>>> upstream/main
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)
@@ -211,6 +217,7 @@ fn test_expiration_vs_cancellation() {
     
     // Trigger expiration
     env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
+>>>>>>> upstream/main
     let res = client.try_cancel_subscription(&sub_id2, &subscriber);
     assert_eq!(res, Err(Ok(Error::SubscriptionExpired)));
 
@@ -221,7 +228,11 @@ fn test_expiration_vs_cancellation() {
 // doc 3: deposit_funds rejected when expired
 #[test]
 fn test_deposit_rejected_when_expired() {
+<<<<<<< HEAD
+    let (env, client, token, token_admin, _) = setup_test_env();
+=======
     let (env, client, token_client, token_admin, _) = setup_test_env();
+>>>>>>> upstream/main
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 

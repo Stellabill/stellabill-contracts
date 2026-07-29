@@ -151,6 +151,7 @@ fn create_and_fund_sub(
         &usage_enabled,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let token_admin = token::StellarAssetClient::new(env, token);
@@ -456,6 +457,7 @@ fn bench_charge_cold_vs_warm_grace_period() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // First charge attempt with 0 balance -> moves to GracePeriod
@@ -493,6 +495,7 @@ fn bench_charge_cold_vs_warm_grace_period() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     env_warm
