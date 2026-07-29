@@ -20,7 +20,7 @@
 //!  3. **correct_auth** — `mock_all_auths` + correct address → call succeeds.
 
 use crate::{DataKey, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +59,7 @@ fn make_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Addre
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     (id, subscriber, merchant)
 }
@@ -97,6 +98,7 @@ fn create_subscription_missing_auth() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 }
 
@@ -113,6 +115,7 @@ fn create_subscription_correct_auth() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     let sub = client.get_subscription(&id);
     assert_eq!(sub.subscriber, subscriber);
@@ -332,6 +335,60 @@ fn withdraw_merchant_funds_correct_auth() {
 
     let balance_before = client.get_merchant_balance(&merchant);
     assert_eq!(balance_before, withdraw_amount);
+    client.withdraw_merchant_funds(&merchant, &withdraw_amount);
+    assert_eq!(client.get_merchant_balance(&merchant), 0);
+}
+
+#[test]
+fn set_merchant_multisig_rejects_zero_threshold() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(Address::generate(&env));
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &0u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_merchant_multisig_rejects_threshold_above_signer_count() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(Address::generate(&env));
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &2u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_merchant_multisig_rejects_duplicate_signers() {
+    let (env, client, _, admin) = setup();
+    let merchant = Address::generate(&env);
+    let duplicate = Address::generate(&env);
+    let mut signers = Vec::new(&env);
+    signers.push_back(duplicate.clone());
+    signers.push_back(duplicate);
+
+    let res = client.try_set_merchant_multisig(&admin, &merchant, &signers, &2u32);
+    assert!(res.is_err());
+}
+
+#[test]
+fn withdraw_merchant_funds_without_multisig_config_keeps_merchant_auth_fallback() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+    let withdraw_amount: i128 = 1_000_000;
+
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(
+            &DataKey::MerchantBalance(merchant.clone(), token.clone()),
+            &withdraw_amount,
+        );
+    });
+    soroban_sdk::token::StellarAssetClient::new(&env, &token)
+        .mint(&client.address, &withdraw_amount);
+
     client.withdraw_merchant_funds(&merchant, &withdraw_amount);
     assert_eq!(client.get_merchant_balance(&merchant), 0);
 }

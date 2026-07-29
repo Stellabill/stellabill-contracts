@@ -53,6 +53,9 @@ fn test_expiration_timing_and_charging() {
     let min_topup = 1_000_000i128;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
+<<<<<<< HEAD
+    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &amount, &interval, &false, &None::<i128>, &Some(expires_at));
+=======
     let sub_id = client.create_subscription_with_token(
         &subscriber,
         &merchant,
@@ -64,6 +67,7 @@ fn test_expiration_timing_and_charging() {
         &Some(expires_at),
     );
     client.deposit_funds(&sub_id, &subscriber, &(amount * 5, &None::<soroban_sdk::BytesN<32>>));
+>>>>>>> upstream/main
 
     // Before expiry: charge succeeds
     env.ledger().with_mut(|l| l.timestamp = T0 + INTERVAL);
@@ -102,6 +106,9 @@ fn test_cleanup_and_archival() {
     let min_topup = 1_000_000i128;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
+<<<<<<< HEAD
+    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+=======
     let sub_id = client.create_subscription_with_token(
         &subscriber,
         &merchant,
@@ -112,6 +119,7 @@ fn test_cleanup_and_archival() {
         &None::<i128>,
         &Some(T0 + INTERVAL),
     );
+>>>>>>> upstream/main
 
     // Try cleanup before expiry — should fail
     let res = client.try_cleanup_subscription(&sub_id, &subscriber);
@@ -126,7 +134,13 @@ fn test_cleanup_and_archival() {
 
     let sub_archived = client.get_subscription(&sub_id);
     assert_eq!(sub_archived.status, SubscriptionStatus::Archived);
+<<<<<<< HEAD
+
+    // Archival reads - can still read it
+    assert_eq!(sub_archived.amount, 100);
+=======
     assert_eq!(sub_archived.amount, min_topup);
+>>>>>>> upstream/main
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)
@@ -147,6 +161,9 @@ fn test_expiration_vs_cancellation() {
     let expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
+<<<<<<< HEAD
+    let sub_id1 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+=======
     let sub_id1 = client.create_subscription_with_token(
         &subscriber,
         &merchant,
@@ -157,6 +174,7 @@ fn test_expiration_vs_cancellation() {
         &None::<i128>,
         &Some(expires_at),
     );
+>>>>>>> upstream/main
     
     client.cancel_subscription(&sub_id1, &subscriber);
     assert_eq!(
@@ -182,6 +200,9 @@ fn test_expiration_vs_cancellation() {
 
     // Flow 1: expire without cancel -> cancel rejected -> cleanup -> Archived
     // Scenario 2: Expire without cancel
+<<<<<<< HEAD
+    let sub_id2 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+=======
     let sub_id2 = client.create_subscription_with_token(
         &subscriber,
         &merchant,
@@ -192,9 +213,11 @@ fn test_expiration_vs_cancellation() {
         &None::<i128>,
         &Some(expires_at),
     );
+>>>>>>> upstream/main
     
     // Trigger expiration
     env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
+>>>>>>> upstream/main
     let res = client.try_cancel_subscription(&sub_id2, &subscriber);
     assert_eq!(res, Err(Ok(Error::SubscriptionExpired)));
 
@@ -205,7 +228,11 @@ fn test_expiration_vs_cancellation() {
 // doc 3: deposit_funds rejected when expired
 #[test]
 fn test_deposit_rejected_when_expired() {
+<<<<<<< HEAD
+    let (env, client, token, token_admin, _) = setup_test_env();
+=======
     let (env, client, token_client, token_admin, _) = setup_test_env();
+>>>>>>> upstream/main
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
@@ -213,6 +240,9 @@ fn test_deposit_rejected_when_expired() {
     let expires_at = T0 + 2 * INTERVAL;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
+<<<<<<< HEAD
+    let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+=======
     let sub_id = client.create_subscription_with_token(
         &subscriber,
         &merchant,
@@ -223,6 +253,7 @@ fn test_deposit_rejected_when_expired() {
         &None::<i128>,
         &Some(T0 + INTERVAL),
     );
+>>>>>>> upstream/main
 
     // Advance past expiry
     env.ledger().with_mut(|l| l.timestamp = T0 + 100);
@@ -232,4 +263,163 @@ fn test_deposit_rejected_when_expired() {
     // subscription.is_expired(now) is true; deposit should be rejected
     let res = client.try_deposit_funds(&sub_id, &subscriber, &min_topup, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(res, Err(Ok(Error::SubscriptionExpired)));
+}
+
+/// Reject `create_subscription` when `expires_at == ledger.timestamp()`.
+///
+/// A subscription that is already expired at creation would be a zombie
+/// entry that can never be charged.  The contract must return
+/// `Error::InvalidExpiration` and write no storage entries.
+#[test]
+fn test_reject_expiration_equal_to_now() {
+    let (env, client, token_client, token_admin, _) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let expires_at = T0; // equal to current ledger timestamp
+
+    let res = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
+}
+
+/// Reject `create_subscription` when `expires_at < ledger.timestamp()`.
+///
+/// An expiration timestamp in the past is equally invalid — the
+/// subscription would be born already expired.  Must return
+/// `Error::InvalidExpiration` and write no storage entries.
+#[test]
+fn test_reject_expiration_in_the_past() {
+    let (env, client, token_client, token_admin, _) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let expires_at = T0 - 1; // one second before current ledger time
+
+    let res = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
+}
+
+/// `None` expiration must be accepted.
+///
+/// Omitting `expires_at` creates an open-ended subscription that never
+/// expires — this is the standard path and must succeed.
+#[test]
+fn test_none_expiration_accepted() {
+    let (env, client, token_client, token_admin, _) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let res = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    assert!(res.is_ok(), "None expiration must be accepted");
+
+    let sub_id = res.unwrap();
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.expires_at, None);
+}
+
+/// Accept `expires_at` one second in the future.
+///
+/// The earliest permitted expiration is `ledger.timestamp() + 1`.  This
+/// test confirms that boundary is accepted and the subscription is
+/// created in Active status.
+#[test]
+fn test_future_expiration_one_second_ahead_accepted() {
+    let (env, client, token_client, token_admin, _) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let expires_at = T0 + 1; // one second after current ledger time
+
+    let res = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+    );
+    assert!(res.is_ok(), "future expiration must be accepted");
+
+    let sub_id = res.unwrap();
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.expires_at, Some(expires_at));
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+/// Rejected expiration attempts must not write any storage.
+///
+/// After each rejection the subscription counter must remain unchanged
+/// and `get_subscription` must return `NotFound` for any hypothetical
+/// ID that would have been allocated.
+#[test]
+fn test_rejected_expiration_writes_no_storage() {
+    let (env, client, token_client, token_admin, _) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Record next_id before the failed attempts.
+    let _ = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(T0), // equal to now → rejected
+    );
+
+    let _ = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(T0 - 1), // in the past → rejected
+    );
+
+    // Now create a valid subscription — it should get id 0 (first ever).
+    let res = client.try_create_subscription_with_token(
+        &subscriber,
+        &merchant,
+        &token_client.address,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    assert!(res.is_ok(), "valid subscription must succeed");
+    assert_eq!(res.unwrap(), 0, "first subscription should have id 0");
 }

@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4.2.2
         with:
           # Check out the PR head so we can push a fixup commit back.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
 
@@ -31,8 +32,10 @@ jobs:
         run: python scripts/generate_error_table.py
 
       - name: Commit regenerated table if changed
-        # Only auto-commit on PRs (push to a branch), not on merge to main.
-        if: github.event_name == 'pull_request'
+        # Only auto-commit on PRs from the same repo (not forks).
+        # The GITHUB_TOKEN only has write access to the repo it belongs to,
+        # so pushing to a fork's branch from the upstream token is denied.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

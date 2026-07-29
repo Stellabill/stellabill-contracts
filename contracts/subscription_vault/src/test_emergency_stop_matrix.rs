@@ -44,6 +44,7 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
         &true,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
@@ -64,6 +65,7 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -107,6 +109,7 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
     assert_eq!(client.get_admin(), admin);
     assert!(client.get_emergency_stop_status());
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(!client.get_emergency_stop_status());
 

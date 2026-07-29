@@ -16,7 +16,12 @@ use subscription_vault::{SubscriptionStatus, SubscriptionVault, SubscriptionVaul
 
 const T0: u64 = 1_700_000_000;
 
-fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, TokenAdminClient<'static>) {
+fn setup() -> (
+    Env,
+    SubscriptionVaultClient<'static>,
+    Address,
+    TokenAdminClient<'static>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(T0);
@@ -53,6 +58,7 @@ fn create_subs(
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         );
         ids.push(id);
     }
@@ -81,7 +87,10 @@ fn single_page_export_returns_all_ids() {
     exported.sort();
     let mut created_sorted = created.clone();
     created_sorted.sort();
-    assert_eq!(exported, created_sorted, "exported ids must match created ids");
+    assert_eq!(
+        exported, created_sorted,
+        "exported ids must match created ids"
+    );
 }
 
 #[test]
@@ -113,7 +122,10 @@ fn multi_page_export_covers_all_ids() {
     all_exported.sort();
     let mut created_sorted = created.clone();
     created_sorted.sort();
-    assert_eq!(all_exported, created_sorted, "union of all pages must equal created ids");
+    assert_eq!(
+        all_exported, created_sorted,
+        "union of all pages must equal created ids"
+    );
 }
 
 #[test]
@@ -163,7 +175,8 @@ fn partial_last_page() {
     let page3 = client.export_subscription_summaries(&admin, &6, &3);
     assert_eq!(page3.len() as u32, 1);
 
-    let mut all: Vec<u32> = page1.iter()
+    let mut all: Vec<u32> = page1
+        .iter()
         .chain(page2.iter())
         .chain(page3.iter())
         .map(|s| s.subscription_id)

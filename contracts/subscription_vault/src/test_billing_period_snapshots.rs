@@ -8,24 +8,18 @@ use crate::{
 };
 use soroban_sdk::{testutils::Ledger, Address, Env};
 
-/// Returns an env plus a registered contract id.
-///
-/// The `period_snapshots` helpers read and write `env.storage().persistent()`, which is
-/// only accessible inside a contract invocation. Each test body therefore runs inside
-/// `env.as_contract(&contract, ..)`.
-fn setup() -> (Env, Address) {
+fn setup() -> (Env, soroban_sdk::Address) {
     let env = Env::default();
     env.ledger().set_timestamp(1_000_000);
-    let contract = env.register(SubscriptionVault, ());
-    (env, contract)
+    let contract_id = env.register(crate::SubscriptionVault, ());
+    (env, contract_id)
 }
 
 #[test]
 fn test_write_and_get_snapshot() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
-        let sub_id = 1;
-        let period_index = 0;
+    let (env, contract_id) = setup();
+    let sub_id = 1;
+    let period_index = 0;
 
         let snapshot = BillingPeriodSnapshot {
             subscription_id: sub_id,
@@ -38,8 +32,8 @@ fn test_write_and_get_snapshot() {
             finalized_at: 200,
         };
 
+    env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
-
         let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
         assert_eq!(fetched, snapshot);
     });
@@ -47,10 +41,10 @@ fn test_write_and_get_snapshot() {
 
 #[test]
 fn test_list_period_snapshots_returns_latest_n() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
-        let sub_id = 2;
+    let (env, contract_id) = setup();
+    let sub_id = 2;
 
+    env.as_contract(&contract_id, || {
         for i in 0..5 {
             let snapshot = BillingPeriodSnapshot {
                 subscription_id: sub_id,
@@ -68,7 +62,7 @@ fn test_list_period_snapshots_returns_latest_n() {
         // Get latest 3
         let latest = list_period_snapshots(&env, sub_id, 3);
         assert_eq!(latest.len(), 3);
-
+        
         // Should return newest first
         assert_eq!(latest.get(0).unwrap().period_index, 4);
         assert_eq!(latest.get(1).unwrap().period_index, 3);
@@ -78,10 +72,9 @@ fn test_list_period_snapshots_returns_latest_n() {
 
 #[test]
 fn test_overwrite_closed_snapshot_rejected() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
-        let sub_id = 3;
-        let period_index = 0;
+    let (env, contract_id) = setup();
+    let sub_id = 3;
+    let period_index = 0;
 
         let mut snapshot = BillingPeriodSnapshot {
             subscription_id: sub_id,
@@ -94,6 +87,7 @@ fn test_overwrite_closed_snapshot_rejected() {
             finalized_at: 200,
         };
 
+    env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot.clone()).is_ok());
 
         // Try to update closed snapshot
@@ -105,10 +99,9 @@ fn test_overwrite_closed_snapshot_rejected() {
 
 #[test]
 fn test_empty_period_sets_empty_flag() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
-        let sub_id = 4;
-        let period_index = 0;
+    let (env, contract_id) = setup();
+    let sub_id = 4;
+    let period_index = 0;
 
         let snapshot = BillingPeriodSnapshot {
             subscription_id: sub_id,
@@ -121,6 +114,7 @@ fn test_empty_period_sets_empty_flag() {
             finalized_at: 200,
         };
 
+    env.as_contract(&contract_id, || {
         assert!(write_period_snapshot(&env, snapshot).is_ok());
 
         let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
@@ -130,11 +124,11 @@ fn test_empty_period_sets_empty_flag() {
 
 #[test]
 fn test_mixed_interval_and_usage_sets_both_flags() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
-        let sub_id = 5;
-        let period_index = 0;
+    let (env, contract_id) = setup();
+    let sub_id = 5;
+    let period_index = 0;
 
+    env.as_contract(&contract_id, || {
         // 1. Write usage charge
         let usage_snapshot = BillingPeriodSnapshot {
             subscription_id: sub_id,
@@ -162,7 +156,7 @@ fn test_mixed_interval_and_usage_sets_both_flags() {
         assert!(write_period_snapshot(&env, interval_snapshot).is_ok());
 
         let fetched = get_period_snapshot(&env, sub_id, period_index).unwrap();
-
+        
         // Assert merged state
         assert_eq!(fetched.total_charged, 1200);
         assert_eq!(fetched.total_usage_units, 20);
@@ -178,8 +172,9 @@ fn test_mixed_interval_and_usage_sets_both_flags() {
 
 #[test]
 fn test_integrity_checks() {
-    let (env, contract) = setup();
-    env.as_contract(&contract, || {
+    let (env, contract_id) = setup();
+    
+    env.as_contract(&contract_id, || {
         // Invalid boundaries
         let bad_bounds = BillingPeriodSnapshot {
             subscription_id: 6,

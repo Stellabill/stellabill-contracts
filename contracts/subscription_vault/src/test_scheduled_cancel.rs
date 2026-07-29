@@ -1,13 +1,14 @@
-use crate::{
-    Error, SubscriptionVault, SubscriptionVaultClient,
-};
+use crate::{Error, SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{
-    token::{StellarAssetClient as TokenAdminClient},
-    Address, Env,
-};
+use soroban_sdk::{token::StellarAssetClient as TokenAdminClient, Address, Env};
 
-fn setup() -> (Env, Address, SubscriptionVaultClient<'static>, TokenAdminClient<'static>, Address) {
+fn setup() -> (
+    Env,
+    Address,
+    SubscriptionVaultClient<'static>,
+    TokenAdminClient<'static>,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -20,7 +21,13 @@ fn setup() -> (Env, Address, SubscriptionVaultClient<'static>, TokenAdminClient<
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    client.init(&token, &7u32, &admin, &1_000_000i128, &(7 * 24 * 60 * 60u64));
+    client.init(
+        &token,
+        &7u32,
+        &admin,
+        &1_000_000i128,
+        &(7 * 24 * 60 * 60u64),
+    );
 
     (env, contract_id, client, token_admin, token)
 }
@@ -46,6 +53,7 @@ fn create_active_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     client.deposit_funds(&id, &subscriber, &PREPAID, &None);
     (id, subscriber, merchant, client.get_subscription(&id).token)
