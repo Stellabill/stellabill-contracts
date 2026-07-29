@@ -3480,3 +3480,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_split_billing;
+
+#[cfg(test)]
+mod test_multi_token_isolation;
