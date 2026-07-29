@@ -3,9 +3,10 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{
-    contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
-};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
+
+/// Current schema version for contract events.
+pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -217,48 +218,8 @@ pub enum DataKey {
     SubscriptionDispute(u32),
     /// Payout schedule configuration for a merchant. Discriminant 53.
     PayoutSchedule(Address),
-    /// Pending protocol treasury/fee update queued for a later execution. Discriminant 54.
-    PendingTreasuryChange,
-    /// Transfer intent keyed by subscription ID (instance). Discriminant 54.
-    TransferIntent(u32),
-    /// KYC requirements and merchant status. Discriminant 55.
-    Kyc(KycKey),
-    /// Coupon configuration keyed by code. Discriminant 56.
-    Coupon(soroban_sdk::Symbol),
-    /// Coupon redemption counter keyed by code. Discriminant 57.
-    CouponRedemptions(soroban_sdk::Symbol),
-    /// Issued credentials keyed by subscription ID. Discriminant 58.
-    Credential(u32),
-    /// Timestamp of the most recent admin-config mutation for a given key label,
-    /// hashed to `BytesN<32>` for collision-free per-key cooldown tracking.
-    /// Discriminant 59.
-    AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
-    SubscriberCreateCap,
-    SubscriberCreateWindow(Address),
-    /// Global whitelist mode toggle. When true, merchants must be approved before registering. Discriminant 61.
-    MerchantWhitelistMode,
-    /// Per-merchant approval status under whitelist mode. Discriminant 62.
-    MerchantApproved(Address),
-    /// Anti-frontrunning charge salt keyed by subscription ID (instance). Discriminant 63.
-    ChargeSalt(u32),
-    /// Consecutive InsufficientBalance charge failures for a subscription. Discriminant 62.
-    ChargeFailureCounter(u32),
-    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 66.
-    AutoPauseThreshold,
-    /// Buyout premium in basis points.
-    BuyoutPremiumBps,
-    /// Coupon binding keyed by subscription ID.
-    SubCoupon(u32),
-    /// Global tag allowlist.
-    TagAllowlist,
-    /// Per-merchant compliance tags.
-    MerchantTags(Address),
-    /// Per-merchant multisig configuration.
-    MerchantMultiSig(Address),
-    /// Per-subscriber active subscription count.
-    SubscriberActiveCount(Address),
-    /// Per-subscriber active cap override.
-    SubscriberActiveCapOverride(Address),
+    /// Pending subscriber emergency withdrawal intent. Discriminant 54.
+    EmergencyWithdrawIntent(u32),
 }
 
 impl DataKey {
@@ -319,27 +280,7 @@ impl DataKey {
             DataKey::NextDisputeId => 51,
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
-            DataKey::PendingTreasuryChange => 54,
-            DataKey::TransferIntent(_) => 54,
-            DataKey::Kyc(_) => 55,
-            DataKey::Coupon(_) => 56,
-            DataKey::CouponRedemptions(_) => 57,
-            DataKey::Credential(_) => 58,
-            DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 59,
-            DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::MerchantWhitelistMode => 61,
-            DataKey::MerchantApproved(_) => 62,
-            DataKey::ChargeSalt(_) => 63,
-            DataKey::ChargeFailureCounter(_) => 64,
-            DataKey::AutoPauseThreshold => 65,
-            DataKey::BuyoutPremiumBps => 66,
-            DataKey::SubCoupon(_) => 67,
-            DataKey::TagAllowlist => 68,
-            DataKey::MerchantTags(_) => 69,
-            DataKey::MerchantMultiSig(_) => 70,
-            DataKey::SubscriberActiveCount(_) => 71,
-            DataKey::SubscriberActiveCapOverride(_) => 72,
+            DataKey::EmergencyWithdrawIntent(_) => 54,
         }
     }
 
@@ -517,6 +458,15 @@ impl Subscription {
             None => false,
         }
     }
+}
+
+/// Pending emergency-withdraw intent for a paused or cancelled subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawIntent {
+    pub subscription_id: u32,
+    pub requested_at: u64,
+    pub requested_status: SubscriptionStatus,
 }
 
 /// A non-transferable (soulbound) credential badge linking a subscription.
@@ -863,11 +813,14 @@ pub enum Error {
     MerchantPaused = 4009,
     /// Reentrancy detected - function called recursively during execution.
     Reentrancy = 4010,
-    /// The scheduled treasury change has not yet reached its effective timestamp.
-    TimelockNotElapsed = 4011,
-    /// Subscription is not in GracePeriod for a buyout operation.
-    NotInGracePeriod = 4011,
-    CooldownActive = 4012,
+    /// A subscriber emergency withdrawal is already pending for this subscription.
+    EmergencyWithdrawCooldownActive = 4011,
+    /// No emergency-withdraw intent exists for this subscription.
+    EmergencyWithdrawNotRequested = 4012,
+    /// The subscription state changed after the emergency-withdraw request was created.
+    EmergencyWithdrawStateChanged = 4013,
+    /// Emergency withdrawals are only allowed for paused or cancelled subscriptions.
+    EmergencyWithdrawInvalidState = 4014,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -998,58 +951,7 @@ pub enum Error {
 impl Error {
     /// Returns the numeric code for this error.
     pub const fn to_code(self) -> u32 {
-<<<<<<< HEAD
-        match self {
-            Error::NotFound => 404,
-            Error::Unauthorized => 401,
-            Error::Forbidden => 403,
-            Error::SubscriptionExpired => 410,
-            Error::IntervalNotElapsed => 1001,
-            Error::NotActive => 1002,
-            Error::InvalidStatusTransition => 400,
-            Error::BelowMinimumTopup => 402,
-            Error::Overflow => 1012,
-            Error::Underflow => 1010,
-            Error::InsufficientBalance => 1003,
-            Error::InvalidAmount => 1006,
-            Error::UsageNotEnabled => 1004,
-            Error::InsufficientPrepaidBalance => 1005,
-            Error::Replay => 1007,
-            Error::InvalidRecoveryAmount => 1008,
-            Error::EmergencyStopActive => 1009,
-            Error::RecoveryNotAllowed => 1011,
-            Error::InvalidInput => 1015,
-            Error::NotInitialized => 1013,
-            Error::InvalidExportLimit => 1014,
-            Error::Reentrancy => 1016,
-            Error::LifetimeCapReached => 1017,
-            Error::AlreadyInitialized => 1018,
-            Error::MerchantPaused => 1019,
-            Error::MetadataKeyLimitReached => 1023,
-            Error::MetadataKeyTooLong => 1024,
-            Error::MetadataValueTooLong => 1025,
-            Error::SubscriberBlocklisted => 1026,
-            Error::OracleNotConfigured => 1027,
-            Error::OraclePriceUnavailable => 1028,
-            Error::OraclePriceStale => 1029,
-            Error::OraclePriceInvalid => 1030,
-            Error::SubscriptionLimitReached => 429,
-            Error::MaxConcurrentSubscriptionsReached => 1031,
-            Error::CreditLimitExceeded => 1032,
-            Error::RateLimitExceeded => 1033,
-            Error::UsageCapExceeded => 1034,
-            Error::BurstLimitExceeded => 1035,
-            Error::SelfRotation => 1036,
-            Error::InvalidNewAdmin => 1037,
-            Error::ProposalNotFound => 1038,
-            Error::ProposalExpired => 1039,
-            Error::InvalidClaimant => 1040,
-            Error::ProposalAlreadyExists => 1041,
-            Error::NoActiveProposal => 1042,
-        }
-=======
         self as u32
->>>>>>> upstream/main
     }
 }
 
@@ -2073,6 +1975,17 @@ pub struct SubscriberWithdrawalEvent {
 
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct SubscriberEmergencyWithdrawEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub cooldown_started_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct OneOffChargedEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
@@ -2701,6 +2614,47 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
+    if decimals < 9 {
+        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    } else {
+        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
+        Ok(amount / factor)
+    }
+}
+
+pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
+    if decimals < 9 {
+        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
+        Ok(amount / factor)
+    } else {
+        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    }
+}
 
 #[cfg(test)]
 mod known_keys_tests {
@@ -2902,7 +2856,43 @@ pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, E
         if raw % scale != 0 {
             return Err(Error::InvalidInput);
         }
-        Ok(raw / scale)
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
+        assert!(n > 0, "variant count must be non-zero");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
+            .into_iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+        assert!(seen.iter().all(|&s| s));
+        assert_eq!(variants.len(), 50);
     }
 }
 

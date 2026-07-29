@@ -42,15 +42,14 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
-    PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, ReferralAttributedEvent,
-    SubscriberCreateWindow,
-    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
-    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
-    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
-    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error, FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate,
+    PlanTemplateUpdatedEvent, SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
+    Subscription, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
+    SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
+    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -147,20 +146,6 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
         .ok_or(Error::NotFound)
 }
 
-/// Helper to conditionally extend a persistent storage entry's TTL.
-///
-/// Checks the entry's remaining TTL via `get_ttl`. If the remaining TTL is
-/// less than `threshold`, invokes `extend_ttl` to extend it to `extend_to`.
-/// This avoids unnecessary write operations when the remaining TTL is already
-/// sufficient.
-pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
-    if env.storage().persistent().get_ttl(key) < threshold {
-        env.storage()
-            .persistent()
-            .extend_ttl(key, threshold, extend_to);
-    }
-}
-
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
@@ -170,6 +155,23 @@ pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscrip
         .persistent()
         .set(&DataKey::Sub(subscription_id), sub);
     extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
+}
+
+fn write_emergency_withdraw_intent(
+    env: &Env,
+    subscription_id: u32,
+    intent: &EmergencyWithdrawIntent,
+) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::EmergencyWithdrawIntent(subscription_id), intent);
+    extend_subscription_ttl(env, &DataKey::EmergencyWithdrawIntent(subscription_id));
+}
+
+fn remove_emergency_withdraw_intent(env: &Env, subscription_id: u32) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::EmergencyWithdrawIntent(subscription_id));
 }
 
 fn sub_plan_key(subscription_id: u32) -> DataKey {
@@ -675,11 +677,10 @@ pub fn do_create_subscription_with_token(
         .persistent()
         .set(&DataKey::Credential(id), &credential);
     // Extend TTL of credential just like subscription
-    maybe_extend_ttl(
-        env,
+    env.storage().persistent().extend_ttl(
         &DataKey::Credential(id),
-        SUB_TTL_THRESHOLD,
-        SUB_TTL_EXTEND_TO,
+        SUB_TTL_THRESHOLD as u32,
+        SUB_TTL_EXTEND_TO as u32,
     );
 
     env.events().publish(
@@ -1252,91 +1253,6 @@ pub fn do_unschedule_cancel(
             timestamp: env.ledger().timestamp(),
         },
     );
-    Ok(())
-}
-
-/// Toggle auto-renewal for a subscription.
-///
-/// When `enabled = false` the billing engine will **skip** interval charges
-/// once the interval has elapsed — halting billing at the next natural boundary.
-/// During the *renewal window* (one full interval after the flag was disabled)
-/// the subscriber or merchant may call `set_auto_renew(true)` to re-enable
-/// billing without re-creating the subscription, preserving all history and
-/// metadata. After the window closes the subscription must be cancelled and
-/// re-created to resume billing.
-///
-/// # Authorization
-/// Only the subscription's `subscriber` or `merchant` may toggle.
-/// Any other caller receives [`Error::Forbidden`].
-///
-/// # Guard
-/// Cancelled and expired subscriptions are rejected.
-///
-/// # Events
-/// Emits [`AutoRenewToggledEvent`] on every call (including re-enabling within
-/// the renewal window).
-pub fn do_set_auto_renew(
-    env: &Env,
-    subscription_id: u32,
-    authorizer: Address,
-    enabled: bool,
-) -> Result<(), Error> {
-    authorizer.require_auth();
-
-    let mut sub = get_subscription(env, subscription_id)?;
-
-    let now = env.ledger().timestamp();
-
-    // Reject on terminal states.
-    if sub.status == SubscriptionStatus::Cancelled {
-        return Err(Error::InvalidStatusTransition);
-    }
-    if sub.is_expired(now) {
-        return Err(Error::SubscriptionExpired);
-    }
-
-    // Only the subscriber or merchant may change the flag.
-    if authorizer != sub.subscriber && authorizer != sub.merchant {
-        return Err(Error::Forbidden);
-    }
-
-    // When re-enabling after a disable, enforce the renewal window.
-    if enabled {
-        if !sub.auto_renew {
-            // If the renewal window has closed, the subscription cannot be
-            // silently re-activated — it must be cancelled and re-created.
-            if !sub.is_in_renewal_window(now) {
-                return Err(Error::RenewalWindowClosed);
-            }
-            // Clear the disabled timestamp on successful re-enable.
-            sub.auto_renew_disabled_at = None;
-        }
-        // If already enabled, this is a no-op (idempotent).
-    } else {
-        // Disabling for the first time (or after a previous re-enable).
-        if sub.auto_renew {
-            sub.auto_renew_disabled_at = Some(now);
-        }
-        // If already disabled, the disable timestamp is preserved — the
-        // window continues to count from the *first* disable.
-    }
-
-    sub.auto_renew = enabled;
-    write_subscription(env, subscription_id, &sub);
-
-    env.events().publish(
-        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
-        crate::types::AutoRenewToggledEvent {
-            subscription_id,
-            subscriber: sub.subscriber.clone(),
-            merchant: sub.merchant.clone(),
-            enabled,
-            authorizer,
-            timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
-
     Ok(())
 }
 
@@ -2110,28 +2026,7 @@ pub fn do_charge_one_off(
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
-    }
 
-    write_subscription(env, subscription_id, &sub);
-
-    // Emit protocol fee event after state is written
-    if let Some((treasury, fee)) = should_emit_fee_event {
-        env.events().publish(
-            (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-            crate::types::ProtocolFeeChargedEvent {
-                subscription_id,
-                merchant: sub.merchant.clone(),
-                token: sub.token.clone(),
-                fee_amount: fee,
-                treasury,
-                timestamp: now,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
-            },
-        );
-    }
-
-    // Emit lifetime cap reached event after state is written
-    if cap_reached {
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
                 (symbol_short!("cap_reach"), subscription_id),
@@ -2179,6 +2074,121 @@ pub fn do_charge_one_off(
         );
         crate::idempotency::push_key(env, subscription_id, &hashed);
     }
+
+    Ok(())
+}
+
+pub fn do_request_emergency_withdraw(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+) -> Result<(), Error> {
+    subscriber.require_auth();
+
+    let sub = get_subscription(env, subscription_id)?;
+    if subscriber != sub.subscriber {
+        return Err(Error::Forbidden);
+    }
+
+    if sub.status != SubscriptionStatus::Paused && sub.status != SubscriptionStatus::Cancelled {
+        return Err(Error::EmergencyWithdrawInvalidState);
+    }
+
+    if sub.prepaid_balance <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    if env
+        .storage()
+        .persistent()
+        .has(&DataKey::EmergencyWithdrawIntent(subscription_id))
+    {
+        return Err(Error::EmergencyWithdrawCooldownActive);
+    }
+
+    let now = env.ledger().timestamp();
+    let intent = EmergencyWithdrawIntent {
+        subscription_id,
+        requested_at: now,
+        requested_status: sub.status,
+    };
+    write_emergency_withdraw_intent(env, subscription_id, &intent);
+
+    env.events().publish(
+        (Symbol::new(env, "sub_emergency_withdraw"), subscription_id),
+        SubscriberEmergencyWithdrawEvent {
+            subscription_id,
+            subscriber: subscriber.clone(),
+            amount: sub.prepaid_balance,
+            cooldown_started_at: now,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+pub fn do_finalize_emergency_withdraw(
+    env: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+) -> Result<(), Error> {
+    subscriber.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+    if subscriber != sub.subscriber {
+        return Err(Error::Forbidden);
+    }
+
+    let intent = env
+        .storage()
+        .persistent()
+        .get::<_, EmergencyWithdrawIntent>(&DataKey::EmergencyWithdrawIntent(subscription_id))
+        .ok_or(Error::EmergencyWithdrawNotRequested)?;
+
+    if sub.status != intent.requested_status {
+        return Err(Error::EmergencyWithdrawStateChanged);
+    }
+
+    if sub.status != SubscriptionStatus::Paused && sub.status != SubscriptionStatus::Cancelled {
+        return Err(Error::EmergencyWithdrawInvalidState);
+    }
+
+    let now = env.ledger().timestamp();
+    if intent.requested_at + 72 * 60 * 60 > now {
+        return Err(Error::EmergencyWithdrawCooldownActive);
+    }
+
+    let amount_to_refund = sub.prepaid_balance;
+    if amount_to_refund <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    sub.prepaid_balance = 0;
+    write_subscription(env, subscription_id, &sub);
+    remove_emergency_withdraw_intent(env, subscription_id);
+
+    let token_addr = sub.token.clone();
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &subscriber,
+        &amount_to_refund,
+    );
+    crate::accounting::sub_total_accounted(env, &token_addr, amount_to_refund)?;
+
+    env.events().publish(
+        (Symbol::new(env, "sub_withdrawn"), subscription_id),
+        SubscriberWithdrawalEvent {
+            subscription_id,
+            subscriber,
+            token: token_addr,
+            amount: amount_to_refund,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
 
     Ok(())
 }
@@ -3070,160 +3080,6 @@ pub fn do_configure_usage_limits(
             rate_window_secs,
             burst_min_interval_secs,
             usage_cap_units,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
-
-    Ok(())
-}
-
-pub fn do_initiate_transfer(
-    env: &Env,
-    subscription_id: u32,
-    from: Address,
-    to: Address,
-    expires_at: u64,
-) -> Result<(), Error> {
-    from.require_auth();
-
-    let sub = get_subscription(env, subscription_id)?;
-    if sub.subscriber != from {
-        return Err(Error::Unauthorized);
-    }
-    if sub.status == SubscriptionStatus::Cancelled {
-        return Err(Error::InvalidStatusTransition);
-    }
-    if sub.is_expired(env.ledger().timestamp()) {
-        return Err(Error::SubscriptionExpired);
-    }
-
-    if expires_at <= env.ledger().timestamp() {
-        return Err(Error::InvalidInput);
-    }
-
-    if from == to {
-        return Err(Error::InvalidTransferTarget);
-    }
-
-    let intent = crate::types::TransferIntent {
-        subscription_id,
-        from: from.clone(),
-        to: to.clone(),
-        expires_at,
-    };
-
-    env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);
-
-    env.events().publish(
-        (Symbol::new(env, "transfer_intent_created"), subscription_id),
-        crate::types::TransferIntentCreatedEvent {
-            subscription_id,
-            from,
-            to,
-            expires_at,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
-
-    Ok(())
-}
-
-pub fn do_accept_transfer(
-    env: &Env,
-    subscription_id: u32,
-    to: Address,
-) -> Result<(), Error> {
-    to.require_auth();
-
-    let intent_key = DataKey::TransferIntent(subscription_id);
-    let intent: crate::types::TransferIntent = env
-        .storage()
-        .instance()
-        .get(&intent_key)
-        .ok_or(Error::TransferIntentNotFound)?;
-
-    if intent.to != to {
-        return Err(Error::Unauthorized);
-    }
-
-    if intent.expires_at <= env.ledger().timestamp() {
-        env.storage().instance().remove(&intent_key);
-        return Err(Error::TransferIntentExpired);
-    }
-
-    let mut sub = get_subscription(env, subscription_id)?;
-    
-    // Clean up intent
-    env.storage().instance().remove(&intent_key);
-
-    // Enforce credit limit for new subscriber
-    let liability_amount = if sub.status == SubscriptionStatus::Active { sub.amount } else { 0 };
-    let additional_liability = safe_add(sub.prepaid_balance, liability_amount)?;
-    enforce_credit_limit_for_delta(env, &to, &sub.token, additional_liability)?;
-
-    // Remove from old subscriber's index
-    let old_subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
-    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&old_subscriber_key) {
-        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
-            let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
-            ids.remove(idx_u32);
-            env.storage().instance().set(&old_subscriber_key, &ids);
-        }
-    }
-
-    // Add to new subscriber's index
-    let new_subscriber_key = DataKey::SubscriberSubs(to.clone());
-    let mut new_ids: Vec<u32> = env
-        .storage()
-        .instance()
-        .get(&new_subscriber_key)
-        .unwrap_or(Vec::new(env));
-    new_ids.push_back(subscription_id);
-    env.storage().instance().set(&new_subscriber_key, &new_ids);
-
-    sub.subscriber = to.clone();
-    write_subscription(env, subscription_id, &sub);
-
-    env.events().publish(
-        (Symbol::new(env, "subscription_transferred"), subscription_id),
-        crate::types::SubscriptionTransferredEvent {
-            subscription_id,
-            from: intent.from,
-            to,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
-
-    Ok(())
-}
-
-pub fn do_veto_transfer(
-    env: &Env,
-    subscription_id: u32,
-    merchant: Address,
-) -> Result<(), Error> {
-    merchant.require_auth();
-
-    let sub = get_subscription(env, subscription_id)?;
-    if sub.merchant != merchant {
-        return Err(Error::Unauthorized);
-    }
-
-    let intent_key = DataKey::TransferIntent(subscription_id);
-    if !env.storage().instance().has(&intent_key) {
-        return Err(Error::TransferIntentNotFound);
-    }
-
-    env.storage().instance().remove(&intent_key);
-
-    env.events().publish(
-        (Symbol::new(env, "transfer_vetoed"), subscription_id),
-        crate::types::TransferVetoedEvent {
-            subscription_id,
-            merchant,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
