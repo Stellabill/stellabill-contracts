@@ -26,9 +26,9 @@ use crate::types::{
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
     MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate,
-    ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
-    is_valid_allowed_operations, MAX_FEE_BIPS, OP_CHARGE,
+    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
+    is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -805,7 +805,7 @@ pub fn withdraw_merchant_funds_for_token(
 
     env.events().publish(
         (
-            Symbol::new(env, "withdrawn"),
+            TOPIC_WITHDRAWN,
             merchant.clone(),
             token_addr.clone(),
         ),
@@ -999,7 +999,7 @@ fn flush_merchant_token(
 
     env.events().publish(
         (
-            Symbol::new(env, "withdrawn"),
+            TOPIC_WITHDRAWN,
             merchant.clone(),
             token.clone(),
         ),

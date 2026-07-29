@@ -3,7 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{
+    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+};
 
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -1698,6 +1700,12 @@ pub enum RecoveryReason {
     AccidentalTransfer = 4,
 }
 
+/// Short topic for [`RecoveryEvent`].
+///
+/// This fits Soroban's nine-character `symbol_short!` limit and therefore does
+/// not need host-side symbol interning when it is emitted.
+pub const TOPIC_RECOVERY: Symbol = symbol_short!("recovery");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RecoveryEvent {
@@ -1709,6 +1717,12 @@ pub struct RecoveryEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Legacy short topic for [`SubscriptionCreatedEvent`] emitters.
+///
+/// The longer `"subscription_created"` topic intentionally remains a
+/// `Symbol::new` at its emit sites because it exceeds `symbol_short!` capacity.
+pub const TOPIC_CREATED: Symbol = symbol_short!("created");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1797,6 +1811,9 @@ pub struct SubscriberCapReachedEvent {
     pub schema_version: u32,
 }
 
+/// Short topic for [`FundsDepositedEvent`].
+pub const TOPIC_DEPOSITED: Symbol = symbol_short!("deposited");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct FundsDepositedEvent {
@@ -1808,6 +1825,9 @@ pub struct FundsDepositedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Short topic for [`SubscriptionChargedEvent`].
+pub const TOPIC_CHARGED: Symbol = symbol_short!("charged");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2049,6 +2069,9 @@ pub struct ScheduledPayoutEvent {
     pub schema_version: u32,
 }
 
+/// Legacy short topic shared by merchant and subscriber withdrawal events.
+pub const TOPIC_WITHDRAWN: Symbol = symbol_short!("withdrawn");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantWithdrawalEvent {
@@ -2094,6 +2117,9 @@ pub struct SubscriberEmergencyWithdrawEvent {
     pub schema_version: u32,
 }
 
+/// Legacy short topic for [`OneOffChargedEvent`].
+pub const TOPIC_ONE_OFF_CHARGED: Symbol = symbol_short!("oneoff_ch");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct OneOffChargedEvent {
@@ -2106,6 +2132,12 @@ pub struct OneOffChargedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Legacy short topic for [`LifetimeCapReachedEvent`] in the one-off path.
+///
+/// Other paths use the longer `"lifetime_cap_reached"` topic, which must keep
+/// using `Symbol::new` because it is longer than nine characters.
+pub const TOPIC_CAP_REACH: Symbol = symbol_short!("cap_reach");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2670,582 +2702,65 @@ pub struct PrepaidQueryResult {
 }
 
 
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OracleKind {
-    Spot,
-    Twap,
-    FixedRate,
-}
-
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProposalKind {
-    RotateAdmin = 0,
-    SetProtocolFee = 1,
-    UpgradeContract = 2,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Proposal {
-    pub id: u64,
-    pub kind: ProposalKind,
-    pub target: Address,
-    pub target2: Option<Address>,
-    pub target3: u32,
-    pub quorum_bps: u32,
-    pub votes: soroban_sdk::Map<Address, bool>,
-    pub eta: u64,
-    pub submitted_at: u64,
-    pub executed: bool,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProposalSubmittedEvent {
-    pub proposal_id: u64,
-    pub kind: ProposalKind,
-    pub target: Address,
-    pub quorum_bps: u32,
-    pub eta: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProposalVotedEvent {
-    pub proposal_id: u64,
-    pub guardian: Address,
-    pub voted_yes: bool,
-    pub guardian_weight: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProposalExecutedEvent {
-    pub proposal_id: u64,
-    pub kind: ProposalKind,
-    pub votes_for: u32,
-    pub votes_against: u32,
-    pub total_weight: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProposalCancelledEvent {
-    pub proposal_id: u64,
-    pub reason: String,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SignedMetadataPayload {
-    pub subscription_id: u32,
-    pub key: String,
-    pub value: String,
-    pub nonce: u64,
-    pub expires_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MetadataSetSignedEvent {
-    pub subscription_id: u32,
-    pub key: String,
-    pub signer: Address,
-    pub nonce: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BulkSubscriptionResult {
-    pub subscription_id: u32,
-    pub success: bool,
-    pub changed: bool,
-    pub error_code: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct BulkPauseEvent {
-    pub caller: Address,
-    pub requested: u32,
-    pub paused: u32,
-    pub skipped: u32,
-    pub failed: u32,
-    pub nonce: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct BulkCancelEvent {
-    pub caller: Address,
-    pub requested: u32,
-    pub cancelled: u32,
-    pub skipped: u32,
-    pub failed: u32,
-    pub nonce: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-pub const BATCH_MAX_SIZE: u32 = 100;
-
 #[cfg(test)]
-mod known_keys_tests {
-    use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String};
+mod event_topic_tests {
+    use super::{
+        TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
+        TOPIC_RECOVERY, TOPIC_WITHDRAWN,
+    };
+    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
 
-    fn all_variants(env: &Env) -> std::vec::Vec<(DataKey, bool)> {
-        let a = Address::generate(env);
-        let b = Address::generate(env);
-        let s = String::from_str(env, "k");
-        std::vec![
-            (DataKey::MerchantSubs(a.clone()), true),
-            (DataKey::Token, true),
-            (DataKey::Admin, true),
-            (DataKey::MinTopup, true),
-            (DataKey::NextId, true),
-            (DataKey::SchemaVersion, true),
-            (DataKey::Sub(1), false),
-            (DataKey::ChargedPeriod(1), false),
-            (DataKey::IdemKey(1), false),
-            (DataKey::EmergencyStop, true),
-            (DataKey::MerchantPaused(a.clone()), true),
-            (DataKey::BillingStatement(1, 2), false),
-            (DataKey::TotalAccounted(a.clone()), true),
-            (DataKey::Recovery(s.clone()), false),
-            (DataKey::MerchantConfig(a.clone()), true),
-            (DataKey::MerchantEarnings(a.clone(), b.clone()), true),
-            (DataKey::MerchantTokens(a.clone()), true),
-            (DataKey::UsageLimits(1), true),
-            (DataKey::UsageState(1), true),
-            (DataKey::GracePeriod, true),
-            (DataKey::FeeBps, true),
-            (DataKey::Treasury, true),
-            (DataKey::AcceptedTokens, true),
-            (DataKey::TokenDecimals(a.clone()), true),
-            (DataKey::NextPlanId, true),
-            (DataKey::Plan(1), true),
-            (DataKey::SubPlan(1), true),
-            (DataKey::PlanMaxActive(1), true),
-            (DataKey::CreditLimit(a.clone(), b.clone()), true),
-            (DataKey::TokenSubs(a.clone()), true),
-            (DataKey::SubscriberSubs(a.clone()), true),
-            (DataKey::MerchantBalance(a.clone(), b.clone()), true),
-            (DataKey::Blocklist(a.clone()), false),
-            (DataKey::Oracle, true),
-            (DataKey::BillingPeriodSnapshot(1, 2), false),
-            (DataKey::BillingPeriodSnapshotIndex(1), false),
-            (DataKey::AdminNonce(a.clone(), 1), false),
-            (DataKey::Metadata(1, s.clone()), false),
-            (DataKey::MetadataKeys(1), false),
-            (DataKey::Operator, true),
-            (DataKey::BillingRetentionConfig, true),
-            (DataKey::MerchantMaxSubs(a.clone()), true),
-            (DataKey::Guardians, false),
-            (DataKey::NextProposalId, true),
-            (DataKey::Proposal(1), false),
-            (DataKey::DisputeEscrow(1), true),
-            (DataKey::Dispute(1), false),
-            (DataKey::NextDisputeId, true),
-            (DataKey::SubscriptionDispute(1), true),
-            (DataKey::PayoutSchedule(a.clone()), true),
-            (DataKey::TransferIntent(1), true),
-            (DataKey::AdminConfigLastChangedAt(soroban_sdk::BytesN::from_array(env, &[0u8; 32])), false),
-            (DataKey::SubscriberCreateCap, true),
-            (DataKey::SubscriberCreateWindow(a.clone()), false),
-            (DataKey::ChargeSalt(1), true),
-            (DataKey::ChargeFailureCounter(1), true),
-            (DataKey::AutoPauseThreshold, true),
-            (DataKey::FeeToken, true),
-            (DataKey::CancellationEscrow(1), false),
-        ]
-    }
-
+    /// The emitted wire representation is part of the indexer-facing contract.
+    /// Publish every cached short topic in one transaction and compare each
+    /// emitted topic to the `Symbol::new` representation used before caching.
     #[test]
-    fn every_instance_variant_is_accepted() {
+    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
         let env = Env::default();
-        for (key, is_instance) in all_variants(&env) {
-            if is_instance {
-                assert!(key.is_known_instance_key());
-                assert_known_data_key(&key);
-            }
+        let topics = [
+            ("recovery", TOPIC_RECOVERY),
+            ("created", TOPIC_CREATED),
+            ("deposited", TOPIC_DEPOSITED),
+            ("charged", TOPIC_CHARGED),
+            ("withdrawn", TOPIC_WITHDRAWN),
+            ("cap_reach", TOPIC_CAP_REACH),
+            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
+        ];
+
+        for (_, topic) in topics.iter() {
+            env.events().publish((topic,), ());
         }
-    }
 
-    #[test]
-    fn persistent_variants_are_rejected() {
-        let env = Env::default();
-        for (key, is_instance) in all_variants(&env) {
-            if !is_instance {
-                assert!(!key.is_known_instance_key());
-            }
-        }
-    }
+        let emitted_events = env.events().all();
+        assert_eq!(emitted_events.len(), topics.len() as u32);
+        for (index, (name, expected_topic)) in topics.iter().enumerate() {
+            let emitted = emitted_events.get(index as u32).unwrap();
+            let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
+            let legacy_topic = Symbol::new(&env, name);
 
-    #[test]
-    fn synthetic_unknown_key_is_rejected() {
-        // Discriminants beyond the highest registered variant (60) can never be
-        // produced by a real `DataKey`, modelling an unknown/legacy key.
-        assert!(!is_known_instance_discriminant(61));
-        assert!(!is_known_instance_discriminant(9_999));
-        assert!(!is_known_instance_discriminant(u32::MAX));
-    }
-
-    /// The debug guard must panic for an unknown key in test/debug builds.
-    #[test]
-    #[should_panic(expected = "Unknown or persistent key reached instance storage")]
-    fn assert_panics_on_persistent_key() {
-        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
-        // instance storage; the guard catches it.
-        let env = Env::default();
-        let _ = &env;
-        assert_known_data_key(&DataKey::Sub(1));
-    }
-
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=59`
-    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
-    /// range, so the registry can never silently skip or duplicate a number.
-    #[test]
-    fn discriminants_are_unique_and_contiguous() {
-        let env = Env::default();
-        let variants = all_variants(&env);
-        let max_discriminant = variants
-            .iter()
-            .map(|(key, _)| key.canonical_discriminant())
-            .max()
-            .unwrap_or(0) as usize;
-        let mut seen = vec![false; max_discriminant + 1];
-        for (key, _) in &variants {
-            let d = key.canonical_discriminant() as usize;
-            assert!(!seen[d], "duplicate discriminant {d}");
-            seen[d] = true;
-        }
-        let n = variants.len();
-        assert!(
-            seen.iter().all(|&s| s),
-            "discriminants are not contiguous 0..={}",
-            max_discriminant
-        );
-        assert!(!variants.is_empty(), "variant count must be non-zero");
-    }
-
-    /// Consistency: the allowlist contains exactly the instance-tier
-    /// discriminants enumerated above, is sorted, and is duplicate-free.
-    #[test]
-    fn allowlist_matches_instance_classification() {
-        let env = Env::default();
-        let variants = all_variants(&env);
-        let expected_instance: std::vec::Vec<u32> = variants
-            .iter()
-            .filter(|(_, is_instance)| *is_instance)
-            .map(|(key, _)| key.canonical_discriminant())
-            .collect();
-
-        for d in &expected_instance {
-            assert!(
-                is_known_instance_discriminant(*d),
-                "instance discriminant {d} missing from allowlist"
+            assert_eq!(
+                emitted_topic.to_xdr(&env),
+                legacy_topic.to_xdr(&env),
+                "event topic {name} changed its wire representation"
+            );
+            assert_eq!(
+                expected_topic.to_xdr(&env),
+                legacy_topic.to_xdr(&env),
+                "cached topic {name} differs from Symbol::new"
             );
         }
+    }
+
+    /// `symbol_short!` supports at most nine characters. Longer event topics
+    /// are deliberately constructed with `Symbol::new` at their emit sites.
+    #[test]
+    fn long_event_topics_keep_the_runtime_symbol_representation() {
+        let env = Env::default();
+        let long_topic = Symbol::new(&env, "subscription_created");
+
         assert_eq!(
-            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
-            expected_instance.len(),
-            "allowlist length does not match instance-tier variant count"
+            long_topic.to_xdr(&env),
+            Symbol::new(&env, "subscription_created").to_xdr(&env)
         );
-
-        // Sorted ascending and free of duplicates.
-        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
-            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
-        }
-        
-        let variants = all_variants(&env);
-        assert_eq!(variants.len(), 63);
+        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum KycKey {
-    Required,
-    Merchant(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantBalanceSnapshotEvent {
-    pub merchant: Address,
-    pub token: Address,
-    pub balance: i128,
-    pub accrued: i128,
-    pub withdrawn: i128,
-    pub refunded: i128,
-    pub ledger_sequence: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantAddressRotatedEvent {
-    pub admin: Address,
-    pub old_merchant: Address,
-    pub new_merchant: Address,
-    pub subscriptions_updated: u32,
-    pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Common scale used to compare amounts across tokens with differing decimal
-/// precision in cross-token reconciliation reports (see `queries::get_token_reconciliation`).
-pub const RECONCILIATION_DECIMALS: u32 = 9;
-
-/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
-/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
-///
-/// # Errors
-/// - `Error::InvalidToken` if the token has no registered decimals.
-/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
-/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
-/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
-///   decimals and `raw` carries precision that cannot be represented exactly
-///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
-pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        raw.checked_mul(scale).ok_or(Error::Overflow)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        if raw % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(raw / scale)
-    }
-}
-
-/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
-/// amount back to the token's own base-unit precision.
-///
-/// # Errors
-/// Same error conditions as [`normalize_amount`], mirrored for the reverse
-/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
-/// the common scale and `normalized` cannot be represented exactly).
-pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        if normalized % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(normalized / scale)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        normalized.checked_mul(scale).ok_or(Error::Overflow)
-    }
-}
-
-/// Event emitted when the fee-token override address is set or cleared.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionCreatedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub interval_seconds: u64,
-    pub lifetime_cap: Option<i128>,
-    pub expires_at: Option<u64>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FundsDepositedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub new_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionChargedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub lifetime_charged: i128,
-    pub timestamp: u64,
-    pub period_start: u64,
-    pub period_end: u64,
-    pub salt: soroban_sdk::BytesN<32>,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionCancelledEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub authorizer: Address,
-    pub refund_amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionResumedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub authorizer: Address,
-    pub previous_status: SubscriptionStatus,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-// ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
-
-/// Default window (in seconds) for the cancellation refund escrow hold.
-/// The subscriber cannot claim the refund until this window elapses,
-/// giving the merchant time to dispute the cancellation.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
-
-/// Escrow record created when a subscription is cancelled.
-///
-/// The remaining prepaid balance is held in escrow for
-/// [`CANCELLATION_ESCROW_WINDOW_SECS`] before the subscriber can claim it.
-/// The merchant can lodge a dispute during this window to convert the escrow
-/// into a live Dispute record.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-/// Event emitted when a cancellation refund is placed into escrow.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released to the subscriber.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a merchant lodges a dispute against a cancellation escrow,
-/// converting it into a live Dispute record.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
 }

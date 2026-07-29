@@ -40,11 +40,11 @@ use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
     Error, FeeConvertedEvent, GracePeriodEnteredEvent, LifetimeCapReachedEvent,
     SubscriptionAutoPausedEvent, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
+    SubscriptionChargedEvent, SubscriptionStatus, TOPIC_CHARGED, UsageChargeRejectedEvent, UsageChargeResult,
     UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
-use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
+use soroban_sdk::{Address, Env, String, Symbol};
 
 /// Resolve the effective fee rate in basis points for a charge to `merchant`.
 ///
@@ -621,7 +621,7 @@ pub fn charge_one(
             }
 
             env.events().publish(
-                (symbol_short!("charged"),),
+                (TOPIC_CHARGED,),
                 SubscriptionChargedEvent {
                     subscription_id,
                     subscriber: sub.subscriber.clone(),

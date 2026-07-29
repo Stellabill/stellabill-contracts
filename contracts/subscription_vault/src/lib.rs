@@ -1401,7 +1401,7 @@ impl SubscriptionVault {
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1468,7 +1468,7 @@ impl SubscriptionVault {
 
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1574,7 +1574,7 @@ impl SubscriptionVault {
             sub_account_label,
         )?;
         env.events().publish(
-            (Symbol::new(&env, "created"), sub_id),
+            (types::TOPIC_CREATED, sub_id),
             SubscriptionCreatedEvent {
                 subscription_id: sub_id,
                 subscriber,
@@ -1611,7 +1611,7 @@ impl SubscriptionVault {
         )?;
         let sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish(
-            (Symbol::new(&env, "deposited"), subscription_id),
+            (types::TOPIC_DEPOSITED, subscription_id),
             FundsDepositedEvent {
                 subscription_id,
                 subscriber,
@@ -2279,7 +2279,7 @@ impl SubscriptionVault {
         let _period_end = timestamp;
 
         env.events().publish(
-            (Symbol::new(&env, "charged"),),
+            (types::TOPIC_CHARGED,),
             SubscriptionChargedEvent {
                 subscription_id,
                 subscriber: old_sub.subscriber,
@@ -2365,7 +2365,7 @@ impl SubscriptionVault {
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
             (
-                Symbol::new(&env, "withdrawn"),
+                types::TOPIC_WITHDRAWN,
                 merchant.clone(),
                 token.clone(),
             ),
