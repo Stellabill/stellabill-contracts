@@ -3321,7 +3321,7 @@ pub fn do_accept_transfer(
     // Remove from old subscriber's index
     let old_subscriber_key = DataKey::SubscriberSubs(sub.subscriber.clone());
     if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&old_subscriber_key) {
-        if let Some(idx) = ids.iter().position(|x| *x == subscription_id) {
+        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
             let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
             ids.remove(idx_u32);
             env.storage().instance().set(&old_subscriber_key, &ids);

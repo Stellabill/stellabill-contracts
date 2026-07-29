@@ -1622,7 +1622,7 @@ pub fn register_sub_account(
     merchant.require_auth();
 
     // Reject empty labels
-    let label_str: soroban_sdk::String = label.to_string();
+    let label_str = label.to_str(env);
     if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }
