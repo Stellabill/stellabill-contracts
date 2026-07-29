@@ -44,7 +44,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
         &true,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     let plan_id = client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
@@ -64,7 +65,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        ),
+                &None::<u32>,
+),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -77,7 +79,8 @@ fn test_emergency_stop_matrix_blocks_mutations_but_allows_reads() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        ),
+                &None::<u32>,
+),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(client.try_create_subscription_from_plan(&subscriber, &plan_id), Err(Ok(Error::EmergencyStopActive)));

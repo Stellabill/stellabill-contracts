@@ -965,7 +965,8 @@ fn test_set_ledger_expiration_emits_event() {
         &false,
         &None::<i128>,
         &Some(T0), // equal to now → rejected
-    );
+        &None::<u32>,
+);
 
     let _ = client.try_create_subscription_with_token(
         &subscriber,
@@ -976,7 +977,8 @@ fn test_set_ledger_expiration_emits_event() {
         &false,
         &None::<i128>,
         &Some(T0 - 1), // in the past → rejected
-    );
+        &None::<u32>,
+);
 
     // Now create a valid subscription — it should get id 0 (first ever).
     let res = client.try_create_subscription_with_token(
@@ -1020,7 +1022,8 @@ fn test_export_subscription_summary_preserves_ledger_bound() {
         &None::<i128>,
         &None::<u64>,
         &Some(bound_seq),
-    );
+        &None::<u32>,
+);
 
     let summary = client.export_subscription_summary(&admin, &sub_id);
     assert_eq!(
@@ -1059,7 +1062,8 @@ fn test_restore_snapshot_page_preserves_ledger_bound() {
         &None::<i128>,
         &None::<u64>,
         &Some(bound_seq),
-    );
+        &None::<u32>,
+);
 
     // Seed a merchant balance so the full-snapshot restoration is exercised.
     src_env.as_contract(&src_client.address, || {

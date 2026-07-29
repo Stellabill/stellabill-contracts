@@ -87,7 +87,8 @@ fn create_subscription_last_id_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     assert_eq!(id, u32::MAX - 1, "last valid id must be u32::MAX - 1");
     assert_eq!(
@@ -138,7 +139,8 @@ fn create_subscription_counter_unchanged_after_failure() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     assert_eq!(
         read_next_id(&env, &client.address),
@@ -167,7 +169,8 @@ fn create_subscription_with_token_last_id_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     assert_eq!(id, u32::MAX - 1);
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
@@ -216,7 +219,8 @@ fn create_subscription_with_token_counter_unchanged_after_failure() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
 }
