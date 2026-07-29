@@ -140,6 +140,14 @@ soroban contract build
 
 This produces the WASM under `target/` for deployment to Stellar (e.g. testnet/mainnet via Soroban CLI or your CI/CD).
 
+### 6. Install Git hooks
+
+Set up the repository pre-commit hook to enforce code formatting (`cargo fmt`) and linting (`cargo clippy`) on staged files prior to committing:
+
+```bash
+./scripts/install_git_hooks.sh
+```
+
 ---
 
 ## Build, test, and deploy
@@ -149,6 +157,7 @@ This produces the WASM under `target/` for deployment to Stellar (e.g. testnet/m
 | Build workspace | `cargo build` |
 | Run tests | `cargo test` |
 | Build contract WASM | `soroban contract build` |
+| Install Git hooks | `./scripts/install_git_hooks.sh` |
 | One-command local deploy | `./scripts/deploy_local.sh` |
 | Run with Soroban CLI (e.g. testnet) | See [Stellar docs](https://developers.stellar.org/docs/tools/soroban-cli) for `soroban contract deploy` and `invoke`. |
 
@@ -188,7 +197,7 @@ We welcome contributions from the community. Here’s how to get started and how
 1. **Fork** the repo on GitHub and clone your fork.
 2. **Create a branch** from `main` (or default branch):  
    `git checkout -b feature/your-feature` or `fix/your-fix`.
-3. **Set up locally** as in [Local setup](#local-setup). Run `cargo test` and `cargo build` to ensure everything passes.
+3. **Set up locally** as in [Local setup](#local-setup). Run `./scripts/install_git_hooks.sh` to enable pre-commit checks (`cargo fmt --check` and `cargo clippy`). Run `cargo test` and `cargo build` to ensure everything passes. (Note: pre-commit hooks can be bypassed when necessary via `git commit --no-verify`).
 4. **Make changes** in small, logical commits. Keep messages clear (e.g. “Add admin check to charge_subscription”, “Fix subscription id overflow”).
 5. **Run tests and build** before pushing:  
    `cargo test && cargo build` and, if you touch contract interface, `soroban contract build`.

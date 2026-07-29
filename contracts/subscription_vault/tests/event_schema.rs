@@ -73,6 +73,7 @@ fn test_subscription_created_event_emitted() {
         &false,
         &None,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let events = env.events().all();

@@ -129,8 +129,9 @@
 pub use crate::admin::{
     add_accepted_token, do_batch_charge, do_get_admin, do_init, do_migrate,
     do_recover_stranded_funds, do_rotate_admin, do_set_min_topup, do_set_subscriber_create_cap,
-    get_min_topup, get_protocol_fee_bps, get_subscriber_create_cap, list_accepted_tokens,
-    migrate_config_to_persistent, remove_accepted_token, set_protocol_fee,
+    get_fee_token, get_min_topup, get_protocol_fee_bps, get_subscriber_create_cap,
+    list_accepted_tokens, migrate_config_to_persistent, remove_accepted_token, set_fee_token,
+    set_protocol_fee,
 };
 pub use crate::blocklist::{
     do_add_to_blocklist, do_remove_from_blocklist, get_blocklist_entry, is_blocklisted,
