@@ -638,7 +638,7 @@ pub use types::{
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantVacation,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
@@ -2428,6 +2428,40 @@ impl SubscriptionVault {
         merchant::unpause_merchant(&env, merchant)
     }
 
+    /// Set a vacation window for the calling merchant. During this window, all
+    /// charges to the merchant's subscriptions are blocked with `VacationActive`.
+    ///
+    /// # Arguments
+    /// - `start_ts` — Ledger timestamp when vacation begins (must be >= now).
+    /// - `end_ts`   — Ledger timestamp when vacation ends (must be > start_ts).
+    pub fn set_merchant_vacation(
+        env: Env,
+        merchant: Address,
+        start_ts: u64,
+        end_ts: u64,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_vacation(&env, merchant, start_ts, end_ts)
+    }
+
+    /// Clear the vacation window for the calling merchant. Idempotent.
+    pub fn clear_merchant_vacation(env: Env, merchant: Address) -> Result<(), Error> {
+        merchant::clear_merchant_vacation(&env, merchant)
+    }
+
+    /// Get the current vacation window for a merchant, or `None` if not set
+    /// or if the window has already expired.
+    pub fn get_merchant_vacation(
+        env: Env,
+        merchant: Address,
+    ) -> Option<MerchantVacation> {
+        merchant::get_merchant_vacation(&env, &merchant)
+    }
+
+    /// Returns `true` if the merchant is currently within a vacation window.
+    pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
+        merchant::is_merchant_in_vacation(&env, &merchant, now)
+    }
+
     /// direct merchant refund to subscriber.
     pub fn merchant_refund(
         env: Env,
@@ -3482,4 +3516,4 @@ mod test_subscription_transfer;
 mod test_split_billing;
 
 #[cfg(test)]
-mod test_multi_token_isolation;
+mod test_merchant_vacation;
