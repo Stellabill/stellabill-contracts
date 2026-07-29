@@ -620,7 +620,7 @@ pub mod operator {
     ) -> Result<ChargeExecutionResult, Error> {
         require_operator_auth(env, &op)?;
         let now = env.ledger().timestamp();
-        crate::charge_core::charge_one(env, subscription_id, now, None)
+        crate::charge_core::charge_one(env, subscription_id, now, None, None)
     }
 
     pub fn do_operator_charge_usage(
@@ -1980,7 +1980,7 @@ impl SubscriptionVault {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
+        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
         let _period_start = old_sub.last_payment_timestamp;

@@ -366,6 +366,26 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     out
 }
 
+/// Cached admin configuration values to avoid repeated instance-storage
+/// lookups inside batch loops.
+pub(crate) struct CachedAdminConfig {
+    pub fee_bps: u32,
+    pub treasury: Option<Address>,
+    pub grace_duration: u64,
+    pub auto_pause_threshold: u32,
+}
+
+/// Read all admin charge-config values from storage at once.
+/// Returns `Err` when `get_grace_period` fails (contract not initialized).
+pub(crate) fn read_cached_admin_config(env: &Env) -> Result<CachedAdminConfig, Error> {
+    Ok(CachedAdminConfig {
+        fee_bps: get_protocol_fee_bps(env),
+        treasury: get_treasury(env),
+        grace_duration: get_grace_period(env)?,
+        auto_pause_threshold: get_auto_pause_threshold(env),
+    })
+}
+
 /// Execute the core batch-charge loop without any auth or nonce checks.
 ///
 /// Called by both `do_batch_charge` (admin path) and
@@ -376,9 +396,15 @@ pub(crate) fn execute_batch_charge(
     subscription_ids: &Vec<u32>,
 ) -> Vec<BatchChargeResult> {
     let now = env.ledger().timestamp();
+    // Read all admin config values once so they are cached across the batch loop.
+    let cached_admin = read_cached_admin_config(env);
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
-        let r = charge_one(env, id, now, None);
+        let admin_ref = match &cached_admin {
+            Ok(cfg) => Some(cfg),
+            Err(_) => None,
+        };
+        let r = charge_one(env, id, now, None, admin_ref);
         let res = match r {
             Ok(ChargeExecutionResult::Charged) => BatchChargeResult {
                 success: true,
@@ -433,7 +459,7 @@ pub fn do_charge_subscription(
     let _admin = require_stored_admin_auth(env)?;
 
     let now = env.ledger().timestamp();
-    charge_one(env, subscription_id, now, None)
+    charge_one(env, subscription_id, now, None, None)
 }
 
 /// Performs a single usage-based charge. Admin only.
