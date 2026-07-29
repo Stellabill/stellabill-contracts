@@ -374,8 +374,6 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.prepaid_balance, 0); // deposited exactly cap; charge consumed it all
     assert_eq!(client.get_merchant_balance(&merchant), cap);
-<<<<<<< HEAD
-=======
 
     assert_eq!(
         client.try_charge_one_off(&sub_id, &merchant, &1i128, &None::<soroban_sdk::BytesN<32>>),

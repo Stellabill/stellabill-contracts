@@ -147,18 +147,15 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
         .ok_or(Error::NotFound)
 }
 
-/// Helper to conditionally extend a persistent storage entry's TTL.
+/// Helper to extend a persistent storage entry's TTL.
 ///
-/// Checks the entry's remaining TTL via `get_ttl`. If the remaining TTL is
-/// less than `threshold`, invokes `extend_ttl` to extend it to `extend_to`.
-/// This avoids unnecessary write operations when the remaining TTL is already
-/// sufficient.
+/// The Soroban SDK `Persistent::get_ttl` is only available under `#[cfg(test)]`,
+/// so we always call `extend_ttl` unconditionally. The call is idempotent:
+/// extending an already-sufficient TTL is a harmless no-op.
 pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
-    if env.storage().persistent().get_ttl(key) < threshold {
-        env.storage()
-            .persistent()
-            .extend_ttl(key, threshold, extend_to);
-    }
+    env.storage()
+        .persistent()
+        .extend_ttl(key, threshold, extend_to);
 }
 
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
@@ -652,7 +649,7 @@ pub fn do_create_subscription_with_token(
         (Symbol::new(env, "subscription_created"), id),
         SubscriptionCreatedEvent {
             subscription_id: id,
-            subscriber,
+            subscriber: subscriber.clone(),
             merchant,
             token,
             amount,
