@@ -162,7 +162,8 @@ impl ChaosEnv {
             &false,        // usage_enabled = false
             &None::<i128>, // lifetime_cap
             &None::<u64>,  // expires_at
-        );
+                &None::<u32>,
+);
         self.client.deposit_funds(&id, &subscriber, &PREPAID, &None);
         (id, subscriber, merchant)
     }
@@ -316,7 +317,8 @@ fn test_backward_jump_across_grace_boundary_no_panic() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
     ce.client.deposit_funds(&id, &subscriber, &AMOUNT, &None);
 
     // First charge — exhausts the prepaid balance

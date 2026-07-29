@@ -53,7 +53,8 @@ fn setup() -> (
         &false,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     // Deposit funds
     client.deposit_funds(&sub_id, &subscriber, &30_000_000, &None);
@@ -142,7 +143,8 @@ fn test_cancel_with_zero_balance_refunds_nothing() {
         &false,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     // Cancel with zero balance — should succeed with no refund
     client.cancel_subscription(&sub_id, &subscriber);
@@ -184,7 +186,8 @@ fn test_cancel_refunds_prepaid_balance() {
         &false,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
     client.deposit_funds(&sub_id, &subscriber, &deposit, &None);
 
     // Confirm vault holds the deposit
