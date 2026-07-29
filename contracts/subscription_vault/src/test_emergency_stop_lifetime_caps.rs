@@ -350,14 +350,28 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     // In this test environment, subsequent view calls may reset the event buffer.
     let events = env.events().all();
 
+    // env.events().all() returns only events from the LAST contract call.
+    // Capture events immediately after charge_one_off, before any other calls.
+    let all_events = env.events().all();
+    let mut cap_events = 0u32;
+    for event in all_events.iter() {
+        if topic0(&env, &event) == Symbol::new(&env, "lifetime_cap_reached") {
+            cap_events += 1;
+        }
+    }
+    assert_eq!(cap_events, 1);
+
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.prepaid_balance, 0); // deposited exactly cap; charge consumed it all
     assert_eq!(client.get_merchant_balance(&merchant), cap);
+<<<<<<< HEAD
+=======
 
     assert_eq!(
         client.try_charge_one_off(&sub_id, &merchant, &1i128, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::LifetimeCapReached))
     );
+>>>>>>> upstream/main
 }

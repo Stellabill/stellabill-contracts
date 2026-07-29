@@ -145,6 +145,12 @@ pub enum DataKey {
     UsageLimits(u32),
     /// Running usage state for a subscription within the current window. Discriminant 20.
     UsageState(u32),
+<<<<<<< HEAD
+    /// Per-token oracle price history metadata (head index + count).
+    OraclePriceHistoryMeta(Address),
+    /// Individual price entry in the ring buffer (`slot` in 0..ORACLE_PRICE_HISTORY_SIZE).
+    OraclePriceHistoryEntry(Address, u32),
+=======
     /// Global grace period for underfunded subscriptions. Discriminant 21.
     GracePeriod,
     /// Protocol fee in basis points (0-10,000). Discriminant 22.
@@ -237,6 +243,9 @@ pub enum DataKey {
     ChargeFailureCounter(u32),
     /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
     AutoPauseThreshold,
+    /// Per-merchant protocol fee override in basis points. When present, supersedes the
+    /// global `FeeBps` for charges routed through this merchant. Discriminant 64.
+    MerchantFeeBps(Address),
 }
 
 impl DataKey {
@@ -303,11 +312,14 @@ impl DataKey {
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
             DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 59,
-            DataKey::SubscriberCreateWindow(_) => 60,
-            DataKey::ChargeSalt(_) => 61,
-            DataKey::ChargeFailureCounter(_) => 62,
-            DataKey::AutoPauseThreshold => 63,
+            DataKey::SubscriberCreateCap => 60,
+            DataKey::SubscriberCreateWindow(_) => 61,
+            DataKey::MerchantWhitelistMode => 62,
+            DataKey::MerchantApproved(_) => 63,
+            DataKey::ChargeSalt(_) => 64,
+            DataKey::ChargeFailureCounter(_) => 65,
+            DataKey::AutoPauseThreshold => 66,
+            DataKey::MerchantFeeBps(_) => 67,
         }
     }
 
@@ -358,10 +370,15 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
-    59,
-    61, // ChargeSalt(u32)
-    62, // ChargeFailureCounter(u32)
-    63, // AutoPauseThreshold
+    59, // AdminConfigLastChangedAt(BytesN<32>)
+    60, // SubscriberCreateCap
+    // 61 = SubscriberCreateWindow — persistent, not in allowlist
+    62, // MerchantWhitelistMode
+    63, // MerchantApproved(Address)
+    64, // ChargeSalt(u32)
+    65, // ChargeFailureCounter(u32)
+    66, // AutoPauseThreshold
+    67, // MerchantFeeBps(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -389,6 +406,7 @@ macro_rules! debug_assert_known_key {
     ($key:expr) => {
         $crate::types::assert_known_data_key($key)
     };
+>>>>>>> upstream/main
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -773,6 +791,11 @@ pub enum Error {
     /// Invalid recovery amount provided.
     InvalidRecoveryAmount = 3003,
     /// The provided new admin address is invalid.
+<<<<<<< HEAD
+    InvalidNewAdmin = 1037,
+    /// Oracle price deviation exceeds configured threshold (circuit breaker).
+    OracleDeviationTooHigh = 1038,
+=======
     InvalidNewAdmin = 3004,
     /// Metadata key exceeds maximum allowed length.
     MetadataKeyTooLong = 3005,
@@ -925,12 +948,60 @@ pub enum Error {
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
     RenewalWindowClosed = 12001,
+>>>>>>> upstream/main
 }
 
 impl Error {
     /// Returns the numeric code for this error.
     pub const fn to_code(self) -> u32 {
+<<<<<<< HEAD
+        match self {
+            Error::NotFound => 404,
+            Error::Unauthorized => 401,
+            Error::Forbidden => 403,
+            Error::SubscriptionExpired => 410,
+            Error::IntervalNotElapsed => 1001,
+            Error::NotActive => 1002,
+            Error::InvalidStatusTransition => 400,
+            Error::BelowMinimumTopup => 402,
+            Error::Overflow => 1012,
+            Error::Underflow => 1010,
+            Error::InsufficientBalance => 1003,
+            Error::InvalidAmount => 1006,
+            Error::UsageNotEnabled => 1004,
+            Error::InsufficientPrepaidBalance => 1005,
+            Error::Replay => 1007,
+            Error::InvalidRecoveryAmount => 1008,
+            Error::EmergencyStopActive => 1009,
+            Error::RecoveryNotAllowed => 1011,
+            Error::InvalidInput => 1015,
+            Error::NotInitialized => 1013,
+            Error::InvalidExportLimit => 1014,
+            Error::Reentrancy => 1016,
+            Error::LifetimeCapReached => 1017,
+            Error::AlreadyInitialized => 1018,
+            Error::MerchantPaused => 1019,
+            Error::MetadataKeyLimitReached => 1023,
+            Error::MetadataKeyTooLong => 1024,
+            Error::MetadataValueTooLong => 1025,
+            Error::SubscriberBlocklisted => 1026,
+            Error::OracleNotConfigured => 1027,
+            Error::OraclePriceUnavailable => 1028,
+            Error::OraclePriceStale => 1029,
+            Error::OraclePriceInvalid => 1030,
+            Error::SubscriptionLimitReached => 429,
+            Error::MaxConcurrentSubscriptionsReached => 1031,
+            Error::CreditLimitExceeded => 1032,
+            Error::RateLimitExceeded => 1033,
+            Error::UsageCapExceeded => 1034,
+            Error::BurstLimitExceeded => 1035,
+            Error::SelfRotation => 1036,
+            Error::InvalidNewAdmin => 1037,
+            Error::OracleDeviationTooHigh => 1038,
+        }
+=======
         self as u32
+>>>>>>> upstream/main
     }
 }
 
@@ -1437,6 +1508,31 @@ pub struct OraclePrice {
     pub timestamp: u64,
 }
 
+<<<<<<< HEAD
+/// Ring-buffer metadata for a per-token oracle price history window.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceHistoryMeta {
+    /// Current write index in the ring buffer (0..ORACLE_PRICE_HISTORY_SIZE).
+    pub head: u32,
+    /// Total samples written (capped at ORACLE_PRICE_HISTORY_SIZE for read semantics).
+    pub count: u32,
+}
+
+/// Event emitted when an oracle price is rejected by the deviation circuit breaker.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleDeviationBreakerEvent {
+    pub token: Address,
+    pub latest_price: i128,
+    pub median_price: i128,
+    pub deviation_bps: u64,
+    pub threshold_bps: u32,
+    pub timestamp: u64,
+}
+
+/// Token registry entry.
+=======
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OracleConfigUpdatedEvent {
@@ -1473,6 +1569,7 @@ pub struct OracleLivenessEvent {
     pub schema_version: u32,
 }
 
+>>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcceptedToken {
@@ -2056,12 +2153,44 @@ pub struct UsageState {
 pub struct PartialRefundEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
+<<<<<<< HEAD
+    /// Amount refunded in token base units.
+    pub amount: i128,
+    /// Ledger timestamp when the refund was processed.
+    pub timestamp: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct MerchantConfig {
+    pub fee_address: Option<Address>,
+    pub redirect_url: String, // e.g., for off-chain success callbacks
+    pub is_paused: bool,      // Global pause for all merchant plans
+}
+
+/// Event emitted when a merchant enables their blanket pause.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantPausedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a merchant disables their blanket pause.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantUnpausedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+}
+=======
     pub token: Address,
     pub amount: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
 
+>>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantRefundEvent {
@@ -2073,6 +2202,10 @@ pub struct MerchantRefundEvent {
     pub schema_version: u32,
 }
 
+<<<<<<< HEAD
+/// Event emitted when protocol fee configuration is changed.
+=======
+>>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
@@ -2080,13 +2213,25 @@ pub struct ProtocolFeeConfiguredEvent {
     pub treasury: Address,
     pub fee_bps: u32,
     pub timestamp: u64,
+<<<<<<< HEAD
+}
+
+/// Event emitted when a protocol fee is charged on a subscription.
+=======
     pub schema_version: u32,
 }
 
+>>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeChargedEvent {
     pub subscription_id: u32,
+<<<<<<< HEAD
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
+=======
     pub merchant: Address,
     pub token: Address,
     pub fee_amount: i128,
@@ -2207,6 +2352,23 @@ pub struct MerchantRevokedEvent {
     pub merchant: Address,
     pub admin: Address,
     pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when the admin sets or clears a per-merchant protocol fee override.
+///
+/// `fee_bps` is `Some(value)` when an override is set, and `None` when it is cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantFeeOverrideSetEvent {
+    /// Merchant whose override was changed.
+    pub merchant: Address,
+    /// Admin who authorized the change.
+    pub admin: Address,
+    /// The new override value in basis points, or `None` when cleared.
+    pub fee_bps: Option<u32>,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
 }
 
@@ -2411,6 +2573,7 @@ mod known_keys_tests {
             (DataKey::ChargeSalt(1), true),
             (DataKey::ChargeFailureCounter(1), true),
             (DataKey::AutoPauseThreshold, true),
+            (DataKey::MerchantFeeBps(a.clone()), true),
         ]
     }
 
@@ -2495,7 +2658,7 @@ mod known_keys_tests {
         }
         
         let variants = all_variants(&env);
-        assert_eq!(variants.len(), 64);
+        assert_eq!(variants.len(), 65);
     }
 }
 
@@ -2651,4 +2814,5 @@ pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Resul
         let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
         normalized.checked_mul(scale).ok_or(Error::Overflow)
     }
+>>>>>>> upstream/main
 }
