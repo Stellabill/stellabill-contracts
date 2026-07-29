@@ -146,10 +146,22 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
         .ok_or(Error::NotFound)
 }
 
+/// Helper to conditionally extend a persistent storage entry's TTL.
+///
+/// Checks the entry's remaining TTL via `get_ttl`. If the remaining TTL is
+/// less than `threshold`, invokes `extend_ttl` to extend it to `extend_to`.
+/// This avoids unnecessary write operations when the remaining TTL is already
+/// sufficient.
+pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
+    if env.storage().persistent().get_ttl(key) < threshold {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, threshold, extend_to);
+    }
+}
+
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+    maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
@@ -450,9 +462,7 @@ fn enforce_creation_rate_limit(env: &Env, subscriber: &Address) -> Result<(), Er
     window.count += 1;
     env.storage().persistent().set(&window_key, &window);
 
-    env.storage()
-        .persistent()
-        .extend_ttl(&window_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+    maybe_extend_ttl(env, &window_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 
     Ok(())
 }
@@ -654,10 +664,11 @@ pub fn do_create_subscription_with_token(
         .persistent()
         .set(&DataKey::Credential(id), &credential);
     // Extend TTL of credential just like subscription
-    env.storage().persistent().extend_ttl(
+    maybe_extend_ttl(
+        env,
         &DataKey::Credential(id),
-        SUB_TTL_THRESHOLD as u32,
-        SUB_TTL_EXTEND_TO as u32,
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
     );
 
     env.events().publish(

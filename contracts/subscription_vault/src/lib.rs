@@ -48,9 +48,40 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+<<<<<<< HEAD
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test;
+#[cfg(test)]
+mod test_auth_fuzz;
+#[cfg(test)]
+mod test_expiration;
+#[cfg(test)]
+mod test_governance;
+#[cfg(test)]
+mod test_insufficient_balance;
+#[cfg(test)]
+mod test_multi_actor;
+#[cfg(test)]
+mod test_recovery;
+#[cfg(test)]
+mod test_refactor_check;
+#[cfg(test)]
+mod test_safe_math_regression;
+#[cfg(test)]
+mod test_security;
+#[cfg(test)]
+mod test_usage_limits;
+#[cfg(test)]
+mod test_deterministic_charging;
+#[cfg(test)]
+mod test_emergency_stop_lifetime_caps;
+=======
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
+>>>>>>> upstream/main
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
@@ -573,6 +604,15 @@ pub use types::{
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
     CapInfo, Coupon, OracleKind,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+<<<<<<< HEAD
+    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
+    MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
+    MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
+    OracleDeviationBreakerEvent, OraclePrice, OraclePriceHistoryMeta, PartialRefundEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    ProtocolFeeConfiguredEvent, RecoveryEvent,
+    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+=======
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
@@ -587,6 +627,7 @@ pub use types::{
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+>>>>>>> upstream/main
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
@@ -2455,9 +2496,50 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
+<<<<<<< HEAD
+// ── Oracle Deviation Circuit Breaker ──────────────────────────────────────────
+
+    /// Configure the oracle price deviation circuit-breaker threshold.
+    ///
+    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
+    /// When the latest oracle price deviates from the median of the last N
+    /// samples by more than this amount, the charge is rejected with
+    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
+    /// is emitted.
+    ///
+    /// A value of `0` rejects **any** price change (strict mode).
+    /// When never called, the deviation check is disabled entirely.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the admin.
+    pub fn set_oracle_deviation_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_deviation_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Return the current deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
+        oracle::get_oracle_deviation_bps(&env)
+    }
+
+    /// Return the recorded oracle price history for a token (insertion order).
+    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
+        oracle::get_oracle_price_history(&env, &token)
+=======
     /// Emit oracle liveness event.
     pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
+>>>>>>> upstream/main
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
