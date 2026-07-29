@@ -1734,9 +1734,8 @@ pub fn register_sub_account(
 ) -> Result<(), Error> {
     merchant.require_auth();
 
-    // Reject empty labels
-    let label_str = label.to_str(env);
-    if label_str.len() == 0 {
+    // Reject empty labels (Symbol::to_str not available in soroban-sdk 22.0.0)
+    if label == Symbol::new(env, "") {
         return Err(Error::InvalidInput);
     }
 

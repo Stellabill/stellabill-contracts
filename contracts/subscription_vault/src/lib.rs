@@ -1357,11 +1357,60 @@ impl SubscriptionVault {
         Ok(())
     }
 
+    // ── Merchant Whitelist & Auto-Pause Delegations ───────────────────────────
+
+    /// Enable or disable the global merchant whitelist mode. Admin-only.
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Query whether global merchant whitelist mode is active.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Approve a merchant under whitelist mode. Admin-only.
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a previously-approved merchant. Admin-only.
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
+    /// Check whether a specific merchant has been approved under whitelist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Set the consecutive-charge-failure threshold that triggers auto-pause.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
+    }
+
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
-    /// Create a new subscription.
+    /// Create a new subscription (legacy 8-arg overload for backward compatibility).
+    /// Forwards to `create_subscription_full` with `sub_account_label: None`.
     #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
+        env: Env,
+        subscriber: Address,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+        expires_at: Option<u64>,
+        expires_at_ledger: Option<u32>,
+    ) -> Result<u32, Error> {
+        Self::create_subscription_full(env, subscriber, merchant, amount, interval_seconds, usage_enabled, lifetime_cap, expires_at, expires_at_ledger, None)
+    }
+
+    /// Create a new subscription (full 9-arg version).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_subscription_full(
         env: Env,
         subscriber: Address,
         merchant: Address,
@@ -1882,7 +1931,7 @@ impl SubscriptionVault {
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_subscription_expiration_ledger(
+    pub fn set_subscription_expiry_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -3500,7 +3549,6 @@ mod test_subscription_transfer;
 mod test_merchant_whitelist;
 
 #[cfg(test)]
-mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_split_billing;

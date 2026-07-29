@@ -26,7 +26,7 @@ fn create_sub(
     subscriber: &Address,
     merchant: &Address,
 ) -> u32 {
-    test_env.client.create_subscription(
+    test_env.client.create_subscription_full(
         subscriber,
         merchant,
         &AMOUNT,
@@ -47,7 +47,7 @@ fn create_sub_with_label(
     merchant: &Address,
     label: &soroban_sdk::Symbol,
 ) -> u32 {
-    test_env.client.create_subscription(
+    test_env.client.create_subscription_full(
         subscriber,
         merchant,
         &AMOUNT,
@@ -85,7 +85,7 @@ fn cap_accepts_exactly_cap_creations_and_rejects_cap_plus_one() {
     );
 
     // 4th subscription should be rejected.
-    let result = test_env.client.try_create_subscription(
+    let result = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -125,7 +125,7 @@ fn cap_increase_after_saturation_allows_further_creations() {
     let _id2 = create_sub(&test_env, &subscriber, &merchant);
 
     // 3rd is blocked.
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -188,7 +188,7 @@ fn cap_decrease_below_current_count_does_not_evict_existing_subs() {
     );
 
     // New creation is blocked because count (4) >= cap (2).
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -251,7 +251,7 @@ fn cap_zero_blocks_all_creations() {
     test_env.client.set_merchant_max_subs(&admin, &merchant, &0u32);
     assert_eq!(test_env.client.get_merchant_max_subs(&merchant), 0);
 
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -303,7 +303,7 @@ fn cap_of_one_accepts_one_and_rejects_second() {
     let id = create_sub(&test_env, &subscriber, &merchant);
     let _sub = test_env.client.get_subscription(&id);
 
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -342,7 +342,7 @@ fn pause_does_not_free_slot_cancel_does() {
     );
 
     // Creation still blocked.
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,
@@ -394,7 +394,7 @@ fn independent_merchant_caps_do_not_interfere() {
     );
 
     // Merchant A over-cap blocked.
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant_a,
         &AMOUNT,
@@ -417,7 +417,7 @@ fn independent_merchant_caps_do_not_interfere() {
     );
 
     // Merchant B over its cap of 3.
-    let blocked_b = test_env.client.try_create_subscription(
+    let blocked_b = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant_b,
         &AMOUNT,
@@ -446,7 +446,7 @@ fn admin_can_clear_merchant_max_subs_to_restore_default() {
 
     let _id = create_sub(&test_env, &subscriber, &merchant);
 
-    let blocked = test_env.client.try_create_subscription(
+    let blocked = test_env.client.try_create_subscription_full(
         &subscriber,
         &merchant,
         &AMOUNT,

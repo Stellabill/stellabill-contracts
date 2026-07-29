@@ -30,7 +30,7 @@ fn create_sub(
     subscriber: &Address,
     merchant: &Address,
 ) -> u32 {
-    client.create_subscription(subscriber, merchant, &AMOUNT, &INTERVAL, &false, &None, &None&None::<u32>,
+    client.create_subscription(subscriber, merchant, &AMOUNT, &INTERVAL, &false, &None, &None::<u64>, &None::<u32>,
 )
 }
 

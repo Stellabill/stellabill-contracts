@@ -98,7 +98,7 @@ mod test_auto_renew {
             &false,
             &None::<i128>,
             &None::<u64>,
-            &None::<Address>,
+            &None::<u32>,
         );
 
         // Seed balance directly so we do not need a live token transfer.

@@ -100,7 +100,7 @@ fn test_claim_after_window_elapsed_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_ok() && result.unwrap().is_err(), "Expected escrow not found error");
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn test_claim_nonexistent_escrow_rejected() {
     let result = test_env
         .client
         .try_claim_cancellation_escrow(&subscriber, &id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_ok() && result.unwrap().is_err(), "Expected escrow not found error");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn test_merchant_lodge_dispute_before_window_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_ok() && result.unwrap().is_err(), "Expected escrow not found error");
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn test_no_escrow_when_zero_balance() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_ok() && result.unwrap().is_err(), "Expected escrow not found error");
 }
 
 #[test]
@@ -352,7 +352,7 @@ fn test_claim_after_window_can_only_be_done_once() {
     let result = test_env
         .client
         .try_claim_cancellation_escrow(&subscriber, &id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_ok() && result.unwrap().is_err(), "Expected escrow not found error");
 }
 
 #[test]

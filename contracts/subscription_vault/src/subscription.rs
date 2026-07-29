@@ -1156,7 +1156,7 @@ fn apply_cancellation(
             merchant: sub.merchant.clone(),
             opened_at: now,
             releases_at: released_at,
-            released_at: None,
+            released_at: 0,
         };
 
         env.storage()
@@ -1260,6 +1260,24 @@ fn apply_cancellation(
 ///
 /// # Events
 /// Emits [`SubscriptionCancelScheduledEvent`].
+
+/// Set auto-renew on a subscription.
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+    let mut sub = get_subscription(env, subscription_id)?;
+    sub.auto_renew = enabled;
+    if !enabled {
+        sub.auto_renew_disabled_at = Some(env.ledger().timestamp());
+    }
+    write_subscription(env, subscription_id, &sub);
+    Ok(())
+}
+
 pub fn do_schedule_cancel(
     env: &Env,
     subscription_id: u32,

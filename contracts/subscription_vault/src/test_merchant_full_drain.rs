@@ -55,10 +55,10 @@ fn create_and_fund_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
     );
 
-    client.deposit_funds(&id, &subscriber, &DEPOSIT_AMOUNT);
+    client.deposit_funds(&id, &subscriber, &DEPOSIT_AMOUNT, &None::<soroban_sdk::BytesN<32>>);
     (id, subscriber, merchant)
 }
 
@@ -89,7 +89,7 @@ fn test_merchant_full_balance_drain() {
     // 1. Charge subscription to accumulate merchant earnings
     let now = 1_000_000 + INTERVAL + 1;
     env.ledger().set_timestamp(now);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     // Verify initial merchant earnings and balance
     let initial_balance = client.get_merchant_balance(&merchant);
@@ -141,7 +141,7 @@ fn test_merchant_partial_drain_then_full_drain() {
     // Charge subscription
     let now = 1_000_000 + INTERVAL + 1;
     env.ledger().set_timestamp(now);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     let total_earnings = client.get_merchant_balance(&merchant);
     let partial_amount = total_earnings / 2;
@@ -180,14 +180,14 @@ fn test_merchant_dust_balance_drain() {
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
     );
 
-    client.deposit_funds(&id, &subscriber, &dust_amount);
+    client.deposit_funds(&id, &subscriber, &dust_amount, &None::<soroban_sdk::BytesN<32>>);
 
     let now = 1_000_000 + INTERVAL + 1;
     env.ledger().set_timestamp(now);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     assert_eq!(client.get_merchant_balance(&merchant), dust_amount);
 

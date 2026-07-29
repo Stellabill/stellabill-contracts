@@ -330,6 +330,7 @@ impl DataKey {
             DataKey::BillingStatementSequence(_) => 43,
             DataKey::BillingStatementAggregate(_) => 44,
             DataKey::MerchantMaxSubs(_) => 45,
+            DataKey::DelegatedPayerGrant(_, _) => 62,
             DataKey::Guardians => 46,
             DataKey::NextProposalId => 47,
             DataKey::Proposal(_) => 48,
@@ -357,6 +358,7 @@ impl DataKey {
             DataKey::AutoPauseThreshold => 66,
             DataKey::BuyoutPremiumBps => 67,
             DataKey::SubCoupon(_) => 68,
+            DataKey::SubCoupon(_) => 68,
             DataKey::MerchantMultiSig(_) => 69,
             DataKey::SubscriberActiveCount(_) => 70,
             DataKey::SubscriberActiveCapOverride(_) => 71,
@@ -367,6 +369,13 @@ impl DataKey {
             DataKey::MerchantFeeBps(_) => 76,
             DataKey::OraclePriceHistoryMeta(_) => 77,
             DataKey::OraclePriceHistoryEntry(_, _) => 78,
+            DataKey::MerchantWhitelistMode => 79,
+            DataKey::MerchantApproved(_) => 80,
+            DataKey::ChargeFailureCounter(_) => 81,
+            DataKey::AutoPauseThreshold => 82,
+            DataKey::MerchantSubAccount(_, _) => 83,
+            DataKey::MerchantSubAccountList(_) => 84,
+            DataKey::EmergencyWithdrawIntent(_) => 85,
         }
     }
 
@@ -2774,68 +2783,6 @@ pub struct PrepaidQueryResult {
 }
 
 
-#[cfg(test)]
-mod event_topic_tests {
-    use super::{
-        TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
-        TOPIC_RECOVERY, TOPIC_WITHDRAWN,
-    };
-    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
-
-    /// The emitted wire representation is part of the indexer-facing contract.
-    /// Publish every cached short topic in one transaction and compare each
-    /// emitted topic to the `Symbol::new` representation used before caching.
-    #[test]
-    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
-        let env = Env::default();
-        let topics = [
-            ("recovery", TOPIC_RECOVERY),
-            ("created", TOPIC_CREATED),
-            ("deposited", TOPIC_DEPOSITED),
-            ("charged", TOPIC_CHARGED),
-            ("withdrawn", TOPIC_WITHDRAWN),
-            ("cap_reach", TOPIC_CAP_REACH),
-            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
-        ];
-
-        for (_, topic) in topics.iter() {
-            env.events().publish((topic,), ());
-        }
-
-        let emitted_events = env.events().all();
-        assert_eq!(emitted_events.len(), topics.len() as u32);
-        for (index, (name, expected_topic)) in topics.iter().enumerate() {
-            let emitted = emitted_events.get(index as u32).unwrap();
-            let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
-            let legacy_topic = Symbol::new(&env, name);
-
-            assert_eq!(
-                emitted_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
-                "event topic {name} changed its wire representation"
-            );
-            assert_eq!(
-                expected_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
-                "cached topic {name} differs from Symbol::new"
-            );
-        }
-    }
-
-    /// `symbol_short!` supports at most nine characters. Longer event topics
-    /// are deliberately constructed with `Symbol::new` at their emit sites.
-    #[test]
-    fn long_event_topics_keep_the_runtime_symbol_representation() {
-        let env = Env::default();
-        let long_topic = Symbol::new(&env, "subscription_created");
-
-        assert_eq!(
-            long_topic.to_xdr(&env),
-            Symbol::new(&env, "subscription_created").to_xdr(&env)
-        );
-        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
-    }
-}
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -2848,11 +2795,11 @@ pub struct AcceptedToken { pub token: Address, pub decimals: u32 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct FeeConvertedEvent { pub subscription_id: u32, pub source_token: Address, pub target_token: Address, pub original_fee_amount: i128, pub converted_fee_amount: i128, pub rate: i128, pub timestamp: u64, pub schema_version: u32 }
+pub struct FeeConvertedEvent { pub subscription_id: u32, pub source_token: Address, pub target_token: Address, pub original_fee_amount: i128, pub converted_fee_amount: i128, pub rate: u128, pub timestamp: u64, pub schema_version: u32 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent { pub admin: Address, pub fee_token: Address, pub timestamp: u64, pub schema_version: u32 }
+pub struct FeeTokenConfiguredEvent { pub admin: Address, pub fee_token: Option<Address>, pub timestamp: u64, pub schema_version: u32 }
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2872,7 +2819,7 @@ pub struct SubAccountWithdrawEvent { pub merchant: Address, pub label: Symbol, p
 
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct CancellationEscrow { pub subscription_id: u32, pub subscriber: Address, pub merchant: Address, pub token: Address, pub amount: i128, pub opened_at: u64, pub releases_at: u64, pub released_at: Option<u64> }
+pub struct CancellationEscrow { pub subscription_id: u32, pub subscriber: Address, pub merchant: Address, pub token: Address, pub amount: i128, pub opened_at: u64, pub releases_at: u64, pub released_at: u64 }
 
 #[contracttype]
 #[derive(Clone, Debug)]

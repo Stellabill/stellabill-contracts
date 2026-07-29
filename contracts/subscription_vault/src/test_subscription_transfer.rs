@@ -2,7 +2,7 @@
 
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use crate::types::{Error, SubscriptionStatus};
-use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env, Symbol};
 
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address, Address, Address, Address) {
     let env = Env::default();
@@ -40,6 +40,8 @@ fn test_happy_path_transfer() {
         &false,
         &None,
         &None,
+        &None::<u32>,
+        &None::<Symbol>,
     );
 
     client.deposit_funds(&sub_id, &sub1, &50_000, &None);
@@ -67,6 +69,8 @@ fn test_merchant_veto_before_acceptance() {
         &false,
         &None,
         &None,
+        &None::<u32>,
+        &None::<Symbol>,
     );
 
     let expires_at = env.ledger().timestamp() + 3600;
@@ -93,6 +97,8 @@ fn test_merchant_veto_after_acceptance() {
         &false,
         &None,
         &None,
+        &None::<u32>,
+        &None::<Symbol>,
     );
 
     let expires_at = env.ledger().timestamp() + 3600;
@@ -118,6 +124,8 @@ fn test_expired_intent() {
         &false,
         &None,
         &None,
+        &None::<u32>,
+        &None::<Symbol>,
     );
 
     let expires_at = env.ledger().timestamp() + 3600;
@@ -144,6 +152,8 @@ fn test_transfer_to_self() {
         &false,
         &None,
         &None,
+        &None::<u32>,
+        &None::<Symbol>,
     );
 
     let expires_at = env.ledger().timestamp() + 3600;
