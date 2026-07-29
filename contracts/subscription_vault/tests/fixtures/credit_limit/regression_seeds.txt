@@ -1,0 +1,10 @@
+# Pinned seeds for the credit-limit invariant fuzz test.
+# One u64 per line; `#` comments and blank lines are ignored.
+# See README.md for how to add a newly-discovered failing seed.
+#
+# Each seed drives a full, independent 500-step create/cancel/set-limit
+# sequence, so this small representative set already exercises limit shrink
+# (no claw-back), rejection-on-create, and cancel-driven exposure decreases.
+1
+42
+1337

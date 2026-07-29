@@ -9,7 +9,7 @@ Configured via `configure_usage_limits`:
 
 ### Behavior:
 - Usage charges increment `current_period_usage_units` in `UsageState`.
-- If a charge would cause `current_period_usage_units + amount > usage_cap_units`, the transaction is rejected with `UsageCapExceeded (1034)`.
+- If a charge would cause `current_period_usage_units + amount > usage_cap_units`, the call returns `UsageChargeResult::UsageCapExceeded` and emits `usage_charge_rejected`.
 - The period index is tracked as `now / interval_seconds`. When the contract rolls into a new billing period, `current_period_usage_units` automatically resets to `0` before applying the new charge.
 
 ### Notes:
@@ -24,6 +24,7 @@ Configured at subscription creation (or inherited from plan templates):
 ### Behavior:
 - Both interval charges and usage charges increment `lifetime_charged`.
 - If a usage charge exceeds the remaining lifetime cap:
-  - The charge is aborted.
   - The subscription is automatically transitioned to `Cancelled`.
-  - A `LifetimeCapReachedEvent` is emitted.
+  - No funds are debited and no merchant balance is credited.
+  - A `lifetime_cap_reached` event is emitted.
+  - The call returns `UsageChargeResult::Charged` (the enforcement outcome is observed via the `lifetime_cap_reached` event).

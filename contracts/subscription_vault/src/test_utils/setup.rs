@@ -1,58 +1,78 @@
 use crate::{SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
+
+/// A fresh `Env` with all auth checks mocked, ready for a test to register a
+/// contract into.
+#[allow(dead_code)]
+pub fn setup_env() -> Env {
+    let env = Env::default();
+    env.mock_all_auths();
+    env
+}
+
+/// Registers `SubscriptionVault` and initializes it with `admin`/`token`
+/// (6 decimals, a permissive min top-up, and a 7-day grace period).
+///
+/// Note: `token` is only used as the stored token *address* here — it is not
+/// registered as a real Stellar Asset Contract, so tests exercising actual
+/// token transfers need to set that up separately (see `TestEnv::default`).
+#[allow(dead_code)]
+pub fn create_test_client<'a>(
+    env: &Env,
+    admin: &Address,
+    token: &Address,
+) -> SubscriptionVaultClient<'a> {
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+    client.init(token, &6, admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+    client
+}
+
+/// Advances the ledger's timestamp by `seconds`.
+#[allow(dead_code)]
+pub fn advance_ledger_by(env: &Env, seconds: u64) {
+    env.ledger().with_mut(|l| l.timestamp += seconds);
+}
 
 pub struct TestEnv {
     pub env: Env,
     pub client: SubscriptionVaultClient<'static>,
-    pub token: Address,
     pub admin: Address,
+    #[allow(dead_code)]
+    pub token: Address,
 }
 
-impl TestEnv {
-    /// Initialize a standard test environment with a mock token and default grace period.
-    pub fn default() -> Self {
+impl Default for TestEnv {
+    fn default() -> Self {
         let env = Env::default();
         env.mock_all_auths();
 
         let contract_id = env.register(SubscriptionVault, ());
         let client = SubscriptionVaultClient::new(&env, &contract_id);
-
         let admin = Address::generate(&env);
+
         let token = env
             .register_stellar_asset_contract_v2(admin.clone())
             .address();
 
-        let min_topup = 1_000_000i128; // 1 USDC
-        let grace_period = 7 * 24 * 60 * 60u64; // 7 days
-
-        client.init(&token, &6, &admin, &min_topup, &grace_period);
-
-        Self {
+        client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+        TestEnv {
             env,
             client,
-            token,
             admin,
+            token,
         }
     }
+}
 
-    /// Create a standard token client.
-    pub fn token_client(&self) -> soroban_sdk::token::Client<'static> {
-        soroban_sdk::token::Client::new(&self.env, &self.token)
-    }
-
-    /// Create a stellar asset token client (for minting).
+impl TestEnv {
+    #[allow(dead_code)]
     pub fn stellar_token_client(&self) -> soroban_sdk::token::StellarAssetClient<'static> {
         soroban_sdk::token::StellarAssetClient::new(&self.env, &self.token)
     }
 
-    /// Set the ledger timestamp.
-    pub fn set_timestamp(&self, timestamp: u64) {
-        self.env.ledger().with_mut(|li| li.timestamp = timestamp);
-    }
-
-    /// Fast-forward time by a given duration.
-    pub fn jump(&self, duration: u64) {
-        let current = self.env.ledger().timestamp();
-        self.set_timestamp(current + duration);
+    #[allow(dead_code)]
+    pub fn jump(&self, seconds: u64) {
+        self.env.ledger().with_mut(|l| l.timestamp += seconds);
     }
 }

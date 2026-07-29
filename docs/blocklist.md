@@ -28,27 +28,41 @@ The subscriber blocklist mechanism allows admins and merchants to prevent specif
 
 ### Blocked Operations
 
-When a subscriber is blocklisted, the following operations are **blocked**:
+When a subscriber address is blocklisted, the following operations are **blocked**:
 
+**Subscriber-authored flows:**
 1. **`create_subscription`**: Cannot create new subscriptions
 2. **`create_subscription_with_token`**: Cannot create token-specific subscriptions
 3. **`create_subscription_from_plan`**: Cannot create subscriptions from plan templates
 4. **`deposit_funds`**: Cannot deposit additional funds into existing subscriptions
-5. **`resume_subscription`**: Cannot resume when the blocked subscriber is the authorizer
-6. **`migrate_subscription_to_plan`**: Cannot migrate an existing subscription to a new plan version
+5. **`pause_subscription`** (as subscriber): Cannot self-pause a subscription
+6. **`cancel_subscription`** (as subscriber): Cannot self-cancel a subscription
+7. **`resume_subscription`** (as subscriber): Cannot self-resume a subscription
+8. **`migrate_subscription_to_plan`**: Cannot migrate an existing subscription to a new plan version
+
+**Charge operations:**
+9. **`charge_subscription`** / **`batch_charge`** / **`operator_batch_charge`**: Billing charges against a blocklisted subscriber's subscriptions are rejected with `Error::SubscriberBlocklisted`. The subscription remains open but cannot be billed until the subscriber is unblocked or the merchant/admin cancels it.
+
+**Merchant withdrawal (when the merchant address is blocklisted):**
+10. **`withdraw_merchant_funds`** / **`withdraw_merchant_funds_for_token`**: A blocklisted merchant address cannot withdraw earnings. Accumulated balances are preserved and released upon unblocking.
 
 All blocked operations return `Error::SubscriberBlocklisted`.
 
 ### Allowed Operations
 
-Blocklisted subscribers can still perform the following operations on **existing** subscriptions:
+Blocklisted subscribers retain the following rights:
 
-1. **`cancel_subscription`**: Can cancel their subscriptions
-2. **`pause_subscription`**: Can pause their subscriptions
-3. **`withdraw_subscriber_funds`**: Can withdraw remaining balance after cancellation
-4. **Charging**: Existing subscriptions continue to be charged normally (admin/automated charges)
+1. **`withdraw_subscriber_funds`**: Can withdraw remaining prepaid balance after cancellation. The blocklist is preventive, not punitive — existing funds are never seized.
 
-Merchant- or admin-authorized maintenance flows remain subject to their normal authorization rules. The blocklist specifically rejects blocked subscriber-authored mutation paths.
+Merchant- or admin-authorized flows against a subscription belonging to a blocklisted subscriber remain fully available. The blocklist specifically rejects blocked subscriber-authored mutation paths and prevents billing while blocked.
+
+| Operation | Blocked subscriber as caller | Merchant/admin acting on their subscription |
+|-----------|------------------------------|---------------------------------------------|
+| `pause_subscription` | Blocked | Allowed |
+| `cancel_subscription` | Blocked | Allowed |
+| `resume_subscription` | Blocked | Allowed |
+| `charge_subscription` | Blocked (any caller) | Blocked (any caller) |
+| `withdraw_subscriber_funds` | Allowed (fund return) | N/A |
 
 ## Storage Schema
 
@@ -260,15 +274,27 @@ let new_sub_id = client.create_subscription(
 
 **Rationale**: Resuming or migrating materially changes subscription access and commercial terms, so these flows are treated the same as creation and top-up paths.
 
-### 5. Charging Continues
+### 5. Charging is Blocked
 
-**Behavior**: Existing subscriptions continue to be charged normally even after blocklisting.
+**Behavior**: Interval charges and usage charges are rejected for any subscription whose subscriber is blocklisted. The subscription remains open in its current state but cannot be billed until the subscriber is unblocked or the subscription is cancelled by the merchant or admin.
 
-**Rationale**: Honors existing financial commitments. If a merchant wants to stop charging, they should cancel the subscription.
+**Rationale**: Charging a blocklisted subscriber against their explicit blocked status is a conflict of intent. Merchants who want to conclude a relationship with a blocked subscriber should cancel the subscription via their own authorization.
 
-### 6. Withdrawal Rights
+### 6. Pause and Cancel Are Blocked for Subscriber (Not Merchant/Admin)
 
-**Behavior**: Blocklisted subscribers can withdraw remaining balance after cancellation.
+**Behavior**: A blocklisted subscriber cannot self-pause, self-cancel, or self-resume their subscription. Merchants and admins retain full pause/cancel/resume authority over those subscriptions.
+
+**Rationale**: Preventing subscriber-initiated mutation stops a blocked subscriber from hiding from charges (pausing) or racing to cancel before a dispute resolves. The merchant and admin can still manage the subscription lifecycle on behalf of both parties.
+
+### 7. Merchant Withdrawal Blocked When Merchant is Blocklisted
+
+**Behavior**: If a merchant address is itself blocklisted (e.g., for fraud), they cannot withdraw accumulated earnings. The funds remain in the vault's accounting ledger and are released when the admin removes the block.
+
+**Rationale**: Unified enforcement using the same `require_not_blocklisted` guard. Any address — subscriber or merchant — blocked on this contract loses access to outgoing fund flows.
+
+### 8. Withdrawal Rights for Subscribers
+
+**Behavior**: Blocklisted subscribers can always call `withdraw_subscriber_funds` to reclaim their prepaid balance from a cancelled subscription.
 
 **Rationale**: Prevents fund seizure. The blocklist is preventive, not punitive.
 
@@ -308,13 +334,23 @@ let new_sub_id = client.create_subscription(
 
 The blocklist implementation includes tests covering:
 
+**Core blocklist management (`test_blocklist.rs` / `test_governance.rs`):**
 - Admin add and admin-only removal
 - Duplicate add rejection without entry mutation
 - Missing-entry unblock rejection
 - Add/remove event emission and payload verification
 - `None` and empty-string reason variants
-- Enforcement on direct creation, token-specific creation, plan creation, deposit, resume, and plan migration
-- Post-unblock restoration of create, deposit, resume, and migration flows
+
+**Enforcement (`test_blocklist_enforcement.rs`):**
+- Blocked: create subscription, deposit funds
+- Blocked: interval charge and usage charge while subscriber is blocklisted
+- Blocked: subscriber self-pause, self-cancel, self-resume
+- Allowed: merchant pause/cancel/resume on blocked subscriber's subscription
+- Allowed: subscriber `withdraw_subscriber_funds` (fund-return path)
+- Blocked: merchant `withdraw_merchant_funds` when the merchant address is blocklisted
+- Block-after-creation: subscription balance and status preserved, subsequent deposits blocked
+- Unblock restores full subscriber access (create, deposit, pause)
+- Blocked merchant earnings preserved; withdrawal unlocked after admin unblocks merchant
 
 ## Operational Guidance
 
