@@ -1021,3 +1021,43 @@ pub fn charge_usage_one(
         }
     }
 }
+
+/// Calculates the prorated first-charge amount for a subscription starting mid-interval.
+///
+/// Proration scales `amount` linearly by `remaining_seconds / interval`.
+///
+/// # Security & Invariants
+/// - Rejects negative amounts with `Error::InvalidAmount`.
+/// - Rejects zero interval with `Error::InvalidInput`.
+/// - Caps at `amount` when `remaining_seconds >= interval`.
+/// - Guarantees result is always in `[0, amount]` without `i128` overflow or underflow.
+pub fn calculate_prorated_first_charge(
+    amount: i128,
+    interval: u64,
+    remaining_seconds: u64,
+) -> Result<i128, Error> {
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
+    if interval == 0 {
+        return Err(Error::InvalidInput);
+    }
+    if remaining_seconds == 0 {
+        return Ok(0);
+    }
+    if remaining_seconds >= interval {
+        return Ok(amount);
+    }
+
+    let int_i128 = interval as i128;
+    let q = amount / int_i128;
+    let r = amount % int_i128;
+
+    let q_part = q.saturating_mul(remaining_seconds as i128);
+    let prod_r = (r as u128).saturating_mul(remaining_seconds as u128);
+    let r_part = (prod_r / (interval as u128)) as i128;
+
+    let prorated = q_part.saturating_add(r_part).min(amount).max(0);
+    Ok(prorated)
+}
+
