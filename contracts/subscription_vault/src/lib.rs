@@ -640,7 +640,8 @@ pub use types::{
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
     PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof, ReconciliationSummaryPage,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
     RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
@@ -665,7 +666,7 @@ pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 /// field. Existing live `DataKey::Sub(id)` records were serialized without this
 /// trailing field; the `v3 → v4` step in [`admin::do_migrate`] walks every
 /// subscription record and rewrites it so the new field deserializes cleanly.
-const STORAGE_VERSION: u32 = 4;
+const STORAGE_VERSION: u32 = 5;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a single call.
 const MAX_EXPORT_LIMIT: u32 = 100;
@@ -1380,6 +1381,7 @@ impl SubscriptionVault {
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
         expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1392,6 +1394,7 @@ impl SubscriptionVault {
             lifetime_cap,
             expires_at,
             expires_at_ledger,
+            sub_account_label,
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1551,6 +1554,7 @@ impl SubscriptionVault {
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
         expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1564,6 +1568,7 @@ impl SubscriptionVault {
             lifetime_cap,
             expires_at,
             expires_at_ledger,
+            sub_account_label,
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1681,9 +1686,10 @@ impl SubscriptionVault {
         env: Env,
         subscriber: Address,
         plan_template_id: u32,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
+        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id, sub_account_label)
     }
 
     /// Retrieve a plan template.
@@ -2412,6 +2418,79 @@ impl SubscriptionVault {
     /// Get payout schedule.
     pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule {
         merchant::get_payout_schedule(&env, &merchant)
+    }
+
+    // ── Sub-Accounts (#575) ────────────────────────────────────────────────────
+
+    /// Register a new labelled sub-account (department) for a merchant.
+    ///
+    /// Sub-accounts provide isolated ledgers within one merchant identity.
+    /// Subscriptions can route charges to a specific sub-account by setting
+    /// `sub_account_label` at creation time.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — A unique label for the sub-account (e.g. `"sales"` or `"engineering"`).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Merchant config not initialised.
+    /// * [`Error::InvalidInput`] — Label is empty or already registered.
+    ///
+    /// # Events
+    /// Emits [`SubAccountCreatedEvent`] with topic `("sub_account_created", merchant, label)`.
+    pub fn register_sub_account(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> Result<(), Error> {
+        merchant::register_sub_account(&env, merchant, label)
+    }
+
+    /// Withdraw funds from a merchant sub-account.
+    ///
+    /// Funds are transferred to the merchant's address (must authorise).
+    /// Sub-account balances are independent from the parent merchant balance
+    /// but roll up to the parent in earnings reporting.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — The sub-account label to withdraw from.
+    /// * `token` — The token to withdraw.
+    /// * `amount` — Amount to withdraw (must be positive and ≤ sub-account balance).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Sub-account does not exist or balance is zero.
+    /// * [`Error::InvalidAmount`] — Amount is zero or negative.
+    /// * [`Error::InsufficientBalance`] — Sub-account balance or vault balance is insufficient.
+    ///
+    /// # Events
+    /// Emits [`SubAccountWithdrawEvent`] with topic `("sub_account_withdrawn", merchant, label)`.
+    pub fn withdraw_sub_account_funds(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+        token: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_sub_account_funds")?;
+        merchant::withdraw_sub_account_funds(&env, merchant, label, token, amount)
+    }
+
+    /// Get the current balance of a merchant sub-account.
+    pub fn get_sub_account_balance(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> i128 {
+        merchant::get_sub_account_balance(&env, &merchant, &label)
+    }
+
+    /// Get the list of registered sub-account labels for a merchant.
+    pub fn get_sub_account_list(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<Symbol> {
+        merchant::get_sub_account_list(&env, &merchant)
     }
 
     // ── Dispute / Chargeback ──────────────────────────────────────────────────

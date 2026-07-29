@@ -779,6 +779,35 @@ pub fn rewrite_subscriptions_for_ledger_expiration(env: &Env) -> u32 {
     touched
 }
 
+/// v4 → v5 migration: rewrite every `DataKey::Sub(id)` record so the new
+/// `sub_account_label: Option<Symbol>` field deserializes cleanly for
+/// subscriptions created before STORAGE_VERSION 5.  The in-memory struct
+/// already carries `sub_account_label: None` after the deserialization
+/// round-trip, so this just needs to read-write each record.
+pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            // Round-trip: deserialise populates `sub_account_label: None`,
+            // then write back so XDR encoding includes the new field.
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {
     let instance = env.storage().instance();
     let persistent = env.storage().persistent();
@@ -939,6 +968,13 @@ pub fn do_migrate(
             (3, _) => {
                 rewrite_subscriptions_for_ledger_expiration(env);
                 current = 4;
+            }
+            // v4 → v5: rewrite every `DataKey::Sub(id)` record so the new
+            // `sub_account_label: Option<Symbol>` field deserializes cleanly
+            // for subscriptions created before STORAGE_VERSION 5.
+            (4, _) => {
+                rewrite_subscriptions_for_sub_account_label(env);
+                current = 5;
             }
             _ => {
                 current += 1;
