@@ -3,9 +3,10 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{
-    contracterror, contracttype, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
-};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
+
+/// Current schema version for contract events.
+pub const EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// Event schema version for backwards-compatible indexer decoding.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -527,6 +528,15 @@ impl Subscription {
             None => false,
         }
     }
+}
+
+/// Pending emergency-withdraw intent for a paused or cancelled subscription.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawIntent {
+    pub subscription_id: u32,
+    pub requested_at: u64,
+    pub requested_status: SubscriptionStatus,
 }
 
 /// A non-transferable (soulbound) credential badge linking a subscription.
@@ -1874,6 +1884,30 @@ pub struct BulkCancelEvent {
     pub schema_version: u32,
 }
 
+/// Per-id outcome of a bulk deposit operation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkDepositResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    /// Numeric error code from the `Error` enum, or `0` on success.
+    pub error_code: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-deposit batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkDepositEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub deposited: u32,
+    pub failed: u32,
+    pub total_amount: i128,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GracePeriodEnteredEvent {
@@ -1975,6 +2009,17 @@ pub struct SubscriberWithdrawalEvent {
     pub subscriber: Address,
     pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriberEmergencyWithdrawEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub cooldown_started_at: u64,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2555,6 +2600,47 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
+    if decimals < 9 {
+        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    } else {
+        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
+        Ok(amount / factor)
+    }
+}
+
+pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 || decimals > 18 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals == 9 {
+        return Ok(amount);
+    }
+    if decimals < 9 {
+        let factor = 10i128.checked_pow(9 - decimals).ok_or(Error::Overflow)?;
+        Ok(amount / factor)
+    } else {
+        let factor = 10i128.checked_pow(decimals - 9).ok_or(Error::Overflow)?;
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    }
+}
 
 #[cfg(test)]
 mod known_keys_tests {
@@ -2756,7 +2842,43 @@ pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, E
         if raw % scale != 0 {
             return Err(Error::InvalidInput);
         }
-        Ok(raw / scale)
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            n - 1
+        );
+        assert!(n > 0, "variant count must be non-zero");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let expected_instance: std::vec::Vec<u32> = all_variants(&env)
+            .into_iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+        assert!(seen.iter().all(|&s| s));
+        assert_eq!(variants.len(), 50);
     }
 }
 

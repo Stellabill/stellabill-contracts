@@ -80,7 +80,7 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent,
+    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -335,7 +335,7 @@ pub mod statements {
         newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage {
-            statements: soroban_sdk::Vec::new(env),
+            statements: soroban_sdk::Vec::new(&env),
             next_cursor: None,
             total: 0,
         })
@@ -632,27 +632,23 @@ pub use types::{
     BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
     BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
-    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
-    ReferralAttributedEvent,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
-    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
-    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
-    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
-    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof, ReconciliationSummaryPage,
+    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_METADATA_KEYS,
     MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
     OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
     SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
@@ -866,56 +862,6 @@ impl SubscriptionVault {
         )
     }
 
-    /// Propose a new admin as part of the two-step admin rotation flow.
-    ///
-    /// Creates a proposal that the `new_admin` must claim within 7 days via
-    /// [`claim_admin_role`](Self::claim_admin_role). The current admin can cancel
-    /// the proposal at any time via [`cancel_admin_proposal`](Self::cancel_admin_proposal).
-    ///
-    /// Only one proposal may be active at a time.
-    ///
-    /// # Errors
-    /// - `Unauthorized` if caller is not the current admin
-    /// - `InvalidNewAdmin` if `new_admin` is the contract address
-    /// - `ProposalAlreadyExists` if a proposal is already pending
-    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-        admin::do_propose_admin(&env, current_admin, new_admin)
-    }
-
-    /// Claim the admin role after a proposal has been created by the current admin.
-    ///
-    /// The claimant must match the `new_admin` address in the proposal, and the
-    /// 7-day claim window must not have expired. On success the stored admin is
-    /// atomically swapped and the proposal is consumed.
-    ///
-    /// # Errors
-    /// - `ProposalNotFound` if no proposal exists
-    /// - `ProposalExpired` if the 7-day window has elapsed
-    /// - `InvalidClaimant` if the caller is not the proposed new admin
-    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
-        admin::do_claim_admin_role(&env, claimant)
-    }
-
-    /// Cancel an active admin proposal.
-    ///
-    /// Only the current admin may cancel. The proposal is removed from storage
-    /// and a cancellation event is emitted. After cancellation a new proposal
-    /// may be created.
-    ///
-    /// # Errors
-    /// - `Unauthorized` if caller is not the current admin
-    /// - `NoActiveProposal` if there is no proposal to cancel
-    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
-        admin::do_cancel_admin_proposal(&env, admin)
-    }
-
-    /// Read the current admin proposal, if any.
-    ///
-    /// Returns `None` when no proposal is active.
-    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
-        admin::get_admin_proposal(&env)
-    }
-
     /// Allows the admin to recover funds that are not tied to any subscription.
     pub fn recover_stranded_funds(
         env: Env,
@@ -1027,6 +973,46 @@ impl SubscriptionVault {
     ) -> Result<Vec<BulkSubscriptionResult>, Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_cancel_subscriptions")?;
         subscription::do_bulk_cancel_subscriptions(&env, caller, &subscription_ids, nonce)
+    }
+
+    /// Bulk-deposit funds into multiple subscriptions. Admin or operator only.
+    ///
+    /// Treasury operators can top up many subscriptions in a single call,
+    /// reducing gas cost for centralized customer-success workflows. Each entry
+    /// is processed independently; the returned vector has exactly one
+    /// [`BulkDepositResult`] per entry, in request order.
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` — The admin or operator whose tokens will be transferred to
+    ///   each subscription's vault. Must be authorized.
+    /// * `entries` — A vector of `(subscription_id, amount)` tuples. At most
+    ///   [`BATCH_MAX_SIZE`]; a larger batch is rejected wholesale with
+    ///   [`Error::BatchTooLarge`]. An empty list is a no-op (no nonce consumed,
+    ///   no event).
+    /// * `nonce` — Per-batch replay protection on the
+    ///   `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller (domain `2`).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+    /// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] entries supplied.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+    ///
+    /// # Events
+    ///
+    /// Emits one [`FundsDepositedEvent`] per successfully deposited subscription,
+    /// plus a single [`BulkDepositEvent`] envelope summarising the batch.
+    pub fn bulk_deposit_funds(
+        env: Env,
+        caller: Address,
+        entries: Vec<(u32, i128)>,
+        nonce: u64,
+    ) -> Result<Vec<crate::types::BulkDepositResult>, Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_deposit_funds")?;
+        caller.require_auth();
+        subscription::do_bulk_deposit_funds(&env, caller, &entries, nonce)
     }
 
     // ── Emergency Stop ────────────────────────────────────────────────────────
@@ -1327,10 +1313,6 @@ impl SubscriptionVault {
                     expires_at: s.expires_at,
                     grace_start_timestamp: None,
                     cancel_at: None,
-                    // Default to auto_renew=true on snapshot restore; the original value
-                    // is not stored in SubscriptionSummary (pre-562 snapshots).
-                    auto_renew: true,
-                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1398,7 +1380,6 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            inviter.clone(),
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1444,7 +1425,6 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            inviter.clone(),
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1758,6 +1738,25 @@ impl SubscriptionVault {
             },
         );
         Ok(())
+    }
+
+    /// Request a subscriber emergency withdrawal after a 72-hour cooldown.
+    pub fn request_emergency_withdraw(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        subscription::do_request_emergency_withdraw(&env, subscription_id, subscriber)
+    }
+
+    /// Finalize a pending emergency withdrawal once the cooldown has elapsed.
+    pub fn finalize_emergency_withdraw(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "finalize_emergency_withdraw")?;
+        subscription::do_finalize_emergency_withdraw(&env, subscription_id, subscriber)
     }
 
     /// Withdraw subscriber funds after cancel.
@@ -2615,46 +2614,8 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
-    /// Configure the oracle price deviation circuit-breaker threshold.
-    ///
-    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
-    /// When the latest oracle price deviates from the median of the last N
-    /// samples by more than this amount, the charge is rejected with
-    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
-    /// is emitted.
-    ///
-    /// A value of `0` rejects **any** price change (strict mode).
-    /// When never called, the deviation check is disabled entirely.
-    ///
-    /// # Auth
-    ///
-    /// Admin only.
-    ///
-    /// # Errors
-    ///
-    /// * [`Error::Unauthorized`] — Caller is not the admin.
-    pub fn set_oracle_deviation_bps(
-        env: Env,
-        admin: Address,
-        bps: u32,
-    ) -> Result<(), Error> {
-        require_admin_auth(&env, &admin)?;
-        oracle::set_oracle_deviation_bps(&env, bps);
-        Ok(())
-    }
-
-    /// Return the current deviation threshold, or `None` if not configured.
-    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
-        oracle::get_oracle_deviation_bps(&env)
-    }
-
-    /// Return the recorded oracle price history for a token (insertion order).
-    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
-        oracle::get_oracle_price_history(&env, &token)
-    }
-
     /// Emit oracle liveness event.
-    pub fn emit_oracle_liveness(env: Env) -> Result<crate::types::OracleLivenessEvent, Error> {
+    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
     }
 
@@ -2806,24 +2767,6 @@ impl SubscriptionVault {
     /// Get protocol fee bps.
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
-    }
-
-    /// Set the fee-token override address. Admin only.
-    ///
-    /// When set and different from the subscription's settlement token,
-    /// protocol fees are converted through the oracle and paid in
-    /// `fee_token`. Pass `None` to clear the override.
-    pub fn set_fee_token(
-        env: Env,
-        admin: Address,
-        fee_token: Option<Address>,
-    ) -> Result<(), Error> {
-        admin::set_fee_token(&env, admin, fee_token)
-    }
-
-    /// Return the configured fee-token override address, or `None` if not set.
-    pub fn get_fee_token(env: Env) -> Option<Address> {
-        admin::get_fee_token(&env)
     }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
@@ -3008,67 +2951,6 @@ impl SubscriptionVault {
         )
     }
 
-    /// Get the global merchant whitelist mode toggle.
-    pub fn get_whitelist_mode(env: Env) -> bool {
-        merchant::get_whitelist_mode(&env)
-    }
-
-    /// Enable or disable the global merchant whitelist mode. Admin-only.
-    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
-        merchant::set_whitelist_mode(&env, admin, enabled)
-    }
-
-    /// Check whether a merchant is approved under whitelist mode.
-    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
-        merchant::is_merchant_approved(&env, &merchant)
-    }
-
-    /// Approve a merchant under whitelist mode. Admin-only.
-    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::approve_merchant(&env, admin, merchant)
-    }
-
-    /// Revoke a merchant's approval under whitelist mode. Admin-only.
-    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::revoke_merchant(&env, admin, merchant)
-    }
-
-    /// Get the admin-controlled allowlist of valid merchant compliance-category tags.
-    pub fn get_tag_allowlist(env: Env) -> Vec<Symbol> {
-        merchant::get_tag_allowlist(&env)
-    }
-
-    /// Replace the global merchant tag allowlist. Admin-only.
-    ///
-    /// # Errors
-    /// * [`Error::Unauthorized`] — caller is not the stored admin.
-    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
-    pub fn set_tag_allowlist(env: Env, admin: Address, tags: Vec<Symbol>) -> Result<(), Error> {
-        merchant::set_tag_allowlist(&env, admin, tags)
-    }
-
-    /// Get the compliance-category tags currently assigned to `merchant`.
-    pub fn get_merchant_tags(env: Env, merchant: Address) -> Vec<Symbol> {
-        merchant::get_merchant_tags(&env, merchant)
-    }
-
-    /// Set (fully replacing) `merchant`'s compliance-category tags. Admin-only.
-    /// Pass an empty `tags` vector to clear all tags.
-    ///
-    /// # Errors
-    /// * [`Error::Unauthorized`] — caller is not the stored admin.
-    /// * [`Error::MerchantTagLimitExceeded`] — more than `MAX_MERCHANT_TAGS` tags supplied.
-    /// * [`Error::DuplicateMerchantTag`] — `tags` contains the same symbol twice.
-    /// * [`Error::UnknownMerchantTag`] — a tag is not present in the current allowlist.
-    pub fn set_merchant_tags(
-        env: Env,
-        admin: Address,
-        merchant: Address,
-        tags: Vec<Symbol>,
-    ) -> Result<(), Error> {
-        merchant::set_merchant_tags(&env, admin, merchant, tags)
-    }
-
     /// Update merchant config.
     pub fn set_merchant_config(
         env: Env,
@@ -3077,12 +2959,6 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         merchant::set_merchant_config(&env, merchant, config)
     }
-
-    /// Configure merchant withdrawal co-signers and threshold.
-    pub fn set_merchant_multisig(env: Env, admin: Address, merchant: Address, signers: Vec<Address>, threshold: u32) -> Result<(), Error> { merchant::set_merchant_multisig(&env, admin, merchant, signers, threshold) }
-
-    /// Get merchant withdrawal co-signer config.
-    pub fn get_merchant_multisig_config(env: Env, merchant: Address) -> Option<crate::types::MerchantMultiSigConfig> { merchant::get_merchant_multisig_config(&env, merchant) }
 
     /// Partial update merchant config.
     pub fn update_merchant_config(
@@ -3115,17 +2991,6 @@ impl SubscriptionVault {
         merchant: Address,
     ) -> Option<crate::types::MerchantConfig> {
         merchant::get_merchant_config(&env, merchant)
-    }
-
-    /// Set the number of consecutive InsufficientBalance failures before a
-    /// subscription is automatically paused. `0` disables auto-pause. Admin only.
-    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
-        admin::do_set_auto_pause_threshold(&env, admin, threshold)
-    }
-
-    /// Return the current auto-pause threshold (`0` = disabled).
-    pub fn get_auto_pause_threshold(env: Env) -> u32 {
-        admin::get_auto_pause_threshold(&env)
     }
 
     /// Returns the schema version.
@@ -3164,8 +3029,6 @@ mod test_usage_limits_required;
 #[cfg(test)]
 mod test_charge_invariants;
 #[cfg(test)]
-mod test_charge_event_exclusivity;
-#[cfg(test)]
 mod test_metadata_signed;
 
 #[cfg(test)]
@@ -3182,6 +3045,9 @@ mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test_validation;
+
+#[cfg(test)]
+mod test_emergency_withdraw;
 
 #[cfg(test)]
 mod test_abi_validators_integration;
