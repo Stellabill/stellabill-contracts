@@ -71,6 +71,7 @@ fn test_multi_actor_e2e_flow() {
         &usage_enabled,
         &None,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let sub_state = vault.get_subscription(&sub_id);

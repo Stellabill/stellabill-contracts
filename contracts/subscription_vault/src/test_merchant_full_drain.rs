@@ -55,6 +55,7 @@ fn create_and_fund_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     client.deposit_funds(&id, &subscriber, &DEPOSIT_AMOUNT);
@@ -179,6 +180,7 @@ fn test_merchant_dust_balance_drain() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     client.deposit_funds(&id, &subscriber, &dust_amount);

@@ -73,6 +73,7 @@ fn create_and_fund(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // Fund enough for many charges.
@@ -286,6 +287,7 @@ fn test_last_payment_timestamp_zero() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     token_admin.mint(&subscriber, &1_000_000_000i128);
