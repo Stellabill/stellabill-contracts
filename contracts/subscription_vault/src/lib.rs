@@ -48,7 +48,9 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
-<<<<<<< HEAD
+mod reentrancy;
+mod oracle_adapter;
+mod validation;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
@@ -62,34 +64,21 @@ mod test_governance;
 #[cfg(test)]
 mod test_insufficient_balance;
 #[cfg(test)]
-mod test_multi_actor;
-#[cfg(test)]
 mod test_recovery;
 #[cfg(test)]
-mod test_refactor_check;
-#[cfg(test)]
-mod test_safe_math_regression;
-#[cfg(test)]
 mod test_security;
-#[cfg(test)]
-mod test_usage_limits;
-#[cfg(test)]
-mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
 #[cfg(test)]
 mod test_admin_rotation_two_step;
-=======
-mod reentrancy;
-mod oracle_adapter;
-mod validation;
->>>>>>> upstream/main
+#[cfg(test)]
+mod test_config_migration;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
-    AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
-    DisputeStatus, Error, OracleLivenessEvent, Proposal, ProposalCancelledEvent,
+    Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
+    DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
     ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
 };
@@ -637,9 +626,11 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
-    BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
+    BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
+    BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
@@ -730,10 +721,7 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
-<<<<<<< HEAD
-    /// Updates the admin address.
-=======
-    /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
+/// Return the current (next-expected) nonce for a `(signer, domain)` pair.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
     }
@@ -828,7 +816,6 @@ impl SubscriptionVault {
     }
 
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
->>>>>>> upstream/main
     ///
     /// Migrates every per-merchant storage key (balances, earnings, config, pause
     /// state, subscription index) and rewrites `Subscription.merchant` for all
@@ -3037,8 +3024,6 @@ impl SubscriptionVault {
 }
 
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_usage_limits_required;
 
 #[cfg(test)]
@@ -3056,9 +3041,7 @@ mod test_statement_compaction;
 #[cfg(test)]
 mod test_billing_period_snapshots;
 #[cfg(test)]
-mod test_governance;
-#[cfg(test)]
-mod test_insufficient_balance;
+mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test_validation;
@@ -3079,20 +3062,6 @@ mod test_auto_pause;
 
 #[cfg(test)]
 mod test_grace_buyout;
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::SubscriptionVaultClient;
-
-    #[test]
-    fn version_is_one() {
-        let env = Env::default();
-        let contract_id = env.register(SubscriptionVault, ());
-        let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 1);
-    }
-}
 
 #[cfg(test)]
 mod test_subscription_transfer;

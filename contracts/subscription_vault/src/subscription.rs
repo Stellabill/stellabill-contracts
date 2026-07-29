@@ -146,6 +146,17 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
         .ok_or(Error::NotFound)
 }
 
+/// Helper to extend a persistent storage entry's TTL.
+///
+/// The Soroban SDK `Persistent::get_ttl` is only available under `#[cfg(test)]`,
+/// so we always call `extend_ttl` unconditionally. The call is idempotent:
+/// extending an already-sufficient TTL is a harmless no-op.
+pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, threshold, extend_to);
+}
+
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
@@ -654,7 +665,7 @@ pub fn do_create_subscription_with_token(
         (Symbol::new(env, "subscription_created"), id),
         SubscriptionCreatedEvent {
             subscription_id: id,
-            subscriber,
+            subscriber: subscriber.clone(),
             merchant,
             token,
             amount,
