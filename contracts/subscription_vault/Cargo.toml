@@ -74,3 +74,7 @@ path = "benches/idem_lookup.rs"
 name = "charge_cold_warm"
 path = "benches/charge_cold_warm.rs"
 
+[[test]]
+name = "withdraw_fixed_cost"
+path = "benches/withdraw_fixed_cost.rs"
+
