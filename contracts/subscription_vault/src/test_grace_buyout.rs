@@ -124,7 +124,7 @@ fn test_grace_buyout_happy_path() {
     let res = client.try_grace_buyout(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
     assert!(res.is_ok(), "buyout must succeed");
 
-    let (charge_amount, premium_paid) = res.unwrap();
+    let (charge_amount, premium_paid) = res.unwrap().unwrap();
     assert_eq!(charge_amount, AMOUNT);
     assert_eq!(premium_paid, AMOUNT * 5 / 100);
 
@@ -187,7 +187,7 @@ fn test_grace_buyout_zero_premium_exact_amount() {
     let res = client.try_grace_buyout(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
     assert!(res.is_ok(), "buyout with zero premium must succeed");
 
-    let (charge_amount, premium_paid) = res.unwrap();
+    let (charge_amount, premium_paid) = res.unwrap().unwrap();
     assert_eq!(charge_amount, AMOUNT);
     assert_eq!(premium_paid, 0);
 
@@ -277,7 +277,7 @@ fn test_grace_buyout_then_normal_charge() {
     set_buyout_premium(&env, &client, 200); // 2%
 
     let deposit = AMOUNT + AMOUNT * 2 / 100;
-    token_admin.mint(&subscriber, &deposit * 2);
+    token_admin.mint(&subscriber, &(deposit * 2));
 
     force_into_grace_period(&env, &client, id);
 
