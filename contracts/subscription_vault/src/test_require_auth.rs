@@ -496,3 +496,43 @@ fn get_min_topup_returns_stored_value_unchanged() {
     client.set_min_topup(&admin, &new_topup);
     assert_eq!(client.get_min_topup(), new_topup);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 8. bulk_deposit_funds — admin or operator must authorize
+//
+// Auth is performed by `bulk_precheck` → `require_admin_or_operator_auth`.
+// The lib.rs entrypoint no longer has its own `require_auth()` call — it relies
+// entirely on the helper path for auth (perf/dedup-require-auth #622).
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1001)")] // Error::Unauthorized
+fn bulk_deposit_funds_unauthorized_caller() {
+    let (env, client, token, _) = setup();
+    let (id, subscriber, _) = make_subscription(&env, &client);
+    // Fund the subscription so the deposit could succeed.
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &DEPOSIT);
+    client.deposit_funds(&id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>, &None::<soroban_sdk::BytesN<32>>);
+
+    // A random non-admin, non-operator caller.
+    let random_caller = Address::generate(&env);
+    let mut entries = Vec::new(&env);
+    entries.push_back((id, MIN_TOPUP));
+
+    // mock_all_auths satisfies require_auth() for any address, but the identity
+    // check in require_admin_or_operator_auth rejects a non-admin/operator caller.
+    let res = client.try_bulk_deposit_funds(&random_caller, &entries, &0u64);
+    assert!(res.is_err());
+}
+
+#[test]
+fn bulk_deposit_funds_empty_vector_no_op() {
+    // An empty entries list is a no-op that does NOT consume a nonce and does
+    // NOT require admin/operator auth — it returns early before bulk_precheck.
+    let (env, client, _, _admin) = setup();
+    let empty: Vec<(u32, i128)> = Vec::new(&env);
+    // Even a non-admin can call with empty entries — it's a no-op.
+    let random = Address::generate(&env);
+    let results = client.bulk_deposit_funds(&random, &empty, &0u64);
+    assert_eq!(results.len(), 0);
+}

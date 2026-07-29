@@ -1016,7 +1016,8 @@ impl SubscriptionVault {
     ) -> Result<Vec<crate::types::BulkDepositResult>, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_deposit_funds")?;
-        caller.require_auth();
+        // Auth already performed by subscription::bulk_precheck →
+        // admin::require_admin_or_operator_auth (deduplicated from this entrypoint).
         subscription::do_bulk_deposit_funds(&env, caller, &entries, nonce)
     }
 
