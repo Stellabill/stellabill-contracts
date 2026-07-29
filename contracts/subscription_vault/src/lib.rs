@@ -77,6 +77,10 @@ mod test_config_migration;
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
+    AdminConfigChangedEvent, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent,
+    DisputeRespondedEvent, DisputeStatus, Error, OracleLivenessEvent, Proposal,
+    ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent,
+    ProposalVotedEvent, ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
@@ -626,6 +630,23 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
+    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
+    BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+    ChargeExecutionResult, ContractSnapshot, DataKey, DelegatedDepositEvent,
+    DelegatedPayerGrant, DelegatedPayerGrantedEvent, DelegatedPayerRevokedEvent,
+    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent,
+    MetadataSetSignedEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent,
+    OperatorRemovedEvent, OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice,
+    PartialRefundEvent, PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
+    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
@@ -1620,6 +1641,63 @@ impl SubscriptionVault {
             },
         );
         Ok(())
+    }
+
+    // ── Delegated Payer ─────────────────────────────────────────────────────
+
+    /// Authorize a third-party `payer` to deposit funds into the `subscriber`'s vault.
+    ///
+    /// The grant is consumed on first use — each grant authorizes exactly one deposit.
+    /// The subscriber may revoke at any time.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerGrantedEvent`].
+    pub fn grant_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+        expires_at: u64,
+        max_amount: i128,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        subscription::do_grant_delegated_payer(&env, subscriber, payer, expires_at, max_amount)
+    }
+
+    /// Revoke a previously granted delegated payer authorization.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerRevokedEvent`].
+    pub fn revoke_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+    ) -> Result<(), Error> {
+        subscription::do_revoke_delegated_payer(&env, subscriber, payer)
+    }
+
+    /// Deposit funds on behalf of a subscriber using a delegated payer grant.
+    ///
+    /// The caller must have a valid, non-expired grant from the subscriber.
+    /// The grant is consumed after a successful deposit.
+    ///
+    /// # Events
+    /// Emits [`DelegatedDepositEvent`].
+    pub fn deposit_funds_on_behalf(
+        env: Env,
+        subscription_id: u32,
+        payer: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds_on_behalf")?;
+        subscription::do_deposit_funds_on_behalf(
+            &env,
+            subscription_id,
+            payer,
+            amount,
+            idem_key,
+        )
     }
 
     /// Grace-period buyout: deposit enough to cover the missed charge plus a

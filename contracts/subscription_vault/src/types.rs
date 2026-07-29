@@ -221,6 +221,15 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    /// Timestamp of the most recent admin-config mutation for a given key label,
+    /// hashed to `BytesN<32>` for collision-free per-key cooldown tracking.
+    /// Discriminant 59.
+    AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
+    SubscriberCreateCap,
+    SubscriberCreateWindow(Address),
+    ChargeSalt(u32),
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    DelegatedPayerGrant(Address, Address),
     /// Split payees details for split-billing. Discriminant 59.
     SplitPayees(u32),
     /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
@@ -291,6 +300,11 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::AdminConfigLastChangedAt(_) => 59,
+            DataKey::SubscriberCreateCap => 59,
+            DataKey::SubscriberCreateWindow(_) => 60,
+            DataKey::ChargeSalt(_) => 61,
+            DataKey::DelegatedPayerGrant(_, _) => 62,
             DataKey::SplitPayees(_) => 59,
             DataKey::BuyoutPremiumBps => 60,
         }
@@ -940,6 +954,17 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
+    // --- Admin Config Cooldown (12000-12099) ---
+    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
+    CooldownActive = 12001,
+
+    // --- Delegated Payer (13000-13099) ---
+    /// The delegated payer grant was not found.
+    DelegatedPayerGrantNotFound = 13001,
+    /// The delegated payer grant has expired.
+    DelegatedPayerGrantExpired = 13002,
+    /// The deposit amount exceeds the grant's max_amount.
+    DelegatedPayerAmountExceeded = 13003,
     // --- Auto-Renewal (12000-12099) ---
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
@@ -1680,6 +1705,52 @@ pub struct ReferralAttributedEvent {
     pub subscription_id: u32,
     pub inviter: Address,
     pub subscriber: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Delegated payer grant: authorizes `payer` to deposit into `subscriber`'s vault.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrant {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+}
+
+/// Event emitted when a delegated payer grant is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerGrantedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub expires_at: u64,
+    pub max_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer grant is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedPayerRevokedEvent {
+    pub subscriber: Address,
+    pub payer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a delegated payer deposits funds on behalf of a subscriber.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DelegatedDepositEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub payer: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2596,3 +2667,451 @@ pub struct PrepaidQueryResult {
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OracleKind {
+    Spot,
+    Twap,
+    FixedRate,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalKind {
+    RotateAdmin = 0,
+    SetProtocolFee = 1,
+    UpgradeContract = 2,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Proposal {
+    pub id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub target2: Option<Address>,
+    pub target3: u32,
+    pub quorum_bps: u32,
+    pub votes: soroban_sdk::Map<Address, bool>,
+    pub eta: u64,
+    pub submitted_at: u64,
+    pub executed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalSubmittedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub target: Address,
+    pub quorum_bps: u32,
+    pub eta: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalVotedEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub voted_yes: bool,
+    pub guardian_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub kind: ProposalKind,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub total_weight: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCancelledEvent {
+    pub proposal_id: u64,
+    pub reason: String,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SignedMetadataPayload {
+    pub subscription_id: u32,
+    pub key: String,
+    pub value: String,
+    pub nonce: u64,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MetadataSetSignedEvent {
+    pub subscription_id: u32,
+    pub key: String,
+    pub signer: Address,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkSubscriptionResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    pub changed: bool,
+    pub error_code: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkPauseEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub paused: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkCancelEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub cancelled: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+pub const BATCH_MAX_SIZE: u32 = 100;
+
+#[cfg(test)]
+mod known_keys_tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env, String};
+
+    fn all_variants(env: &Env) -> std::vec::Vec<(DataKey, bool)> {
+        let a = Address::generate(env);
+        let b = Address::generate(env);
+        let s = String::from_str(env, "k");
+        std::vec![
+            (DataKey::MerchantSubs(a.clone()), true),
+            (DataKey::Token, true),
+            (DataKey::Admin, true),
+            (DataKey::MinTopup, true),
+            (DataKey::NextId, true),
+            (DataKey::SchemaVersion, true),
+            (DataKey::Sub(1), false),
+            (DataKey::ChargedPeriod(1), false),
+            (DataKey::IdemKey(1), false),
+            (DataKey::EmergencyStop, true),
+            (DataKey::MerchantPaused(a.clone()), true),
+            (DataKey::BillingStatement(1, 2), false),
+            (DataKey::TotalAccounted(a.clone()), true),
+            (DataKey::Recovery(s.clone()), false),
+            (DataKey::MerchantConfig(a.clone()), true),
+            (DataKey::MerchantEarnings(a.clone(), b.clone()), true),
+            (DataKey::MerchantTokens(a.clone()), true),
+            (DataKey::UsageLimits(1), true),
+            (DataKey::UsageState(1), true),
+            (DataKey::GracePeriod, true),
+            (DataKey::FeeBps, true),
+            (DataKey::Treasury, true),
+            (DataKey::AcceptedTokens, true),
+            (DataKey::TokenDecimals(a.clone()), true),
+            (DataKey::NextPlanId, true),
+            (DataKey::Plan(1), true),
+            (DataKey::SubPlan(1), true),
+            (DataKey::PlanMaxActive(1), true),
+            (DataKey::CreditLimit(a.clone(), b.clone()), true),
+            (DataKey::TokenSubs(a.clone()), true),
+            (DataKey::SubscriberSubs(a.clone()), true),
+            (DataKey::MerchantBalance(a.clone(), b.clone()), true),
+            (DataKey::Blocklist(a.clone()), false),
+            (DataKey::Oracle, true),
+            (DataKey::BillingPeriodSnapshot(1, 2), false),
+            (DataKey::BillingPeriodSnapshotIndex(1), false),
+            (DataKey::AdminNonce(a.clone(), 1), false),
+            (DataKey::Metadata(1, s.clone()), false),
+            (DataKey::MetadataKeys(1), false),
+            (DataKey::Operator, true),
+            (DataKey::BillingRetentionConfig, true),
+            (DataKey::MerchantMaxSubs(a.clone()), true),
+            (DataKey::Guardians, false),
+            (DataKey::NextProposalId, true),
+            (DataKey::Proposal(1), false),
+            (DataKey::DisputeEscrow(1), true),
+            (DataKey::Dispute(1), false),
+            (DataKey::NextDisputeId, true),
+            (DataKey::SubscriptionDispute(1), true),
+            (DataKey::PayoutSchedule(a.clone()), true),
+            (DataKey::TransferIntent(1), true),
+            (DataKey::AdminConfigLastChangedAt(soroban_sdk::BytesN::from_array(env, &[0u8; 32])), false),
+            (DataKey::SubscriberCreateCap, true),
+            (DataKey::SubscriberCreateWindow(a.clone()), false),
+            (DataKey::ChargeSalt(1), true),
+            (DataKey::DelegatedPayerGrant(a.clone(), b.clone()), false),
+        ]
+    }
+
+    #[test]
+    fn every_instance_variant_is_accepted() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if is_instance {
+                assert!(key.is_known_instance_key());
+                assert_known_data_key(&key);
+            }
+        }
+    }
+
+    #[test]
+    fn persistent_variants_are_rejected() {
+        let env = Env::default();
+        for (key, is_instance) in all_variants(&env) {
+            if !is_instance {
+                assert!(!key.is_known_instance_key());
+            }
+        }
+    }
+
+    #[test]
+    fn synthetic_unknown_key_is_rejected() {
+        // Discriminants beyond the highest registered variant (60) can never be
+        // produced by a real `DataKey`, modelling an unknown/legacy key.
+        assert!(!is_known_instance_discriminant(61));
+        assert!(!is_known_instance_discriminant(9_999));
+        assert!(!is_known_instance_discriminant(u32::MAX));
+    }
+
+    /// The debug guard must panic for an unknown key in test/debug builds.
+    #[test]
+    #[should_panic(expected = "Unknown or persistent key reached instance storage")]
+    fn assert_panics_on_persistent_key() {
+        // `Sub(u32)` (discriminant 6) is persistent and must never be written to
+        // instance storage; the guard catches it.
+        let env = Env::default();
+        let _ = &env;
+        assert_known_data_key(&DataKey::Sub(1));
+    }
+
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=59`
+    /// Drift guard: discriminants are unique and cover a contiguous `0..=60`
+    /// range, so the registry can never silently skip or duplicate a number.
+    #[test]
+    fn discriminants_are_unique_and_contiguous() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let max_discriminant = variants
+            .iter()
+            .map(|(key, _)| key.canonical_discriminant())
+            .max()
+            .unwrap_or(0) as usize;
+        let mut seen = vec![false; max_discriminant + 1];
+        for (key, _) in &variants {
+            let d = key.canonical_discriminant() as usize;
+            assert!(!seen[d], "duplicate discriminant {d}");
+            seen[d] = true;
+        }
+        let n = variants.len();
+        assert!(
+            seen.iter().all(|&s| s),
+            "discriminants are not contiguous 0..={}",
+            max_discriminant
+        );
+        assert!(!variants.is_empty(), "variant count must be non-zero");
+    }
+
+    /// Consistency: the allowlist contains exactly the instance-tier
+    /// discriminants enumerated above, is sorted, and is duplicate-free.
+    #[test]
+    fn allowlist_matches_instance_classification() {
+        let env = Env::default();
+        let variants = all_variants(&env);
+        let expected_instance: std::vec::Vec<u32> = variants
+            .iter()
+            .filter(|(_, is_instance)| *is_instance)
+            .map(|(key, _)| key.canonical_discriminant())
+            .collect();
+
+        for d in &expected_instance {
+            assert!(
+                is_known_instance_discriminant(*d),
+                "instance discriminant {d} missing from allowlist"
+            );
+        }
+        assert_eq!(
+            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
+            expected_instance.len(),
+            "allowlist length does not match instance-tier variant count"
+        );
+
+        // Sorted ascending and free of duplicates.
+        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
+            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
+        }
+        
+        let variants = all_variants(&env);
+        assert_eq!(variants.len(), 63);
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    Required,
+    Merchant(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantBalanceSnapshotEvent {
+    pub merchant: Address,
+    pub token: Address,
+    pub balance: i128,
+    pub accrued: i128,
+    pub withdrawn: i128,
+    pub refunded: i128,
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantAddressRotatedEvent {
+    pub admin: Address,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+    pub subscriptions_updated: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCreatedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub lifetime_cap: Option<i128>,
+    pub expires_at: Option<u64>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FundsDepositedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionChargedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub lifetime_charged: i128,
+    pub timestamp: u64,
+    pub period_start: u64,
+    pub period_end: u64,
+    pub salt: soroban_sdk::BytesN<32>,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelledEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub authorizer: Address,
+    pub refund_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionResumedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub authorizer: Address,
+    pub previous_status: SubscriptionStatus,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
