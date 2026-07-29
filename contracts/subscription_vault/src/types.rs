@@ -245,26 +245,20 @@ pub enum DataKey {
     ChargeFailureCounter(u32),
     /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 66.
     AutoPauseThreshold,
-    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 67.
+    /// Buyout premium in basis points.
     BuyoutPremiumBps,
-    /// Coupon code bound to a subscription (persistent). Discriminant 68.
+    /// Coupon binding keyed by subscription ID.
     SubCoupon(u32),
-    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
-    MerchantMultiSig(Address),
-    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 70.
-    SubscriberActiveCount(Address),
-    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 71.
-    SubscriberActiveCapOverride(Address),
-    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
-    /// global). Discriminant 72.
+    /// Global tag allowlist.
     TagAllowlist,
-    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
-    /// (instance). Discriminant 73.
+    /// Per-merchant compliance tags.
     MerchantTags(Address),
-    /// Optional fee-token override: when set, protocol fees are paid in this
-    /// token instead of the subscription's settlement token, converted through
-    /// the oracle at charge time. Discriminant 64.
-    FeeToken,
+    /// Per-merchant multisig configuration.
+    MerchantMultiSig(Address),
+    /// Per-subscriber active subscription count.
+    SubscriberActiveCount(Address),
+    /// Per-subscriber active cap override.
+    SubscriberActiveCapOverride(Address),
 }
 
 impl DataKey {
@@ -332,21 +326,20 @@ impl DataKey {
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
             DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 60,
-            DataKey::SubscriberCreateWindow(_) => 61,
-            DataKey::MerchantWhitelistMode => 62,
-            DataKey::MerchantApproved(_) => 63,
-            DataKey::ChargeSalt(_) => 64,
-            DataKey::ChargeFailureCounter(_) => 65,
-            DataKey::AutoPauseThreshold => 66,
-            DataKey::BuyoutPremiumBps => 67,
-            DataKey::SubCoupon(_) => 68,
-            DataKey::MerchantMultiSig(_) => 69,
-            DataKey::SubscriberActiveCount(_) => 70,
-            DataKey::SubscriberActiveCapOverride(_) => 71,
-            DataKey::TagAllowlist => 72,
-            DataKey::MerchantTags(_) => 73,
-            DataKey::FeeToken => 74,
+            DataKey::SubscriberCreateCap => 59,
+            DataKey::SubscriberCreateWindow(_) => 60,
+            DataKey::MerchantWhitelistMode => 61,
+            DataKey::MerchantApproved(_) => 62,
+            DataKey::ChargeSalt(_) => 63,
+            DataKey::ChargeFailureCounter(_) => 64,
+            DataKey::AutoPauseThreshold => 65,
+            DataKey::BuyoutPremiumBps => 66,
+            DataKey::SubCoupon(_) => 67,
+            DataKey::TagAllowlist => 68,
+            DataKey::MerchantTags(_) => 69,
+            DataKey::MerchantMultiSig(_) => 70,
+            DataKey::SubscriberActiveCount(_) => 71,
+            DataKey::SubscriberActiveCapOverride(_) => 72,
         }
     }
 
@@ -996,7 +989,10 @@ pub enum Error {
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
     RenewalWindowClosed = 12001,
->>>>>>> upstream/main
+
+    // --- Admin Config Cooldown (13000-13099) ---
+    /// Admin config mutation was rejected because the cooldown period has not yet elapsed.
+    CooldownActive = 13001,
 }
 
 impl Error {
@@ -1941,6 +1937,30 @@ pub struct BulkCancelEvent {
     pub cancelled: u32,
     pub skipped: u32,
     pub failed: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Per-id outcome of a bulk deposit operation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BulkDepositResult {
+    pub subscription_id: u32,
+    pub success: bool,
+    /// Numeric error code from the `Error` enum, or `0` on success.
+    pub error_code: u32,
+}
+
+/// Envelope event summarising the outcome counts of a bulk-deposit batch.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BulkDepositEvent {
+    pub caller: Address,
+    pub requested: u32,
+    pub deposited: u32,
+    pub failed: u32,
+    pub total_amount: i128,
     pub nonce: u64,
     pub timestamp: u64,
     pub schema_version: u32,
