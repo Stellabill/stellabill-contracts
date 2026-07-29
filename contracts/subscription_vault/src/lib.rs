@@ -660,9 +660,8 @@ pub use types::{
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, OracleDeviationBreakerEvent,
-    OraclePriceHistoryMeta, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
     PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
@@ -1630,6 +1629,50 @@ impl SubscriptionVault {
     /// Get max active subscriptions for a plan.
     pub fn get_plan_max_active_subs(env: Env, plan_template_id: u32) -> u32 {
         queries::get_plan_max_active_subs(&env, plan_template_id)
+    }
+
+    /// Register a new plan template in the on-chain catalogue.
+    ///
+    /// Merchants publish named billing offers (amount, interval, trial_seconds)
+    /// that subscribers reference by plan ID when creating subscriptions. This
+    /// reduces on-chain input errors and supports UI-driven catalogues.
+    ///
+    /// Requires merchant authorisation. Returns the new plan ID.
+    pub fn register_plan(
+        env: Env,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        trial_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+        merchant::do_register_plan(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            trial_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
+    }
+
+    /// Deprecate an existing plan template, permanently preventing new
+    /// subscriptions from being created using it.
+    ///
+    /// Deprecation is idempotent: calling it on an already-deprecated plan is a
+    /// no-op. Only the merchant who owns the plan may deprecate it. Existing
+    /// subscriptions created from the plan are unaffected.
+    ///
+    /// Requires merchant authorisation.
+    pub fn deprecate_plan(
+        env: Env,
+        merchant: Address,
+        plan_id: u32,
+    ) -> Result<(), Error> {
+        merchant::do_deprecate_plan(&env, merchant, plan_id)
     }
 
     /// Migrate a subscription to a new plan version.
