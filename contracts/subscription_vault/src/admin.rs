@@ -8,7 +8,8 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
+    SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -575,7 +576,7 @@ pub fn do_recover_stranded_funds(
     };
 
     env.events().publish(
-        (Symbol::new(env, "recovery"), admin.clone()),
+        (TOPIC_RECOVERY, admin.clone()),
         recovery_event,
     );
 

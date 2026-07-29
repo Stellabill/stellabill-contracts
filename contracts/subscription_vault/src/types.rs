@@ -3,7 +3,9 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{
+    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+};
 
 /// Current schema version for contract events.
 pub const EVENT_SCHEMA_VERSION: u32 = 2;
@@ -1642,6 +1644,12 @@ pub enum RecoveryReason {
     AccidentalTransfer = 4,
 }
 
+/// Short topic for [`RecoveryEvent`].
+///
+/// This fits Soroban's nine-character `symbol_short!` limit and therefore does
+/// not need host-side symbol interning when it is emitted.
+pub const TOPIC_RECOVERY: Symbol = symbol_short!("recovery");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct RecoveryEvent {
@@ -1653,6 +1661,12 @@ pub struct RecoveryEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Legacy short topic for [`SubscriptionCreatedEvent`] emitters.
+///
+/// The longer `"subscription_created"` topic intentionally remains a
+/// `Symbol::new` at its emit sites because it exceeds `symbol_short!` capacity.
+pub const TOPIC_CREATED: Symbol = symbol_short!("created");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1695,6 +1709,9 @@ pub struct SubscriberCapReachedEvent {
     pub schema_version: u32,
 }
 
+/// Short topic for [`FundsDepositedEvent`].
+pub const TOPIC_DEPOSITED: Symbol = symbol_short!("deposited");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct FundsDepositedEvent {
@@ -1706,6 +1723,9 @@ pub struct FundsDepositedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Short topic for [`SubscriptionChargedEvent`].
+pub const TOPIC_CHARGED: Symbol = symbol_short!("charged");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1947,6 +1967,9 @@ pub struct ScheduledPayoutEvent {
     pub schema_version: u32,
 }
 
+/// Legacy short topic shared by merchant and subscriber withdrawal events.
+pub const TOPIC_WITHDRAWN: Symbol = symbol_short!("withdrawn");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantWithdrawalEvent {
@@ -1992,6 +2015,9 @@ pub struct SubscriberEmergencyWithdrawEvent {
     pub schema_version: u32,
 }
 
+/// Legacy short topic for [`OneOffChargedEvent`].
+pub const TOPIC_ONE_OFF_CHARGED: Symbol = symbol_short!("oneoff_ch");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct OneOffChargedEvent {
@@ -2004,6 +2030,12 @@ pub struct OneOffChargedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+/// Legacy short topic for [`LifetimeCapReachedEvent`] in the one-off path.
+///
+/// Other paths use the longer `"lifetime_cap_reached"` topic, which must keep
+/// using `Symbol::new` because it is longer than nine characters.
+pub const TOPIC_CAP_REACH: Symbol = symbol_short!("cap_reach");
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2569,5 +2601,65 @@ pub struct PrepaidQueryResult {
 }
 
 
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
+mod event_topic_tests {
+    use super::{
+        TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
+        TOPIC_RECOVERY, TOPIC_WITHDRAWN,
+    };
+    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
+
+    /// The emitted wire representation is part of the indexer-facing contract.
+    /// Publish every cached short topic in one transaction and compare each
+    /// emitted topic to the `Symbol::new` representation used before caching.
+    #[test]
+    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
+        let env = Env::default();
+        let topics = [
+            ("recovery", TOPIC_RECOVERY),
+            ("created", TOPIC_CREATED),
+            ("deposited", TOPIC_DEPOSITED),
+            ("charged", TOPIC_CHARGED),
+            ("withdrawn", TOPIC_WITHDRAWN),
+            ("cap_reach", TOPIC_CAP_REACH),
+            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
+        ];
+
+        for (_, topic) in topics.iter() {
+            env.events().publish((topic,), ());
+        }
+
+        let emitted_events = env.events().all();
+        assert_eq!(emitted_events.len(), topics.len() as u32);
+        for (index, (name, expected_topic)) in topics.iter().enumerate() {
+            let emitted = emitted_events.get(index as u32).unwrap();
+            let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
+            let legacy_topic = Symbol::new(&env, name);
+
+            assert_eq!(
+                emitted_topic.to_xdr(&env),
+                legacy_topic.to_xdr(&env),
+                "event topic {name} changed its wire representation"
+            );
+            assert_eq!(
+                expected_topic.to_xdr(&env),
+                legacy_topic.to_xdr(&env),
+                "cached topic {name} differs from Symbol::new"
+            );
+        }
+    }
+
+    /// `symbol_short!` supports at most nine characters. Longer event topics
+    /// are deliberately constructed with `Symbol::new` at their emit sites.
+    #[test]
+    fn long_event_topics_keep_the_runtime_symbol_representation() {
+        let env = Env::default();
+        let long_topic = Symbol::new(&env, "subscription_created");
+
+        assert_eq!(
+            long_topic.to_xdr(&env),
+            Symbol::new(&env, "subscription_created").to_xdr(&env)
+        );
+        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
+    }
+}

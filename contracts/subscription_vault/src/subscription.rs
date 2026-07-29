@@ -73,9 +73,10 @@ use crate::types::{
     Subscription, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
     SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
+    TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
     BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
-use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// Hard upper bound on billing interval: 365 days (31 536 000 s).
@@ -839,7 +840,7 @@ pub fn do_deposit_funds(
     crate::accounting::add_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
-        (Symbol::new(env, "deposited"), subscription_id),
+        (TOPIC_DEPOSITED, subscription_id),
         FundsDepositedEvent {
             subscription_id,
             subscriber: subscriber.clone(),
@@ -1016,7 +1017,7 @@ pub fn do_grace_buyout(
 
     // Emit standard charged event for indexer compatibility.
     env.events().publish(
-        (symbol_short!("charged"),),
+        (TOPIC_CHARGED,),
         crate::types::SubscriptionChargedEvent {
             subscription_id,
             subscriber: sub.subscriber.clone(),
@@ -1887,7 +1888,7 @@ fn bulk_deposit_one(
 
     // Emit per-subscription deposited event.
     env.events().publish(
-        (Symbol::new(env, "deposited"), subscription_id),
+        (TOPIC_DEPOSITED, subscription_id),
         crate::types::FundsDepositedEvent {
             subscription_id,
             subscriber: sub.subscriber.clone(),
@@ -2159,7 +2160,7 @@ pub fn do_charge_one_off(
 
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
-                (symbol_short!("cap_reach"), subscription_id),
+                (TOPIC_CAP_REACH, subscription_id),
                 LifetimeCapReachedEvent {
                     subscription_id,
                     lifetime_cap: cap,
@@ -2181,7 +2182,7 @@ pub fn do_charge_one_off(
     )?;
 
     env.events().publish(
-        (symbol_short!("oneoff_ch"), subscription_id),
+        (TOPIC_ONE_OFF_CHARGED, subscription_id),
         crate::types::OneOffChargedEvent {
             subscription_id,
             subscriber: sub.subscriber.clone(),
@@ -2845,7 +2846,7 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&token_key, &token_ids);
 
     env.events().publish(
-        (symbol_short!("created"), id),
+        (TOPIC_CREATED, id),
         SubscriptionCreatedEvent {
             subscription_id: id,
             subscriber: subscriber.clone(),
