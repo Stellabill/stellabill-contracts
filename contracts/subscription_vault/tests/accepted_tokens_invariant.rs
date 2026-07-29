@@ -9,9 +9,7 @@ use soroban_sdk::{
     token::StellarAssetClient as TokenAdminClient,
     Address, Env, Vec as SorobanVec,
 };
-use subscription_vault::{
-    DataKey, SubscriptionVault, SubscriptionVaultClient,
-};
+use subscription_vault::{DataKey, SubscriptionVault, SubscriptionVaultClient};
 
 const NUM_TOKENS: usize = 10;
 
@@ -28,10 +26,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
     ]
 }
 
-fn read_accepted_tokens_raw(
-    env: &Env,
-    contract_id: &Address,
-) -> SorobanVec<Address> {
+fn read_accepted_tokens_raw(env: &Env, contract_id: &Address) -> SorobanVec<Address> {
     env.as_contract(contract_id, || {
         env.storage()
             .instance()
@@ -40,11 +35,7 @@ fn read_accepted_tokens_raw(
     })
 }
 
-fn read_token_decimals_raw(
-    env: &Env,
-    contract_id: &Address,
-    token: &Address,
-) -> Option<u32> {
+fn read_token_decimals_raw(env: &Env, contract_id: &Address, token: &Address) -> Option<u32> {
     env.as_contract(contract_id, || {
         env.storage()
             .instance()
@@ -52,11 +43,7 @@ fn read_token_decimals_raw(
     })
 }
 
-fn check_invariants(
-    env: &Env,
-    vault: &SubscriptionVaultClient,
-    contract_id: &Address,
-) {
+fn check_invariants(env: &Env, vault: &SubscriptionVaultClient, contract_id: &Address) {
     let raw_tokens = read_accepted_tokens_raw(env, contract_id);
     let listed = vault.list_accepted_tokens();
 
@@ -112,8 +99,13 @@ fn check_invariants(
     }
 }
 
-fn setup_env<'a>(
-) -> (Env, SubscriptionVaultClient<'a>, Address, Address, std::vec::Vec<Address>) {
+fn setup_env<'a>() -> (
+    Env,
+    SubscriptionVaultClient<'a>,
+    Address,
+    Address,
+    std::vec::Vec<Address>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(1_000_000);
@@ -141,6 +133,7 @@ fn setup_env<'a>(
 
     for token in &tokens {
         vault.add_accepted_token(&admin, token, &7u32);
+        env.ledger().with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
     }
 
     // Create subscriptions using some tokens to exercise subscription count path
@@ -177,6 +170,7 @@ proptest! {
         let (env, vault, admin, contract_id, tokens) = setup_env();
 
         for op in ops {
+            env.ledger().with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
             match op {
                 Op::AddToken(idx) => {
                     let token = &tokens[idx];

@@ -307,7 +307,10 @@ fn regression_seeds() -> Vec<u64> {
 #[test]
 fn credit_limit_invariant_fuzz() {
     let seeds = regression_seeds();
-    assert!(!seeds.is_empty(), "regression_seeds.txt must list at least one seed");
+    assert!(
+        !seeds.is_empty(),
+        "regression_seeds.txt must list at least one seed"
+    );
     for seed in seeds {
         run_sequence(seed);
     }
@@ -432,8 +435,7 @@ fn exposure_is_isolated_per_token() {
         .env
         .register_stellar_asset_contract_v2(h.admin.clone())
         .address();
-    h.client
-        .add_accepted_token(&h.admin, &token_b, &DECIMALS);
+    h.client.add_accepted_token(&h.admin, &token_b, &DECIMALS);
 
     // One subscription per token for the same subscriber.
     h.client.create_subscription(

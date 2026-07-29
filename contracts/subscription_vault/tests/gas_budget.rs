@@ -110,14 +110,29 @@ fn assert_budget(
          (limits cpu≤{cpu_limit} reads≤{read_limit} writes≤{write_limit})"
     );
     if cpu as f64 / cpu_limit as f64 > WARN_THRESHOLD {
-        println!("[Warn] {label} CPU at {:.1}% of budget", cpu as f64 / cpu_limit as f64 * 100.0);
+        println!(
+            "[Warn] {label} CPU at {:.1}% of budget",
+            cpu as f64 / cpu_limit as f64 * 100.0
+        );
     }
     if reads as f64 / read_limit as f64 > WARN_THRESHOLD {
-        println!("[Warn] {label} reads at {:.1}% of budget", reads as f64 / read_limit as f64 * 100.0);
+        println!(
+            "[Warn] {label} reads at {:.1}% of budget",
+            reads as f64 / read_limit as f64 * 100.0
+        );
     }
-    assert!(cpu <= cpu_limit,   "[Budget] FAIL {label}: cpu={cpu} > limit={cpu_limit}");
-    assert!(reads <= read_limit, "[Budget] FAIL {label}: reads={reads} > limit={read_limit}");
-    assert!(writes <= write_limit, "[Budget] FAIL {label}: writes={writes} > limit={write_limit}");
+    assert!(
+        cpu <= cpu_limit,
+        "[Budget] FAIL {label}: cpu={cpu} > limit={cpu_limit}"
+    );
+    assert!(
+        reads <= read_limit,
+        "[Budget] FAIL {label}: reads={reads} > limit={read_limit}"
+    );
+    assert!(
+        writes <= write_limit,
+        "[Budget] FAIL {label}: writes={writes} > limit={write_limit}"
+    );
 }
 
 fn setup_merchant(env: &Env, vault: &SubscriptionVaultClient, merchant: &Address) {
@@ -143,13 +158,29 @@ fn budget_create_subscription() {
     token_admin.mint(&subscriber, &10_000_000i128);
 
     env.cost_estimate().budget().reset_unlimited();
-    vault.create_subscription(&subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None);
+    vault.create_subscription(
+        &subscriber,
+        &merchant,
+        &1_000i128,
+        &(30 * 86_400u64),
+        &false,
+        &None,
+        &None,
+    );
 
     let resources = env.cost_estimate().resources();
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("create_subscription", cpu, reads, writes, BUDGET_CREATE_CPU, BUDGET_CREATE_READS, BUDGET_CREATE_WRITES);
+    assert_budget(
+        "create_subscription",
+        cpu,
+        reads,
+        writes,
+        BUDGET_CREATE_CPU,
+        BUDGET_CREATE_READS,
+        BUDGET_CREATE_WRITES,
+    );
 }
 
 /// `deposit_funds` stays within gas budget.
@@ -161,7 +192,13 @@ fn budget_deposit_funds() {
     token_admin.mint(&subscriber, &10_000_000i128);
 
     let sub_id = vault.create_subscription(
-        &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
+        &subscriber,
+        &merchant,
+        &1_000i128,
+        &(30 * 86_400u64),
+        &false,
+        &None,
+        &None,
     );
 
     env.cost_estimate().budget().reset_unlimited();
@@ -171,7 +208,15 @@ fn budget_deposit_funds() {
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("deposit_funds", cpu, reads, writes, BUDGET_DEPOSIT_CPU, BUDGET_DEPOSIT_READS, BUDGET_DEPOSIT_WRITES);
+    assert_budget(
+        "deposit_funds",
+        cpu,
+        reads,
+        writes,
+        BUDGET_DEPOSIT_CPU,
+        BUDGET_DEPOSIT_READS,
+        BUDGET_DEPOSIT_WRITES,
+    );
 }
 
 /// `charge_subscription` stays within gas budget.
@@ -189,7 +234,13 @@ fn budget_charge_subscription() {
     setup_merchant(&env, &vault, &merchant);
 
     let sub_id = vault.create_subscription(
-        &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
+        &subscriber,
+        &merchant,
+        &1_000i128,
+        &(30 * 86_400u64),
+        &false,
+        &None,
+        &None,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -201,7 +252,15 @@ fn budget_charge_subscription() {
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("charge_subscription", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
+    assert_budget(
+        "charge_subscription",
+        cpu,
+        reads,
+        writes,
+        BUDGET_CHARGE_CPU,
+        BUDGET_CHARGE_READS,
+        BUDGET_CHARGE_WRITES,
+    );
 }
 
 /// `withdraw_merchant_funds` stays within gas budget.
@@ -215,7 +274,13 @@ fn budget_withdraw_merchant_funds() {
     setup_merchant(&env, &vault, &merchant);
 
     let sub_id = vault.create_subscription(
-        &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
+        &subscriber,
+        &merchant,
+        &1_000i128,
+        &(30 * 86_400u64),
+        &false,
+        &None,
+        &None,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -229,7 +294,15 @@ fn budget_withdraw_merchant_funds() {
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("withdraw_merchant_funds", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
+    assert_budget(
+        "withdraw_merchant_funds",
+        cpu,
+        reads,
+        writes,
+        BUDGET_WITHDRAW_CPU,
+        BUDGET_WITHDRAW_READS,
+        BUDGET_WITHDRAW_WRITES,
+    );
 }
 
 /// `charge_subscription` at a high subscription ID stays O(1).
@@ -259,7 +332,13 @@ fn budget_charge_subscription_high_id() {
         let subscriber = Address::generate(&env);
         token_admin.mint(&subscriber, &10_000_000i128);
         last_id = vault.create_subscription(
-            &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
+            &subscriber,
+            &merchant,
+            &1_000i128,
+            &(30 * 86_400u64),
+            &false,
+            &None,
+            &None,
         );
         vault.deposit_funds(&last_id, &subscriber, &50_000i128, &None);
     }
@@ -273,7 +352,15 @@ fn budget_charge_subscription_high_id() {
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("charge_subscription_high_id", cpu, reads, writes, BUDGET_CHARGE_CPU, BUDGET_CHARGE_READS, BUDGET_CHARGE_WRITES);
+    assert_budget(
+        "charge_subscription_high_id",
+        cpu,
+        reads,
+        writes,
+        BUDGET_CHARGE_CPU,
+        BUDGET_CHARGE_READS,
+        BUDGET_CHARGE_WRITES,
+    );
 }
 
 /// `withdraw_merchant_funds` with a dense merchant earnings map stays O(1).
@@ -292,7 +379,13 @@ fn budget_withdraw_dense_merchant_earnings() {
         let subscriber = Address::generate(&env);
         token_admin.mint(&subscriber, &10_000_000i128);
         let sub_id = vault.create_subscription(
-            &subscriber, &merchant, &1_000i128, &(30 * 86_400u64), &false, &None, &None,
+            &subscriber,
+            &merchant,
+            &1_000i128,
+            &(30 * 86_400u64),
+            &false,
+            &None,
+            &None,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
@@ -310,5 +403,13 @@ fn budget_withdraw_dense_merchant_earnings() {
     let cpu = resources.instructions.max(0) as u64;
     let reads = resources.read_entries as u64;
     let writes = resources.write_entries as u64;
-    assert_budget("withdraw_dense_merchant_earnings", cpu, reads, writes, BUDGET_WITHDRAW_CPU, BUDGET_WITHDRAW_READS, BUDGET_WITHDRAW_WRITES);
+    assert_budget(
+        "withdraw_dense_merchant_earnings",
+        cpu,
+        reads,
+        writes,
+        BUDGET_WITHDRAW_CPU,
+        BUDGET_WITHDRAW_READS,
+        BUDGET_WITHDRAW_WRITES,
+    );
 }

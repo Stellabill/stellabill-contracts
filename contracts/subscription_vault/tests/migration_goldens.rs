@@ -1,5 +1,5 @@
 /// Golden regression tests for cross-version contract snapshot determinism.
-/// 
+///
 /// This module verifies that contract snapshots and subscription exports
 /// serialize deterministically to the same ScVal representation across
 /// multiple contract versions, supporting safe and auditable migrations.
@@ -7,17 +7,13 @@
 /// Usage:
 /// - Run normal tests: `cargo test -- --lib --test migration_goldens`
 /// - Update golden fixtures: `cargo test -- --ignored update_goldens`
-/// 
+///
 /// The golden files are stored at `tests/snapshots/migration_goldens/*.scval.hex`
 /// in deterministic hex-encoded ScVal format.
-
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env,
-};
-use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 use std::fs;
 use std::path::PathBuf;
+use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Helper: Golden File Management
@@ -26,14 +22,16 @@ use std::path::PathBuf;
 /// Get the path to the golden snapshot directory for this test run.
 fn golden_snapshots_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir).join("tests").join("snapshots").join("migration_goldens")
+    PathBuf::from(manifest_dir)
+        .join("tests")
+        .join("snapshots")
+        .join("migration_goldens")
 }
 
 /// Ensure golden snapshots directory exists.
 fn ensure_golden_dir() {
     let dir = golden_snapshots_dir();
-    fs::create_dir_all(&dir)
-        .expect("Failed to create golden snapshots directory");
+    fs::create_dir_all(&dir).expect("Failed to create golden snapshots directory");
 }
 
 /// Get the path to a golden fixture file by name.
@@ -54,8 +52,7 @@ fn load_golden(env: &Env, fixture_name: &str) -> Option<soroban_sdk::String> {
 fn write_golden(fixture_name: &str, content: &str) {
     ensure_golden_dir();
     let path = golden_path(fixture_name);
-    fs::write(&path, content)
-        .expect("Failed to write golden fixture");
+    fs::write(&path, content).expect("Failed to write golden fixture");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -67,7 +64,7 @@ fn stable_debug_repr(repr: String) -> String {
     let chars: Vec<char> = repr.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if i + 4 < chars.len() && &chars[i..i+4] == &['o', 'b', 'j', '#'] {
+        if i + 4 < chars.len() && &chars[i..i + 4] == &['o', 'b', 'j', '#'] {
             out.push_str("obj#SENTINEL");
             i += 4;
             while i < chars.len() && chars[i].is_digit(10) {
@@ -122,7 +119,7 @@ fn setup_vault() -> (Env, SubscriptionVaultClient<'static>, Address) {
 #[test]
 fn test_golden_contract_snapshot_determinism() {
     let (env, client, admin) = setup_vault();
-    
+
     // Export the contract snapshot twice and verify they serialize identically.
     let snapshot1 = client.export_contract_snapshot(&admin);
     let snapshot2 = client.export_contract_snapshot(&admin);
@@ -131,7 +128,10 @@ fn test_golden_contract_snapshot_determinism() {
     let hex2 = serialize_to_hex(&env, snapshot2.clone());
 
     // Verify determinism in the same run.
-    assert_eq!(hex1, hex2, "Contract snapshot serialization must be deterministic");
+    assert_eq!(
+        hex1, hex2,
+        "Contract snapshot serialization must be deterministic"
+    );
 
     // Compare against golden fixture (if it exists).
     if let Some(expected) = load_golden(&env, "contract_snapshot_v2") {
@@ -245,10 +245,7 @@ fn test_golden_paginated_export_determinism() {
 
     // Compare against golden.
     if let Some(expected) = load_golden(&env, "paginated_export_v2") {
-        assert_eq!(
-            hex1, expected,
-            "Paginated export must match golden fixture"
-        );
+        assert_eq!(hex1, expected, "Paginated export must match golden fixture");
     }
 }
 
@@ -262,7 +259,7 @@ fn clean_hex(hex_std: String) -> String {
     if hex_std.starts_with(prefix) && hex_std.ends_with(suffix) {
         let mut inner = hex_std[prefix.len()..hex_std.len() - suffix.len()].to_string();
         if inner.starts_with('"') && inner.ends_with('"') {
-            inner = inner[1..inner.len()-1].to_string();
+            inner = inner[1..inner.len() - 1].to_string();
         }
         inner
     } else {
@@ -279,7 +276,10 @@ fn update_goldens_contract_snapshot() {
     let hex = serialize_to_hex(&env, snapshot);
     let hex_clean = clean_hex(format!("{:?}", hex));
     write_golden("contract_snapshot_v2", &hex_clean);
-    println!("Updated: contract_snapshot_v2.scval.hex ({} bytes)", hex_clean.len());
+    println!(
+        "Updated: contract_snapshot_v2.scval.hex ({} bytes)",
+        hex_clean.len()
+    );
 }
 
 /// Update golden fixture: subscription summary (run with `cargo test -- --ignored update_goldens`).
@@ -304,7 +304,10 @@ fn update_goldens_subscription_summary() {
     let hex = serialize_to_hex(&env, summary);
     let hex_clean = clean_hex(format!("{:?}", hex));
     write_golden("subscription_summary_v2", &hex_clean);
-    println!("Updated: subscription_summary_v2.scval.hex ({} bytes)", hex_clean.len());
+    println!(
+        "Updated: subscription_summary_v2.scval.hex ({} bytes)",
+        hex_clean.len()
+    );
 }
 
 /// Update golden fixture: paginated export (run with `cargo test -- --ignored update_goldens`).
@@ -331,5 +334,8 @@ fn update_goldens_paginated_export() {
     let hex = serialize_to_hex(&env, page);
     let hex_clean = clean_hex(format!("{:?}", hex));
     write_golden("paginated_export_v2", &hex_clean);
-    println!("Updated: paginated_export_v2.scval.hex ({} bytes)", hex_clean.len());
+    println!(
+        "Updated: paginated_export_v2.scval.hex ({} bytes)",
+        hex_clean.len()
+    );
 }

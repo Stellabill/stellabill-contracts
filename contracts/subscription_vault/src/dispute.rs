@@ -26,8 +26,8 @@ use crate::admin;
 use crate::merchant;
 use crate::queries;
 use crate::types::{
-    DataKey, Dispute, DisputeOpenedEvent, DisputeRespondedEvent, DisputeResolvedEvent,
-    DisputeStatus, Error, DISPUTE_WINDOW_SECS,
+    DataKey, Dispute, DisputeEscrowLedger, DisputeOpenedEvent, DisputeResolvedEvent,
+    DisputeRespondedEvent, DisputeStatus, Error, DISPUTE_WINDOW_SECS,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Symbol};
 
@@ -79,10 +79,14 @@ pub fn do_open_dispute(
         .ok_or(Error::Underflow)?;
     merchant::set_merchant_balance(env, &sub.merchant, token_addr, &new_merchant_balance);
 
-    // 2. Credit dispute escrow
+    // 2. Credit dispute escrow with cumulative ledger
+    let escrow_ledger = DisputeEscrowLedger {
+        original_amount: amount,
+        total_disbursed: 0,
+    };
     env.storage()
         .instance()
-        .set(&DataKey::DisputeEscrow(dispute_id), &amount);
+        .set(&DataKey::DisputeEscrow(dispute_id), &escrow_ledger);
 
     // 3. Record dispute
     let now = env.ledger().timestamp();
@@ -215,43 +219,78 @@ pub fn do_resolve_dispute(
         DisputeStatus::ResolvedToMerchant
     };
 
-    // ── Effects ───────────────────────────────────────────────────────────
-    let escrow_amount: i128 = env
+    // ── Read the escrow ledger ───────────────────────────────────────────
+    let mut escrow_ledger: DisputeEscrowLedger = env
         .storage()
         .instance()
         .get(&DataKey::DisputeEscrow(dispute_id))
-        .unwrap_or(0);
+        .ok_or(Error::InsufficientBalance)?;
 
-    if escrow_amount <= 0 {
+    // Calculate the remaining escrowed amount
+    let remaining = escrow_ledger
+        .original_amount
+        .checked_sub(escrow_ledger.total_disbursed)
+        .ok_or(Error::Underflow)?;
+
+    if remaining <= 0 {
         return Err(Error::InsufficientBalance);
+    }
+
+    // ── Invariant: cumulative disbursement must never exceed original escrow ─
+    //
+    // This check is a defense-in-depth guard against partial-resolution bugs
+    // or future code changes that split escrow across multiple resolutions.
+    //
+    // NOTE: In the current all-or-nothing flow `new_total_disbursed` always
+    //       equals `original_amount` exactly (since `remaining` is the full
+    //       undrawn balance). The check is mathematically unreachable today
+    //       but protects against regressions if partial-resolution logic is
+    //       added later.
+    let new_total_disbursed = escrow_ledger
+        .total_disbursed
+        .checked_add(remaining)
+        .ok_or(Error::Overflow)?;
+
+    if new_total_disbursed > escrow_ledger.original_amount {
+        return Err(Error::DisputeOverpay);
     }
 
     // Read subscription for token and party addresses
     let sub = queries::get_subscription(env, dispute.subscription_id)?;
     let token_addr = &sub.token;
 
-    // Clear escrow
-    env.storage()
-        .instance()
-        .remove(&DataKey::DisputeEscrow(dispute_id));
+    // ── Effects ───────────────────────────────────────────────────────────
+    // Update the ledger so that future resolution attempts (if any) see the
+    // updated disbursement and cannot overpay.
+    escrow_ledger.total_disbursed = new_total_disbursed;
+
+    if new_total_disbursed == escrow_ledger.original_amount {
+        // Fully disbursed — remove the escrow key
+        env.storage()
+            .instance()
+            .remove(&DataKey::DisputeEscrow(dispute_id));
+    } else {
+        // Partial disbursement — update the ledger
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeEscrow(dispute_id), &escrow_ledger);
+    }
 
     if resolution == DisputeStatus::ResolvedToMerchant {
         // Return escrowed funds to merchant balance
         let current = merchant::get_merchant_balance_by_token(env, &dispute.merchant, token_addr);
-        let new_balance = current
-            .checked_add(escrow_amount)
-            .ok_or(Error::Overflow)?;
+        let new_balance = current.checked_add(remaining).ok_or(Error::Overflow)?;
         merchant::set_merchant_balance(env, &dispute.merchant, token_addr, &new_balance);
     } else {
         // Transfer escrowed funds to subscriber
         // Funds leave vault custody — keep accounting consistent.
-        crate::accounting::sub_total_accounted(env, token_addr, escrow_amount)?;
+        crate::accounting::sub_total_accounted(env, token_addr, remaining)?;
 
         let token_client = token::Client::new(env, token_addr);
         token_client.transfer(
             &env.current_contract_address(),
             &dispute.subscriber,
-            &escrow_amount,
+            &remaining,
         );
     }
 

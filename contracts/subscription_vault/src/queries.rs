@@ -133,7 +133,11 @@ pub fn get_subscriptions_by_merchant(
     let mut i = start;
     while i < end {
         let sub_id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(sub_id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(sub_id))
+        {
             result.push_back(sub);
         }
         i += 1;
@@ -182,7 +186,11 @@ pub fn get_subscriptions_by_token(
     let mut i = start;
     while i < end {
         let id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             out.push_back(sub);
         }
         i += 1;
@@ -221,7 +229,6 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Expired => soroban_sdk::symbol_short!("expired"),
         SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
     };
-
 
     let grace_deadline = if subscription.status == SubscriptionStatus::GracePeriod {
         subscription
@@ -331,7 +338,11 @@ pub fn list_subscriptions_by_subscriber(
 
     let mut id = start_from_id;
     while id < scan_end {
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if sub.subscriber == subscriber {
                 if subscription_ids.len() < limit {
                     subscription_ids.push_back(id);
@@ -418,11 +429,16 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
 
     let is_balanced = contract_balance == computed_total;
 
-    let normalized_prepaid = crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
-    let normalized_merchant_liab = crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
-    let normalized_recoverable = crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
-    let normalized_contract_balance = crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
-    let normalized_computed_total = crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
+    let normalized_prepaid =
+        crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
+    let normalized_merchant_liab =
+        crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
+    let normalized_recoverable =
+        crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
+    let normalized_contract_balance =
+        crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
+    let normalized_computed_total =
+        crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
 
     TokenLiabilities {
         token,

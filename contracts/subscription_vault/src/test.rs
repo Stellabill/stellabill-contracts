@@ -268,7 +268,7 @@ fn collect_single_charge_result_codes(
     ids: &[u32],
 ) -> alloc::vec::Vec<(bool, u32)> {
     ids.iter()
-        .map(|id| match client.try_charge_subscription(id) {
+        .map(|id| match client.try_charge_subscription(id, &None::<soroban_sdk::BytesN<32>>) {
             Ok(Ok(ChargeExecutionResult::Charged)) => (true, 0),
             Ok(Ok(ChargeExecutionResult::InsufficientBalance)) => {
                 (false, Error::InsufficientBalance.to_code())
@@ -285,10 +285,18 @@ struct MockOracle;
 #[contractimpl]
 impl MockOracle {
     pub fn set_price(env: Env, price: i128, timestamp: u64) {
-        env.storage().instance().set(
-            &Symbol::new(&env, "price"),
-            &OraclePrice { price, timestamp },
-        );
+        let key = Symbol::new(&env, "price");
+        let mut observations: Vec<OraclePrice> = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "observations"))
+            .unwrap_or(Vec::new(&env));
+        observations.push_back(OraclePrice { price, timestamp });
+
+        env.storage().instance().set(&key, &OraclePrice { price, timestamp });
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "observations"), &observations);
     }
 
     pub fn latest_price(env: Env) -> OraclePrice {
@@ -299,6 +307,21 @@ impl MockOracle {
                 price: 0,
                 timestamp: 0,
             })
+    }
+
+    pub fn get_observations(env: Env, since: u64) -> Vec<OraclePrice> {
+        let observations: Vec<OraclePrice> = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "observations"))
+            .unwrap_or(Vec::new(&env));
+        let mut filtered = Vec::new(&env);
+        for obs in observations.iter() {
+            if obs.timestamp >= since {
+                filtered.push_back(obs);
+            }
+        }
+        filtered
     }
 }
 
@@ -640,7 +663,7 @@ fn test_state_machine_property_charge_failures_and_recovery_paths_obey_rules() {
 
             soroban_sdk::token::StellarAssetClient::new(&env, &token)
                 .mint(&subscriber, &topup_amount.max(1_000_000));
-            client.deposit_funds(&id, &subscriber, &topup_amount.max(1_000_000, &None::<soroban_sdk::BytesN<32>>));
+            client.deposit_funds(&id, &subscriber, &topup_amount.max(1_000_000), &None::<soroban_sdk::BytesN<32>>);
 
             let after_deposit = client.get_subscription(&id).status;
             if topup_amount >= AMOUNT {
@@ -1028,6 +1051,7 @@ fn test_subscription_struct_status_field() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -1053,6 +1077,7 @@ fn test_subscription_struct_with_lifetime_cap() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -1130,6 +1155,112 @@ fn test_subscription_limit_reached() {
         &false,
         &None::<i128>,
      &None::<u64>);
+}
+
+#[test]
+fn test_subscriber_create_cap_admin_endpoints() {
+    let test_env = TestEnv::default();
+    let non_admin = Address::generate(&test_env.env);
+    
+    assert_eq!(test_env.client.get_subscriber_create_cap(), 50);
+
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &10);
+    assert_eq!(test_env.client.get_subscriber_create_cap(), 10);
+
+    let res = test_env.client.try_set_subscriber_create_cap(&non_admin, &20);
+    assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_enforced() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &2);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res1 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res2.is_ok());
+
+    let res3 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res3, Err(Ok(Error::SubscriberRateLimited)));
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_rollover() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &1);
+    test_env.env.ledger().with_mut(|li| li.timestamp = T0);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res1 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res2, Err(Ok(Error::SubscriberRateLimited)));
+
+    test_env.jump(86401);
+
+    let res3 = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res3.is_ok());
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_zero_cap_and_events() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &0);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let res = test_env.client.try_create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert_eq!(res, Err(Ok(Error::SubscriberRateLimited)));
+
+    let events = test_env.env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        if let Some(first) = topics.get(0) {
+            if Symbol::from_val(&test_env.env, &first) == Symbol::new(&test_env.env, "rate_limit_tripped") {
+                let evt: crate::types::RateLimitTrippedEvent = soroban_sdk::FromVal::from_val(&test_env.env, &data);
+                assert_eq!(evt.subscriber, subscriber);
+                found = true;
+            }
+        }
+    }
+    assert!(found, "rate_limit_tripped event missing");
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_admin_bypass() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &0);
+
+    let merchant = Address::generate(&test_env.env);
+
+    let res = test_env.client.try_create_subscription(&test_env.admin, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_subscriber_create_rate_limit_from_plan() {
+    let test_env = TestEnv::default();
+    test_env.client.set_subscriber_create_cap(&test_env.admin, &1);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let plan_id = test_env.client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+
+    let res1 = test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    assert!(res1.is_ok());
+
+    let res2 = test_env.client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    assert_eq!(res2, Err(Ok(Error::SubscriberRateLimited)));
 }
 
 #[test]
@@ -1653,10 +1784,12 @@ fn test_rotate_admin() {
 
 #[test]
 fn test_emergency_stop() {
-    let (_env, client, _, admin) = setup_test_env();
+    let (env, client, _, admin) = setup_test_env();
     assert!(!client.get_emergency_stop_status());
     client.enable_emergency_stop(&admin);
     assert!(client.get_emergency_stop_status());
+    env.ledger()
+        .with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(!client.get_emergency_stop_status());
 }
@@ -2347,6 +2480,7 @@ fn test_compute_next_charge_info_active() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2371,6 +2505,7 @@ fn test_compute_next_charge_info_paused() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2395,6 +2530,7 @@ fn test_compute_next_charge_info_cancelled() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2418,6 +2554,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2549,6 +2686,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         start_time: 0,
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
@@ -5044,6 +5182,9 @@ fn test_billing_retention_rapid_config_changes() {
         .client
         .set_billing_retention(&test_env.admin, &1u32);
     assert_eq!(test_env.client.get_billing_retention().keep_recent, 1);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env
         .client
         .set_billing_retention(&test_env.admin, &u32::MAX);
@@ -5051,6 +5192,9 @@ fn test_billing_retention_rapid_config_changes() {
         test_env.client.get_billing_retention().keep_recent,
         u32::MAX
     );
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env
         .client
         .set_billing_retention(&test_env.admin, &12u32);
@@ -5166,7 +5310,83 @@ fn test_oracle_stale_quote_rejected() {
 }
 
 #[test]
+fn test_twap_adapter_resists_single_block_manipulation() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind, OraclePrice};
 
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+
+    // Simulate a malicious single-block spike that would dominate a mean-based window.
+    oracle.set_price(&10_000_000i128, &1000);
+    oracle.set_price(&1_000_000i128, &1000);
+    oracle.set_price(&1_000_000i128, &1000);
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 10_000,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Ok(1_000_000));
+}
+
+#[test]
+fn test_twap_adapter_returns_unavailable_for_empty_window() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind};
+
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let oracle_id = env.register(MockOracle, ());
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 10_000,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Err(Error::OraclePriceUnavailable));
+}
+
+#[test]
+fn test_twap_adapter_filters_stale_samples() {
+    use crate::oracle_adapter::{OracleAdapter, TwapAdapter};
+    use crate::types::{OracleConfig, OracleKind};
+
+    let env = Env::default();
+    env.ledger().set_timestamp(1_500);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&2_000_000i128, &1000);
+
+    let config = OracleConfig {
+        enabled: true,
+        oracle: Some(oracle_id.clone()),
+        max_age_seconds: 100,
+        kind: OracleKind::Twap,
+        window_secs: 60,
+        fixed_numerator: 0,
+        fixed_denominator: 1,
+    };
+
+    let result = TwapAdapter::quote(&env, &config, &Address::generate(&env), &Address::generate(&env));
+    assert_eq!(result, Err(Error::OraclePriceStale));
+}
+
+#[test]
 fn test_create_subscription_with_unaccepted_token_fails() {
     let test_env = TestEnv::default();
     let subscriber = Address::generate(&test_env.env);
@@ -5569,6 +5789,9 @@ fn test_all_admin_operations_after_rotation() {
         &String::from_str(&test_env.env, "rec_2"),
         &RecoveryReason::AccidentalTransfer,
     );
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&new_admin, &next_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), next_admin);
 }
@@ -5581,7 +5804,13 @@ fn test_multiple_admin_rotations() {
     let admin_d = Address::generate(&test_env.env);
 
     test_env.client.rotate_admin(&test_env.admin, &admin_b, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin_b, &admin_c, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin_c, &admin_d, &0u64);
 
     assert_eq!(test_env.client.get_admin(), admin_d);
@@ -5694,7 +5923,13 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 2: rotate to admin2.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.set_min_topup(&admin2, &2_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -5706,7 +5941,13 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 3: rotate to admin3.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&admin2, &admin3, &0u64);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.set_min_topup(&admin3, &3_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -5847,6 +6088,9 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
         .client
         .add_to_blocklist(&test_env.admin, &blocklisted_subscriber, &None::<String>);
     test_env.client.enable_emergency_stop(&test_env.admin);
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     assert_eq!(
@@ -5957,6 +6201,9 @@ fn test_get_admin_before_and_after_rotation() {
     test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
     assert_eq!(test_env.client.get_admin(), admin2);
 
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     let admin3 = Address::generate(&test_env.env);
     test_env.client.rotate_admin(&admin2, &admin3, &0u64);
     assert_eq!(test_env.client.get_admin(), admin3);
@@ -6041,6 +6288,9 @@ fn test_rotate_admin_allowed_during_emergency_stop() {
     assert_eq!(test_env.client.get_admin(), new_admin);
 
     // New admin can disable the emergency stop.
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     test_env.client.disable_emergency_stop(&new_admin);
     assert!(!test_env.client.get_emergency_stop_status());
 }
@@ -7994,6 +8244,7 @@ fn test_merchant_token_bucket_reconciliation() {
 
     client.init(&token_a, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
     client.add_accepted_token(&admin, &token_b, &6);
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.add_accepted_token(&admin, &token_c, &6);
 
     let merchant = Address::generate(&env);
@@ -8539,6 +8790,7 @@ fn test_oneoff_blocked_by_emergency_stop() {
     assert_eq!(res, Err(Ok(Error::EmergencyStopActive)));
 
     // Disable and verify charge works again
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     client.charge_one_off(&id, &merchant, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     let sub = client.get_subscription(&id);
@@ -9133,6 +9385,15 @@ fn setup_usage_sub(
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
+    // Pre-register usage limits
+    client.configure_usage_limits(
+        &merchant,
+        &0, // NextId is 0 initially for the first subscription, but wait, this might be called multiple times! 
+        &None::<u32>,
+        &0,
+        &0,
+        &None::<i128>,
+    );
     let id = client.create_subscription(
         &subscriber,
         &merchant,

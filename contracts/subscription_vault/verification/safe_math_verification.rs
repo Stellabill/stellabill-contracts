@@ -1,7 +1,9 @@
 #[cfg(kani)]
 mod verification {
-    use subscription_vault::{safe_add, safe_sub, safe_add_balance, safe_sub_balance};
     use subscription_vault::types::Error;
+    use subscription_vault::{
+        safe_add, safe_add_balance, safe_i128_to_u32, safe_i128_to_u64, safe_sub, safe_sub_balance,
+    };
 
     #[kani::proof]
     pub fn check_safe_add() {
@@ -86,6 +88,61 @@ mod verification {
             }
             Err(_) => {
                 kani::assert(false, "Unexpected error type from safe_sub_balance");
+            }
+        }
+    }
+
+    /// SECURITY closure: `safe_i128_to_u32` must never silently truncate.
+    /// For every i128 input it must either return the exact u32 value or
+    /// an error; there is no third outcome.
+    #[kani::proof]
+    pub fn check_safe_i128_to_u32() {
+        let value: i128 = kani::any();
+
+        match safe_i128_to_u32(value) {
+            Ok(cast) => {
+                // Range check: Ok iff value within [0, u32::MAX].
+                assert!(value >= 0);
+                assert!(value <= i128::from(u32::MAX));
+                // Exactness: the cast value must equal the low bits of value
+                // AND value must fit (since cast is non-truncating on the
+                // allowed range, equality is total).
+                assert_eq!(u32::try_from(value).expect("precondition"), cast);
+            }
+            Err(Error::Underflow) => {
+                assert!(value < 0);
+            }
+            Err(Error::Overflow) => {
+                assert!(value >= 0);
+                assert!(value > i128::from(u32::MAX));
+            }
+            Err(_) => {
+                kani::assert(false, "Unexpected error type from safe_i128_to_u32");
+            }
+        }
+    }
+
+    /// SECURITY closure: `safe_i128_to_u64` must never silently truncate
+    /// or flip sign on adversarial inputs.
+    #[kani::proof]
+    pub fn check_safe_i128_to_u64() {
+        let value: i128 = kani::any();
+
+        match safe_i128_to_u64(value) {
+            Ok(cast) => {
+                assert!(value >= 0);
+                assert!(value <= i128::from(u64::MAX));
+                assert_eq!(u64::try_from(value).expect("precondition"), cast);
+            }
+            Err(Error::Underflow) => {
+                assert!(value < 0);
+            }
+            Err(Error::Overflow) => {
+                assert!(value >= 0);
+                assert!(value > i128::from(u64::MAX));
+            }
+            Err(_) => {
+                kani::assert(false, "Unexpected error type from safe_i128_to_u64");
             }
         }
     }

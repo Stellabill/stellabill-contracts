@@ -87,12 +87,12 @@ match client.emit_oracle_liveness(&env) {
 
 ### OracleLivenessEvent Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `last_sample_ts` | `u64` | Timestamp of the latest oracle price sample |
-| `age` | `u64` | Age of the sample in seconds (`current_time - last_sample_ts`) |
-| `healthy` | `bool` | `true` if `age <= max_age_seconds / 2`, indicating healthy oracle |
-| `timestamp` | `u64` | Ledger timestamp when this liveness check was performed |
+| Field            | Type   | Description                                                       |
+| ---------------- | ------ | ----------------------------------------------------------------- |
+| `last_sample_ts` | `u64`  | Timestamp of the latest oracle price sample                       |
+| `age`            | `u64`  | Age of the sample in seconds (`current_time - last_sample_ts`)    |
+| `healthy`        | `bool` | `true` if `age <= max_age_seconds / 2`, indicating healthy oracle |
+| `timestamp`      | `u64`  | Ledger timestamp when this liveness check was performed           |
 
 ### Health Threshold
 
@@ -164,6 +164,7 @@ The `oracle_config_updated` event now includes `kind`, `window_secs`, `fixed_num
 ### SpotAdapter
 
 Reads the latest `OraclePrice` from `oracle.latest_price()` and validates it:
+
 - Rejects non-positive prices (`OraclePriceInvalid`).
 - Rejects prices whose age exceeds `max_age_seconds` (`OraclePriceStale`).
 
@@ -184,6 +185,12 @@ median = prices[len(prices) / 2]  // middle element for odd-length
 ```
 
 Using the median rather than the mean means an attacker must control **more than half** of the observations inside the window to shift the output meaningfully. This resists single-block (flash-loan) price manipulation.
+
+**Recommended configuration**
+
+- Enforce a minimum TWAP window of at least 60 seconds in code.
+- For mainnet deployments, use a default window of 5 minutes (300 seconds) or longer so that a single-block spike is diluted by several honest observations.
+- Pair the TWAP with conservative slippage bounds such as 0.5%-1.0% for standard billing flows; tighter bounds may be appropriate for volatile markets or when the oracle feed itself is not well-distributed.
 
 **Edge cases:**
 | Scenario | Result |
@@ -228,10 +235,10 @@ All adapters share the same `OracleAdapter` trait and return a `u128` price scal
 
 ### Security Rationale
 
-| Property | Spot | TWAP | FixedRate |
-|---|---|---|---|
-| Oracle reads | Yes | Yes | No |
-| Staleness enforced | Yes | Yes (per observation) | N/A |
-| Manipulation resistance | Low | High (median) | Perfect (static) |
-| Oracle dependency | Required | Required | None |
-| Admin auth to change | Yes | Yes | Yes |
+| Property                | Spot     | TWAP                  | FixedRate        |
+| ----------------------- | -------- | --------------------- | ---------------- |
+| Oracle reads            | Yes      | Yes                   | No               |
+| Staleness enforced      | Yes      | Yes (per observation) | N/A              |
+| Manipulation resistance | Low      | High (median)         | Perfect (static) |
+| Oracle dependency       | Required | Required              | None             |
+| Admin auth to change    | Yes      | Yes                   | Yes              |
