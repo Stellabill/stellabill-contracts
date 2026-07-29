@@ -182,6 +182,7 @@ fn test_golden_subscription_summary_determinism() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // Export the same subscription twice.
@@ -227,6 +228,7 @@ fn test_golden_paginated_export_determinism() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         );
         ids.push(id);
     }
@@ -298,6 +300,7 @@ fn update_goldens_subscription_summary() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let summary = client.export_subscription_summary(&admin, &sub_id);
@@ -327,6 +330,7 @@ fn update_goldens_paginated_export() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         );
     }
 

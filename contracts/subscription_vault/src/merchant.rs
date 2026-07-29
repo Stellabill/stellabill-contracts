@@ -24,8 +24,9 @@ use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
-    MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
+    is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -79,6 +80,111 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         (Symbol::new(env, "merchant_unpaused"), merchant.clone()),
         MerchantUnpausedEvent {
             merchant,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+// ── Per-merchant fee override ─────────────────────────────────────────────────
+//
+// Allows the admin to grant selected merchants a discounted protocol fee.
+// The override is stored in instance storage under `DataKey::MerchantFeeBps(merchant)`.
+// During charge routing, this value supersedes the global `FeeBps` when present.
+//
+// Security invariants:
+// 1. Admin-only: only the stored admin may set or clear an override.
+// 2. Bounded: the override must be ≤ `MAX_FEE_BIPS` (10 000).
+// 3. Cannot exceed global: the override must be ≤ the current global fee_bps.
+//    (A merchant discount is always ≤ the standard rate.)
+// 4. Clearing always succeeds regardless of the current global fee.
+
+/// Return the per-merchant fee override in basis points, or `None` if no
+/// override has been set for this merchant.
+pub fn get_merchant_fee_override_bps(env: &Env, merchant: &Address) -> Option<u32> {
+    let key = DataKey::MerchantFeeBps(merchant.clone());
+    env.storage().instance().get(&key)
+}
+
+/// Set a per-merchant fee override in basis points. Admin only.
+///
+/// The override must satisfy:
+/// - `fee_bps <= MAX_FEE_BIPS` (10 000) — hard upper bound.
+/// - `fee_bps <= global_fee_bps` — a "discount" cannot be higher than the
+///   standard rate; if it were, it would act as a surcharge, which is not
+///   the intended semantics.
+///
+/// Emits [`MerchantFeeOverrideSetEvent`].
+///
+/// # Errors
+/// - [`Error::Unauthorized`] if `admin` is not the stored admin.
+/// - [`Error::InvalidFeeBips`] if `fee_bps > MAX_FEE_BIPS`.
+/// - [`Error::InvalidFeeBips`] if `fee_bps > global_fee_bps`.
+pub fn set_merchant_fee_override(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    fee_bps: u32,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    if fee_bps > crate::types::MAX_FEE_BIPS as u32 {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    let global_fee_bps = crate::admin::get_protocol_fee_bps(env);
+    if fee_bps > global_fee_bps {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    let key = DataKey::MerchantFeeBps(merchant.clone());
+    env.storage().instance().set(&key, &fee_bps);
+
+    env.events().publish(
+        (
+            Symbol::new(env, "merchant_fee_override_set"),
+            merchant.clone(),
+        ),
+        MerchantFeeOverrideSetEvent {
+            merchant,
+            admin,
+            fee_bps: Some(fee_bps),
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Clear the per-merchant fee override, reverting to the global fee. Admin only.
+///
+/// Always succeeds (idempotent): clearing a non-existent override is a no-op.
+/// Emits [`MerchantFeeOverrideSetEvent`] with `fee_bps = None`.
+///
+/// # Errors
+/// - [`Error::Unauthorized`] if `admin` is not the stored admin.
+pub fn clear_merchant_fee_override(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::MerchantFeeBps(merchant.clone());
+    env.storage().instance().remove(&key);
+
+    env.events().publish(
+        (
+            Symbol::new(env, "merchant_fee_override_set"),
+            merchant.clone(),
+        ),
+        MerchantFeeOverrideSetEvent {
+            merchant,
+            admin,
+            fee_bps: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
@@ -638,6 +744,7 @@ pub fn withdraw_merchant_funds_for_token(
         let mut iter = 0u32;
         while iter < required_signers {
             if let Some(signer) = config.signers.get(iter) {
+                let signer: Address = signer;
                 signer.require_auth();
             }
             iter += 1;
@@ -721,7 +828,12 @@ pub fn withdraw_merchant_funds_for_token(
             merchant: merchant.clone(),
             token: token_addr.clone(),
             balance: new_balance,
+            accrued: 0,
+            withdrawn: 0,
+            refunded: 0,
+            ledger_sequence: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1276,4 +1388,166 @@ pub fn do_emit_all_balances_snapshot(
     }
 
     Ok(out)
+}
+
+// ── Plan Template Registry ────────────────────────────────────────────────────
+//
+// `register_plan` lets a merchant publish a named billing offer (amount,
+// interval, trial_seconds) to the on-chain plan catalogue. Subscribers
+// reference plans by their plan ID when calling `create_subscription_from_plan`,
+// which reduces per-transaction input errors and supports UI-driven catalogues.
+//
+// `deprecate_plan` irrevocably marks a plan as deprecated so it can no longer
+// be used for new subscriptions. Existing subscriptions are unaffected.
+//
+// Both functions validate merchant identity — only the merchant who owns a
+// plan may deprecate it. Emitting canonical events (`plan_registered`,
+// `plan_deprecated`) with schema-versioned payloads lets indexers maintain a
+// complete audit trail without extra storage reads.
+
+/// Register a new plan template in the on-chain catalogue.
+///
+/// # Arguments
+/// - `merchant`          — address that owns the plan; must authorise the call.
+/// - `amount`            — recurring charge per billing interval (token base units; > 0).
+/// - `interval_seconds`  — billing interval in seconds (must pass `validate_interval`).
+/// - `trial_seconds`     — optional free-trial period in seconds (`0` = no trial).
+/// - `usage_enabled`     — whether usage-based charging is enabled for subscribers.
+/// - `lifetime_cap`      — optional maximum total amount ever chargeable; `None` = uncapped.
+///
+/// # Security
+/// - `merchant.require_auth()` prevents anyone other than the merchant from
+///   publishing plans under their address.
+/// - `amount` and `lifetime_cap` (when `Some`) must be positive.
+/// - `interval_seconds` is validated via the shared `validate_interval` helper
+///   to reject zero/pathological values.
+///
+/// # Returns
+/// The newly-assigned plan ID (a monotonically-increasing `u32`).
+pub fn do_register_plan(
+    env: &Env,
+    merchant: Address,
+    amount: i128,
+    interval_seconds: u64,
+    trial_seconds: u64,
+    usage_enabled: bool,
+    lifetime_cap: Option<i128>,
+) -> Result<u32, Error> {
+    // ── Auth ──
+    merchant.require_auth();
+
+    // ── Input validation ──
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    crate::subscription::validate_interval(interval_seconds)?;
+    if let Some(cap) = lifetime_cap {
+        if cap <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    // ── Resolve default token ──
+    let token = crate::admin::get_token(env)?;
+
+    // ── Allocate a new plan ID ──
+    let plan_id = crate::subscription::next_plan_id(env);
+
+    // ── Construct and persist the plan template ──
+    let plan = PlanTemplate {
+        merchant: merchant.clone(),
+        token: token.clone(),
+        amount,
+        interval_seconds,
+        trial_seconds,
+        usage_enabled,
+        lifetime_cap,
+        template_key: plan_id,
+        version: 1,
+        is_disabled: false,
+    };
+    env.storage().instance().set(&DataKey::Plan(plan_id), &plan);
+
+    // ── Emit canonical event ──
+    env.events().publish(
+        (Symbol::new(env, "plan_registered"), plan_id),
+        PlanRegisteredEvent {
+            plan_id,
+            merchant: merchant.clone(),
+            token: token.clone(),
+            amount,
+            interval_seconds,
+            trial_seconds,
+            usage_enabled,
+            lifetime_cap,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(plan_id)
+}
+
+/// Deprecate an existing plan template, preventing new subscriptions from
+/// referencing it.
+///
+/// Deprecation is a one-way, idempotent operation: once deprecated a plan
+/// cannot be re-enabled. All existing subscriptions created from the plan
+/// continue to operate normally — only new subscription creation is blocked.
+///
+/// # Arguments
+/// - `merchant`         — address that owns the plan; must authorise the call.
+/// - `plan_id`          — ID of the plan to deprecate.
+///
+/// # Errors
+/// - [`Error::NotFound`]   — `plan_id` does not refer to an existing plan.
+/// - [`Error::Forbidden`]  — caller is not the merchant who owns the plan.
+///
+/// # Security
+/// - `merchant.require_auth()` prevents third parties from deprecating a plan.
+/// - Ownership is validated against the stored `plan.merchant`; a merchant
+///   cannot deprecate another merchant's plan even with admin credentials.
+/// - Uses the canonical `DataKey::Plan(plan_id)` storage key (not a raw tuple)
+///   so that `get_plan_template` immediately reflects the deprecated state.
+pub fn do_deprecate_plan(
+    env: &Env,
+    merchant: Address,
+    plan_id: u32,
+) -> Result<(), Error> {
+    // ── Auth ──
+    merchant.require_auth();
+
+    // ── Load the plan (returns NotFound if absent) ──
+    let mut plan: PlanTemplate = env
+        .storage()
+        .instance()
+        .get(&DataKey::Plan(plan_id))
+        .ok_or(Error::NotFound)?;
+
+    // ── Ownership check ──
+    if plan.merchant != merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // ── Idempotent: already deprecated → no-op ──
+    if plan.is_disabled {
+        return Ok(());
+    }
+
+    // ── Effect: mark deprecated using the canonical storage key ──
+    plan.is_disabled = true;
+    env.storage().instance().set(&DataKey::Plan(plan_id), &plan);
+
+    // ── Emit canonical event ──
+    env.events().publish(
+        (Symbol::new(env, "plan_deprecated"), plan_id),
+        PlanDeprecatedEvent {
+            plan_id,
+            merchant,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
 }

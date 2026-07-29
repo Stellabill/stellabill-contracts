@@ -108,6 +108,7 @@ fn new_funded_sub<'a>(
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
     vault.deposit_funds(&sub_id, subscriber, &50_000i128, &None);
     sub_id
@@ -199,6 +200,7 @@ fn perf_create_subscription_at_scale() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         created += 1;
     }
@@ -237,6 +239,7 @@ fn perf_get_subscription_large_id_range() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
     }
 
@@ -288,6 +291,7 @@ fn perf_get_subscription_constant_time_across_range() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         ids.push(id);
     }
@@ -337,6 +341,7 @@ fn perf_list_by_subscriber_paginated() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
@@ -415,6 +420,7 @@ fn perf_get_subscriptions_by_token() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
     }
 

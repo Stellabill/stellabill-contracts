@@ -48,9 +48,42 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+<<<<<<< HEAD
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test;
+#[cfg(test)]
+mod test_auth_fuzz;
+#[cfg(test)]
+mod test_expiration;
+#[cfg(test)]
+mod test_governance;
+#[cfg(test)]
+mod test_insufficient_balance;
+#[cfg(test)]
+mod test_multi_actor;
+#[cfg(test)]
+mod test_recovery;
+#[cfg(test)]
+mod test_refactor_check;
+#[cfg(test)]
+mod test_safe_math_regression;
+#[cfg(test)]
+mod test_security;
+#[cfg(test)]
+mod test_usage_limits;
+#[cfg(test)]
+mod test_deterministic_charging;
+#[cfg(test)]
+mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_admin_rotation_two_step;
+=======
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
+>>>>>>> upstream/main
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
@@ -343,7 +376,7 @@ pub mod oracle {
     #![allow(unused_variables, dead_code)]
     use crate::admin::{read_config, write_config};
     use crate::types::{DataKey, Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env, Symbol};
+    use soroban_sdk::{Address, Env, Symbol, Vec};
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
     ///
@@ -422,6 +455,43 @@ pub mod oracle {
             fixed_numerator: 0,
             fixed_denominator: 1,
         })
+    }
+
+    /// Set the maximum allowed oracle price deviation in basis points.
+    ///
+    /// When set, the oracle deviation circuit breaker compares the latest price
+    /// against the median of the last N recorded samples. If the deviation exceeds
+    /// this threshold, the charge is rejected with `Error::OracleDeviationTooHigh`.
+    ///
+    /// A value of `0` means any deviation is rejected (strict mode).
+    /// When unset, the deviation check is skipped entirely.
+    pub fn set_oracle_deviation_bps(env: &Env, bps: u32) {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().set(&key, &bps);
+    }
+
+    /// Read the current oracle deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: &Env) -> Option<u32> {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().get(&key)
+    }
+
+    /// Return the recorded oracle price history for a token in insertion order.
+    pub fn get_oracle_price_history(env: &Env, token: &Address) -> Vec<i128> {
+        use crate::types::OraclePriceHistoryMeta;
+        let meta_key = (token.clone(), Symbol::new(env, "oracle_price_history_meta"));
+        let meta: Option<OraclePriceHistoryMeta> = env.storage().persistent().get(&meta_key);
+        let Some(meta) = meta else {
+            return Vec::new(env);
+        };
+        let mut prices = Vec::new(env);
+        for i in 0..meta.count {
+            let entry_key = (token.clone(), Symbol::new(env, &format!("oph_{i}")));
+            if let Some(price) = env.storage().persistent().get::<_, i128>(&entry_key) {
+                prices.push_back(price);
+            }
+        }
+        prices
     }
 
     /// Emit an oracle liveness event for monitoring purposes.
@@ -525,7 +595,7 @@ pub mod operator {
     ) -> Result<ChargeExecutionResult, Error> {
         require_operator_auth(env, &op)?;
         let now = env.ledger().timestamp();
-        crate::charge_core::charge_one(env, subscription_id, now, None)
+        crate::charge_core::charge_one(env, subscription_id, now, None, None)
     }
 
     pub fn do_operator_charge_usage(
@@ -567,26 +637,36 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
+<<<<<<< HEAD
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
+    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+=======
     AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult, BillingChargeKind,
     DisputeEscrowLedger,
     BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
     CapInfo, Coupon,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
     OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
     PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+>>>>>>> upstream/main
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
@@ -664,6 +744,9 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
+<<<<<<< HEAD
+    /// Updates the admin address.
+=======
     /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
@@ -759,6 +842,7 @@ impl SubscriptionVault {
     }
 
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
+>>>>>>> upstream/main
     ///
     /// Migrates every per-merchant storage key (balances, earnings, config, pause
     /// state, subscription index) and rewrites `Subscription.merchant` for all
@@ -803,6 +887,56 @@ impl SubscriptionVault {
             fixed_numerator,
             fixed_denominator,
         )
+    }
+
+    /// Propose a new admin as part of the two-step admin rotation flow.
+    ///
+    /// Creates a proposal that the `new_admin` must claim within 7 days via
+    /// [`claim_admin_role`](Self::claim_admin_role). The current admin can cancel
+    /// the proposal at any time via [`cancel_admin_proposal`](Self::cancel_admin_proposal).
+    ///
+    /// Only one proposal may be active at a time.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `InvalidNewAdmin` if `new_admin` is the contract address
+    /// - `ProposalAlreadyExists` if a proposal is already pending
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim the admin role after a proposal has been created by the current admin.
+    ///
+    /// The claimant must match the `new_admin` address in the proposal, and the
+    /// 7-day claim window must not have expired. On success the stored admin is
+    /// atomically swapped and the proposal is consumed.
+    ///
+    /// # Errors
+    /// - `ProposalNotFound` if no proposal exists
+    /// - `ProposalExpired` if the 7-day window has elapsed
+    /// - `InvalidClaimant` if the caller is not the proposed new admin
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal.
+    ///
+    /// Only the current admin may cancel. The proposal is removed from storage
+    /// and a cancellation event is emitted. After cancellation a new proposal
+    /// may be created.
+    ///
+    /// # Errors
+    /// - `Unauthorized` if caller is not the current admin
+    /// - `NoActiveProposal` if there is no proposal to cancel
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Read the current admin proposal, if any.
+    ///
+    /// Returns `None` when no proposal is active.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
     }
 
     /// Allows the admin to recover funds that are not tied to any subscription.
@@ -1305,6 +1439,7 @@ impl SubscriptionVault {
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -1314,6 +1449,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1325,6 +1461,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1357,6 +1494,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1369,6 +1507,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -1529,6 +1668,50 @@ impl SubscriptionVault {
     /// Get max active subscriptions for a plan.
     pub fn get_plan_max_active_subs(env: Env, plan_template_id: u32) -> u32 {
         queries::get_plan_max_active_subs(&env, plan_template_id)
+    }
+
+    /// Register a new plan template in the on-chain catalogue.
+    ///
+    /// Merchants publish named billing offers (amount, interval, trial_seconds)
+    /// that subscribers reference by plan ID when creating subscriptions. This
+    /// reduces on-chain input errors and supports UI-driven catalogues.
+    ///
+    /// Requires merchant authorisation. Returns the new plan ID.
+    pub fn register_plan(
+        env: Env,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        trial_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+        merchant::do_register_plan(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            trial_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
+    }
+
+    /// Deprecate an existing plan template, permanently preventing new
+    /// subscriptions from being created using it.
+    ///
+    /// Deprecation is idempotent: calling it on an already-deprecated plan is a
+    /// no-op. Only the merchant who owns the plan may deprecate it. Existing
+    /// subscriptions created from the plan are unaffected.
+    ///
+    /// Requires merchant authorisation.
+    pub fn deprecate_plan(
+        env: Env,
+        merchant: Address,
+        plan_id: u32,
+    ) -> Result<(), Error> {
+        merchant::do_deprecate_plan(&env, merchant, plan_id)
     }
 
     /// Migrate a subscription to a new plan version.
@@ -1916,7 +2099,7 @@ impl SubscriptionVault {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
+        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
         let _period_start = old_sub.last_payment_timestamp;
@@ -2495,9 +2678,48 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
+    /// Configure the oracle price deviation circuit-breaker threshold.
+    ///
+    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
+    /// When the latest oracle price deviates from the median of the last N
+    /// samples by more than this amount, the charge is rejected with
+    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
+    /// is emitted.
+    ///
+    /// A value of `0` rejects **any** price change (strict mode).
+    /// When never called, the deviation check is disabled entirely.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the admin.
+    pub fn set_oracle_deviation_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_deviation_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Return the current deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
+        oracle::get_oracle_deviation_bps(&env)
+    }
+
+    /// Return the recorded oracle price history for a token (insertion order).
+    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
+        oracle::get_oracle_price_history(&env, &token)
+    }
+
     /// Emit oracle liveness event.
     pub fn emit_oracle_liveness(env: Env) -> Result<crate::types::OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
+>>>>>>> upstream/main
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
@@ -2618,6 +2840,22 @@ impl SubscriptionVault {
 
     // ── Protocol Fees ──────────────────────────────────────────────────────────
 
+    /// Queue a protocol fee/treasury change for delayed activation. Admin only.
+    pub fn queue_treasury_change(env: Env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error> {
+        validation::reject_contract_self(&env, &treasury)?;
+        admin::queue_treasury_change(&env, admin, treasury, fee_bps)
+    }
+
+    /// Execute a queued treasury change after the timelock elapses. Admin only.
+    pub fn execute_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::execute_treasury_change(&env, admin)
+    }
+
+    /// Cancel a queued treasury change before it is executed. Admin only.
+    pub fn cancel_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::cancel_treasury_change(&env, admin)
+    }
+
     /// Set protocol fee. Admin only.
     pub fn set_protocol_fee(
         env: Env,
@@ -2632,6 +2870,24 @@ impl SubscriptionVault {
     /// Get protocol fee bps.
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
+    }
+
+    /// Set the fee-token override address. Admin only.
+    ///
+    /// When set and different from the subscription's settlement token,
+    /// protocol fees are converted through the oracle and paid in
+    /// `fee_token`. Pass `None` to clear the override.
+    pub fn set_fee_token(
+        env: Env,
+        admin: Address,
+        fee_token: Option<Address>,
+    ) -> Result<(), Error> {
+        admin::set_fee_token(&env, admin, fee_token)
+    }
+
+    /// Return the configured fee-token override address, or `None` if not set.
+    pub fn get_fee_token(env: Env) -> Option<Address> {
+        admin::get_fee_token(&env)
     }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
@@ -3041,3 +3297,6 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_merchant_tags;
+
+#[cfg(test)]
+mod test_referral_self;
