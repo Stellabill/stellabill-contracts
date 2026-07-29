@@ -74,3 +74,7 @@ path = "benches/idem_lookup.rs"
 name = "charge_cold_warm"
 path = "benches/charge_cold_warm.rs"
 
+[[test]]
+name = "dispute_lifecycle"
+path = "benches/dispute_lifecycle.rs"
+
