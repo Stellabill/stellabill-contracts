@@ -3200,7 +3200,6 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
-    &None::<u32>,
     );
 
     // Old plan remains unchanged and addressable.
@@ -3240,7 +3239,6 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
-    &None::<u32>,
     );
 
     let sub_id = test_env
@@ -3433,7 +3431,7 @@ fn test_migrate_subscription_requires_plan_origin() {
 );
     let plan_id = test_env.client.create_plan_template(
         &merchant,
-        &(AMOUNT * 2),
+        &(&AMOUNT * 2),
         &INTERVAL,
         &false,
         &None::<i128>,

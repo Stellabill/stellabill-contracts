@@ -30,6 +30,10 @@ use crate::types::{
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE,
+    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
+    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
+    is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -893,8 +897,6 @@ pub fn withdraw_merchant_funds_for_token(
 
     // ─────────────── EFFECTS ───────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
-    // EFFECTS
-    set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.refunds = earnings
@@ -912,7 +914,7 @@ pub fn withdraw_merchant_funds_for_token(
 
     env.events().publish(
         (
-            Symbol::new(env, "withdrawn"),
+            TOPIC_WITHDRAWN,
             merchant.clone(),
             token_addr.clone(),
         ),
@@ -1106,7 +1108,7 @@ fn flush_merchant_token(
 
     env.events().publish(
         (
-            Symbol::new(env, "withdrawn"),
+            TOPIC_WITHDRAWN,
             merchant.clone(),
             token.clone(),
         ),
@@ -1675,6 +1677,228 @@ pub fn do_deprecate_plan(
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
+
+    Ok(())
+}
+
+// ── Merchant Sub-Accounts (#575) ─────────────────────────────────────────────
+//
+// Let a merchant declare labelled sub-accounts (departments) so subscriptions
+// can route to specific ledgers within one merchant identity.
+//
+// Each sub-account has an isolated balance stored under
+// `DataKey::MerchantSubAccount(merchant, label)`.  Sub-account balances
+// withdraw independently but roll up to the parent for reporting — parent
+// `MerchantEarnings` reflect all charges including sub-account-routed ones.
+//
+// Security invariants:
+// 1. Only the merchant address may register or withdraw from their sub-accounts.
+// 2. Duplicate labels are rejected at registration time.
+// 3. Unknown (unregistered) sub-account labels are rejected at charge time.
+// 4. Withdrawals follow CEI (Checks-Effects-Interactions).
+
+/// Return `Ok(())` if `label` is a registered sub-account for `merchant`.
+pub fn require_sub_account_exists(env: &Env, merchant: &Address, label: &Symbol) -> Result<(), Error> {
+    let key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
+    if !env.storage().instance().has(&key) {
+        return Err(Error::NotFound);
+    }
+    Ok(())
+}
+
+/// Return the current balance of a merchant sub-account.
+pub fn get_sub_account_balance(env: &Env, merchant: &Address, label: &Symbol) -> i128 {
+    let key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
+    env.storage().instance().get(&key).unwrap_or(0i128)
+}
+
+/// Return the list of registered sub-account labels for `merchant`.
+pub fn get_sub_account_list(env: &Env, merchant: &Address) -> Vec<Symbol> {
+    let key = DataKey::MerchantSubAccountList(merchant.clone());
+    env.storage().instance().get(&key).unwrap_or(Vec::new(env))
+}
+
+/// Register a new labelled sub-account for the merchant.
+///
+/// # Arguments
+/// - `merchant` — Address that will own the sub-account; must authorise.
+/// - `label` — Unique label identifying the sub-account (e.g. `"sales"`).
+///
+/// # Errors
+/// - [`Error::Unauthorized`] if `merchant` does not authorise the call.
+/// - [`Error::NotFound`] if the merchant has not initialized their config.
+/// - [`Error::InvalidInput`] if `label` is empty or already registered.
+///
+/// # Events
+/// Emits [`SubAccountCreatedEvent`] with topics `("sub_account_created", merchant, label)`.
+pub fn register_sub_account(
+    env: &Env,
+    merchant: Address,
+    label: Symbol,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    // Reject empty labels
+    let label_str = label.to_str(env);
+    if label_str.len() == 0 {
+        return Err(Error::InvalidInput);
+    }
+
+    // Ensure merchant config exists (merchant must be initialized)
+    let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+
+    // Reject duplicate
+    let list_key = DataKey::MerchantSubAccountList(merchant.clone());
+    let mut labels: Vec<Symbol> = env.storage().instance().get(&list_key).unwrap_or(Vec::new(env));
+    if labels.contains(&label) {
+        return Err(Error::InvalidInput);
+    }
+
+    // Register the sub-account with zero balance
+    let bal_key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
+    env.storage().instance().set(&bal_key, &0i128);
+
+    // Update the label index
+    labels.push_back(label.clone());
+    env.storage().instance().set(&list_key, &labels);
+
+    // Emit event
+    env.events().publish(
+        (
+            Symbol::new(env, "sub_account_created"),
+            merchant.clone(),
+            label.clone(),
+        ),
+        crate::types::SubAccountCreatedEvent {
+            merchant: merchant.clone(),
+            label: label.clone(),
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Credit the given `amount` (in `token`) to a merchant sub-account.
+///
+/// Called internally by the charge engine when a subscription has a
+/// `sub_account_label`.  The parent `MerchantEarnings` are unaffected
+/// (they are already credited by `credit_merchant_balance_for_token`)
+/// so that roll-up reporting still sees the total.
+///
+/// # Errors
+/// - [`Error::NotFound`] if the sub-account has not been registered.
+/// - [`Error::Overflow`] if the new balance exceeds `i128::MAX`.
+pub fn credit_sub_account(
+    env: &Env,
+    merchant: &Address,
+    label: &Symbol,
+    _token: &Address,
+    amount: i128,
+) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    require_sub_account_exists(env, merchant, label)?;
+
+    let bal_key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
+    let current: i128 = env.storage().instance().get(&bal_key).unwrap_or(0i128);
+    let new_balance = current.checked_add(amount).ok_or(Error::Overflow)?;
+    env.storage().instance().set(&bal_key, &new_balance);
+
+    Ok(())
+}
+
+/// Withdraw funds from a merchant sub-account to the merchant's payout address.
+///
+/// # Arguments
+/// - `merchant` — Must authorise the call.
+/// - `label` — Which sub-account to withdraw from.
+/// - `token_addr` — The token to withdraw.
+/// - `amount` — Amount to withdraw (must be positive and ≤ sub-account balance).
+///
+/// # Errors
+/// - [`Error::Unauthorized`] — caller does not match `merchant`.
+/// - [`Error::NotFound`] — sub-account does not exist.
+/// - [`Error::InvalidAmount`] — `amount` ≤ 0.
+/// - [`Error::InsufficientBalance`] — sub-account balance < `amount`.
+///
+/// # Events
+/// Emits [`SubAccountWithdrawEvent`] with topics `("sub_account_withdrawn", merchant, label)`.
+pub fn withdraw_sub_account_funds(
+    env: &Env,
+    merchant: Address,
+    label: Symbol,
+    token_addr: Address,
+    amount: i128,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    require_sub_account_exists(env, &merchant, &label)?;
+
+    // Checks: read sub-account balance first (before any external calls)
+    let bal_key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
+    let current: i128 = env.storage().instance().get(&bal_key).unwrap_or(0i128);
+
+    if current == 0 {
+        return Err(Error::NotFound);
+    }
+    if amount > current {
+        return Err(Error::InsufficientBalance);
+    }
+
+    // Vault balance check (external call, after storage checks per CEI)
+    let token_client = token::Client::new(env, &token_addr);
+    let contract = env.current_contract_address();
+
+    if token_client.balance(&contract) < amount {
+        return Err(Error::InsufficientBalance);
+    }
+
+    let new_balance = current.checked_sub(amount).ok_or(Error::Underflow)?;
+
+    // EFFECTS: Update sub-account balance
+    env.storage().instance().set(&bal_key, &new_balance);
+
+    // EFFECTS: Update parent earnings (withdrawal tracked at parent level)
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.withdrawals = earnings
+        .withdrawals
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+
+    // EFFECTS: Emit event
+    env.events().publish(
+        (
+            Symbol::new(env, "sub_account_withdrawn"),
+            merchant.clone(),
+            label.clone(),
+        ),
+        crate::types::SubAccountWithdrawEvent {
+            merchant: merchant.clone(),
+            label: label.clone(),
+            token: token_addr.clone(),
+            amount,
+            remaining_balance: new_balance,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // INTERACTION: Transfer tokens to merchant
+    token_client.transfer(&contract, &merchant, &amount);
+
+    // INVARIANT (test/CI only)
+    #[cfg(any(test, feature = "invariants"))]
+    crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
 
     Ok(())
 }
