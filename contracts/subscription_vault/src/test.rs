@@ -144,6 +144,61 @@ fn seed_merchant_balance(
 }
 
 #[test]
+fn test_treasury_change_timelock_queue_execute_and_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let treasury_a = Address::generate(&env);
+    let treasury_b = Address::generate(&env);
+    let fee_a = 250u32;
+    let fee_b = 500u32;
+
+    assert!(client.try_queue_treasury_change(&admin, &treasury_a, &fee_a).unwrap().is_ok());
+    assert_eq!(client.get_protocol_fee_bps(), fee_a);
+    assert_eq!(client.get_treasury(), Some(treasury_a.clone()));
+
+    let pending: crate::types::PendingTreasuryChange = env.as_contract(&client.address, || {
+        env.storage().persistent().get(&DataKey::PendingTreasuryChange).unwrap()
+    });
+    assert_eq!(pending.new_treasury, treasury_a);
+    assert_eq!(pending.new_fee_bps, fee_a);
+
+    assert_eq!(client.try_execute_treasury_change(&admin), Err(Ok(Error::TimelockNotElapsed)));
+
+    env.ledger().set_timestamp(pending.effective_at);
+    assert!(client.try_execute_treasury_change(&admin).unwrap().is_ok());
+    assert_eq!(client.get_protocol_fee_bps(), fee_a);
+    assert_eq!(client.get_treasury(), Some(treasury_a));
+
+    assert!(client.try_queue_treasury_change(&admin, &treasury_b, &fee_b).unwrap().is_ok());
+    assert_eq!(client.try_cancel_treasury_change(&admin).unwrap(), Ok(()));
+    assert!(!env.as_contract(&client.address, || env.storage().persistent().has(&DataKey::PendingTreasuryChange)));
+}
+
+#[test]
+fn test_treasury_change_requeue_rejected_while_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let treasury_a = Address::generate(&env);
+    let treasury_b = Address::generate(&env);
+    assert!(client.try_queue_treasury_change(&admin, &treasury_a, &100u32).unwrap().is_ok());
+    assert_eq!(client.try_queue_treasury_change(&admin, &treasury_b, &200u32), Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
 fn test_emit_merchant_balance_snapshot_zero_balance() {
     let (env, client, token, admin) = setup_test_env();
     let merchant = Address::generate(&env);

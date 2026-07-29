@@ -2758,6 +2758,22 @@ impl SubscriptionVault {
 
     // ── Protocol Fees ──────────────────────────────────────────────────────────
 
+    /// Queue a protocol fee/treasury change for delayed activation. Admin only.
+    pub fn queue_treasury_change(env: Env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error> {
+        validation::reject_contract_self(&env, &treasury)?;
+        admin::queue_treasury_change(&env, admin, treasury, fee_bps)
+    }
+
+    /// Execute a queued treasury change after the timelock elapses. Admin only.
+    pub fn execute_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::execute_treasury_change(&env, admin)
+    }
+
+    /// Cancel a queued treasury change before it is executed. Admin only.
+    pub fn cancel_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::cancel_treasury_change(&env, admin)
+    }
+
     /// Set protocol fee. Admin only.
     pub fn set_protocol_fee(
         env: Env,

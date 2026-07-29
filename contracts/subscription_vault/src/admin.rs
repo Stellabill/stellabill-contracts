@@ -5,11 +5,9 @@
 #![allow(dead_code)]
 
 use crate::types::{
-<<<<<<< HEAD
-    AcceptedToken, AdminProposal, AdminProposalCancelledEvent, AdminProposalClaimedEvent,
-    AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason,
-=======
+    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, PendingTreasuryChange,
+    RecoveryEvent, RecoveryReason, TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent,
+    SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
     AcceptedToken, AdminConfigChangedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error,
     RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 >>>>>>> upstream/main
@@ -594,34 +592,97 @@ pub fn do_recover_stranded_funds(
 /// Set protocol fee basis points and treasury address. Admin only.
 ///
 /// fee_bps must be in 0..=10_000. Setting fee_bps to 0 disables fee collection.
-pub fn set_protocol_fee(
+const TREASURY_CHANGE_DELAY_SECS: u64 = 48 * 24 * 60 * 60;
+
+pub fn queue_treasury_change(
     env: &Env,
     admin: Address,
     treasury: Address,
     fee_bps: u32,
-) -> Result<(), crate::types::Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(crate::types::Error::Unauthorized);
-    }
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
     if fee_bps > 10_000 {
-        return Err(crate::types::Error::InvalidInput);
+        return Err(Error::InvalidInput);
     }
+    if env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+        return Err(Error::InvalidInput);
+    }
+
+    let effective_at = env.ledger().timestamp().saturating_add(TREASURY_CHANGE_DELAY_SECS);
+    let pending = PendingTreasuryChange {
+        new_treasury: treasury.clone(),
+        new_fee_bps: fee_bps,
+        effective_at,
+    };
+    env.storage().persistent().set(&DataKey::PendingTreasuryChange, &pending);
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::PendingTreasuryChange, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+
     enforce_config_cooldown(env, "ProtocolFee")?;
     write_config(env, &DataKey::FeeBps, &fee_bps);
     write_config(env, &DataKey::Treasury, &treasury);
     env.events().publish(
-        (Symbol::new(env, "protocol_fee_configured"),),
-        crate::types::ProtocolFeeConfiguredEvent {
+        (Symbol::new(env, "treasury_change_queued"),),
+        TreasuryChangeQueuedEvent {
             admin: admin.clone(),
             treasury,
             fee_bps,
+            effective_at,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
+}
+
+pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    let pending = env
+        .storage()
+        .persistent()
+        .get::<_, PendingTreasuryChange>(&DataKey::PendingTreasuryChange)
+        .ok_or(Error::NotFound)?;
+
+    let now = env.ledger().timestamp();
+    if now < pending.effective_at {
+        return Err(Error::TimelockNotElapsed);
+    }
+
+    write_config(env, &DataKey::FeeBps, &pending.new_fee_bps);
+    write_config(env, &DataKey::Treasury, &pending.new_treasury);
+    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+
+    env.events().publish(
+        (Symbol::new(env, "treasury_change_executed"),),
+        TreasuryChangeExecutedEvent {
+            admin: admin.clone(),
+            treasury: pending.new_treasury.clone(),
+            fee_bps: pending.new_fee_bps,
+            effective_at: pending.effective_at,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+pub fn cancel_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    if !env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+        return Err(Error::NotFound);
+    }
+    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+    Ok(())
+}
+
+pub fn set_protocol_fee(
+    env: &Env,
+    admin: Address,
+    treasury: Address,
+    fee_bps: u32,
+) -> Result<(), Error> {
+    queue_treasury_change(env, admin, treasury, fee_bps)
 }
 
 /// Return the configured protocol fee in basis points (0 = disabled).
