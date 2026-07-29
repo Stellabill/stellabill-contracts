@@ -59,6 +59,10 @@ name = "nonce_verification"
 path = "verification/nonce_verification.rs"
 
 [[test]]
+name = "cancel_refund"
+path = "kani/cancel_refund.rs"
+
+[[test]]
 name = "channel_account_auth"
 path = "tests/channel_account_auth.rs"
 
