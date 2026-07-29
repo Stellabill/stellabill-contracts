@@ -236,6 +236,8 @@ pub enum DataKey {
     SplitPayees(u32),
     /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
     BuyoutPremiumBps,
+    /// Merchant vacation window storing (start_ts, end_ts). Discriminant 62.
+    MerchantVacation(Address),
     /// Coupon code bound to a subscription (persistent). Discriminant 68.
     SubCoupon(u32),
     /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
@@ -328,6 +330,9 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::SplitPayees(_) => 59,
+            DataKey::BuyoutPremiumBps => 60,
+            DataKey::MerchantVacation(_) => 62,
             DataKey::AdminConfigLastChangedAt(_) => 59,
             DataKey::SubscriberCreateCap => 60,
             DataKey::SubscriberCreateWindow(_) => 61,
@@ -398,6 +403,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
     54, // TransferIntent(u32)
+    59, // BuyoutPremiumBps
+    61, // MerchantMultiSig(Address)
+    62, // MerchantVacation(Address)
     59, // AdminConfigLastChangedAt(BytesN<32>)
     60, // SubscriberCreateCap
     61, // SubscriberCreateWindow(Address)
@@ -900,6 +908,8 @@ pub enum Error {
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4013,
     CooldownActive = 4012,
+    /// Merchant vacation mode is active — charges blocked during vacation window.
+    VacationActive = 4014,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -2517,6 +2527,17 @@ pub struct MerchantMultiSigConfig {
     pub threshold: u32,
 }
 
+/// Merchant vacation window: when active (current time within [start_ts, end_ts]),
+/// all charges to this merchant's subscriptions are blocked with `Error::VacationActive`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantVacation {
+    /// Start of the vacation window (ledger timestamp, seconds).
+    pub start_ts: u64,
+    /// End of the vacation window (ledger timestamp, seconds). Must be > start_ts.
+    pub end_ts: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantPausedEvent {
@@ -2528,6 +2549,26 @@ pub struct MerchantPausedEvent {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantUnpausedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant enters vacation mode, auto-pausing all subscriptions.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VacationStartedEvent {
+    pub merchant: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant exits vacation mode before the scheduled end time.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VacationEndedEvent {
     pub merchant: Address,
     pub timestamp: u64,
     pub schema_version: u32,
