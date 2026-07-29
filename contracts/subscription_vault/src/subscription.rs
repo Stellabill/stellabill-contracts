@@ -491,6 +491,7 @@ pub fn do_create_subscription(
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
     expires_at_ledger: Option<u32>,
+    sub_account_label: Option<Symbol>,
 ) -> Result<u32, Error> {
     let token = crate::admin::get_token(env)?;
 
@@ -508,6 +509,7 @@ pub fn do_create_subscription(
         lifetime_cap,
         expires_at,
         expires_at_ledger,
+        sub_account_label,
     )
 }
 
@@ -523,6 +525,7 @@ pub fn do_create_subscription_with_token(
     lifetime_cap: Option<i128>,
     expires_at: Option<u64>,
     expires_at_ledger: Option<u32>,
+    sub_account_label: Option<Symbol>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
 
@@ -530,6 +533,7 @@ pub fn do_create_subscription_with_token(
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
     // Reject self-referral: inviter cannot be the same as subscriber.
+    let inviter: Option<Address> = None;
     if let Some(ref inviter_addr) = inviter {
         if inviter_addr == &subscriber {
             return Err(Error::SelfReferralNotAllowed);
@@ -624,6 +628,7 @@ pub fn do_create_subscription_with_token(
         grace_start_timestamp: None,
         cancel_at: None,
         expires_at_ledger,
+        sub_account_label,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -1994,6 +1999,11 @@ pub fn do_charge_one_off(
     crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
 
+    // Validate sub-account label exists before any state mutation
+    if let Some(ref label) = sub.sub_account_label {
+        crate::merchant::require_sub_account_exists(env, &sub.merchant, label)?;
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
@@ -2103,6 +2113,15 @@ pub fn do_charge_one_off(
         merchant_amount,
         BillingChargeKind::OneOff,
     )?;
+
+    // Route merchant amount to sub-account if subscription has one
+    if let Some(ref label) = sub.sub_account_label {
+        crate::merchant::credit_sub_account(env, &sub.merchant, label, &sub.token, merchant_amount)?;
+        let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
+        let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
+        crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
+    }
+
     let should_emit_fee_event = if fee_amount > 0 {
         if let Some(ref treasury) = treasury_opt {
             crate::merchant::credit_merchant_balance_for_token(
@@ -2715,6 +2734,7 @@ pub fn do_create_subscription_from_plan(
     env: &Env,
     subscriber: Address,
     plan_template_id: u32,
+    sub_account_label: Option<Symbol>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
@@ -2779,6 +2799,7 @@ pub fn do_create_subscription_from_plan(
         grace_start_timestamp: None,
         cancel_at: None,
         expires_at_ledger: None,
+        sub_account_label,
     };
 
     write_subscription(env, id, &sub);
