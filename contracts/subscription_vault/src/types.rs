@@ -4,7 +4,7 @@
 //! or contract entrypoints.
 
 use soroban_sdk::{
-    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 /// Current schema version for contract events.
@@ -70,6 +70,13 @@ pub const MAX_FEE_BIPS: i32 = 10000;
 pub struct IdemRingBuffer {
     pub entries: Vec<BytesN<32>>,
     pub cursor: u32,
+}
+
+/// Key used for KYC data lookups, referenced by `DataKey::Kyc`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KycKey {
+    pub account: Address,
 }
 
 /// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
@@ -264,6 +271,13 @@ pub enum DataKey {
     OraclePriceHistoryMeta(Address),
     /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
     OraclePriceHistoryEntry(Address, u32),
+    MerchantWhitelistMode,
+    MerchantApproved(Address),
+    ChargeFailureCounter(u32),
+    AutoPauseThreshold,
+    MerchantSubAccount(Address, Symbol),
+    MerchantSubAccountList(Address),
+    EmergencyWithdrawIntent(u32),
 }
 
 impl DataKey {
@@ -513,6 +527,8 @@ pub struct Subscription {
     /// Optional sub-account label for routing charges to an isolated merchant
     /// sub-account ledger (#575). `None` routes to the parent merchant balance.
     pub sub_account_label: Option<Symbol>,
+    pub auto_renew_disabled_at: Option<u64>,
+    pub auto_renew: bool,
 }
 
 impl Subscription {
@@ -907,7 +923,6 @@ pub enum Error {
     TimelockNotElapsed = 4011,
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4013,
-    CooldownActive = 4012,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
 
@@ -950,6 +965,8 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
+    /// Usage limits are required but not configured.
+    UsageLimitsRequired = 6018,
     /// Coupon code does not exist.
     CouponNotFound = 6011,
     /// Coupon has passed its expiration timestamp.
@@ -978,6 +995,12 @@ pub enum Error {
     UnknownMerchantTag = 7005,
     /// The same tag appears more than once in a single `set_merchant_tags` call.
     DuplicateMerchantTag = 7006,
+    /// Subscriber has been rate-limited.
+    SubscriberRateLimited = 7008,
+    /// Self-referral is not allowed.
+    SelfReferralNotAllowed = 7009,
+    /// Merchant tag would exceed the maximum allowed per merchant.
+    MerchantTagLimitExceeded = 7007,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -1018,6 +1041,14 @@ pub enum Error {
     TransferIntentExpired = 11002,
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
+    /// Emergency withdraw state is invalid for this operation.
+    EmergencyWithdrawInvalidState = 11004,
+    /// Emergency withdraw cooldown is active.
+    EmergencyWithdrawCooldownActive = 11005,
+    /// Emergency withdraw was not requested.
+    EmergencyWithdrawNotRequested = 11006,
+    /// Emergency withdraw state has changed.
+    EmergencyWithdrawStateChanged = 11007,
 
     // --- Admin Config Cooldown (12000-12099) ---
     /// A protocol-wide config mutation was attempted within the per-key cooldown window.
@@ -1033,7 +1064,7 @@ pub enum Error {
     // --- Auto-Renewal (12000-12099) ---
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
-    RenewalWindowClosed = 12001,
+    RenewalWindowClosed = 12002,
 
     // --- Admin Proposal (14000-14099) ---
     /// No admin proposal exists for claiming.
@@ -1049,9 +1080,9 @@ pub enum Error {
 
     // --- Cancellation Escrow (13000-13099) ---
     /// No cancellation escrow found for this subscription.
-    EscrowNotFound = 13001,
+    EscrowNotFound = 13004,
     /// The cancellation escrow release window has not elapsed yet.
-    EscrowNotReleased = 13002,
+    EscrowNotReleased = 13005,
 }
 
 impl Error {
@@ -2805,3 +2836,76 @@ mod event_topic_tests {
         assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
 }
+
+
+// ════════════════════════════════════════════════════════════════════
+// Stub types — pre-existing references needing definitions
+// ════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AcceptedToken { pub token: Address, pub decimals: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConvertedEvent { pub subscription_id: u32, pub source_token: Address, pub target_token: Address, pub original_fee_amount: i128, pub converted_fee_amount: i128, pub rate: i128, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent { pub admin: Address, pub fee_token: Address, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent { pub subscription_id: u32, pub consecutive_failures: u32, pub threshold: u32, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent { pub subscription_id: u32, pub authorizer: Address, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountCreatedEvent { pub merchant: Address, pub label: Symbol, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountWithdrawEvent { pub merchant: Address, pub label: Symbol, pub token: Address, pub amount: i128, pub remaining_balance: i128, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrow { pub subscription_id: u32, pub subscriber: Address, pub merchant: Address, pub token: Address, pub amount: i128, pub opened_at: u64, pub releases_at: u64, pub released_at: Option<u64> }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent { pub subscription_id: u32, pub subscriber: Address, pub merchant: Address, pub token: Address, pub amount: i128, pub released_at: u64, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent { pub subscription_id: u32, pub merchant: Address, pub dispute_id: u64, pub amount: i128, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent { pub subscription_id: u32, pub subscriber: Address, pub amount: i128, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntent { pub subscription_id: u32, pub from: Address, pub to: Address, pub created_at: u64, pub expires_at: u64 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent { pub subscription_id: u32, pub from: Address, pub to: Address, pub expires_at: u64, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent { pub subscription_id: u32, pub from: Address, pub to: Address, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent { pub subscription_id: u32, pub merchant: Address, pub timestamp: u64, pub schema_version: u32 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OraclePriceHistoryMeta { pub token: Address, pub cursor: u32, pub count: u32 }
+
+pub fn normalize_amount(_env: &Env, _token: &Address, amount: i128) -> Result<i128, Error> { Ok(amount) }
+
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 14 * 24 * 60 * 60;

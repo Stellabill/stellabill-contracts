@@ -66,14 +66,18 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate,
-    PlanTemplateUpdatedEvent, SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
+    BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS, CancellationEscrow,
+    CancellationEscrowOpenedEvent, DataKey, EmergencyWithdrawIntent, Error,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    RateLimitTrippedEvent, ReferralAttributedEvent, SubscriberCreateWindow,
+    SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
     SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
+    UsageLimitsConfiguredEvent, TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED,
+    TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
     BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
@@ -653,6 +657,8 @@ pub fn do_create_subscription_with_token(
         cancel_at: None,
         expires_at_ledger,
         sub_account_label,
+        auto_renew_disabled_at: None,
+        auto_renew: true,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -1148,7 +1154,9 @@ fn apply_cancellation(
             token: token_addr.clone(),
             subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
-            released_at,
+            opened_at: now,
+            releases_at: released_at,
+            released_at: None,
         };
 
         env.storage()
@@ -1877,7 +1885,7 @@ fn bulk_deposit_one(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         return crate::types::BulkDepositResult {
             subscription_id,
             success: false,
@@ -2647,19 +2655,17 @@ pub fn do_deposit_funds_on_behalf(
     }
 
     // Expiration guard
-    if sub.is_expired(now) {
-        if sub.status != SubscriptionStatus::Expired {
-            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
-            write_subscription(env, subscription_id, &sub);
-            env.events().publish(
-                (Symbol::new(env, "subscription_expired"), subscription_id),
-                crate::types::SubscriptionExpiredEvent {
-                    subscription_id,
-                    timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                },
-            );
-        }
+    if sub.is_expired(now, env.ledger().sequence()) {
+        transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
+        write_subscription(env, subscription_id, &sub);
+        env.events().publish(
+            (Symbol::new(env, "subscription_expired"), subscription_id),
+            crate::types::SubscriptionExpiredEvent {
+                subscription_id,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         return Err(Error::SubscriptionExpired);
     }
 
@@ -3148,10 +3154,9 @@ pub fn do_create_subscription_from_plan(
         cancel_at: None,
         expires_at_ledger: None,
         sub_account_label,
+        auto_renew_disabled_at: None,
+        auto_renew: true,
     };
-
-    write_subscription(env, id, &sub);
-    increment_subscriber_active_count(env, &subscriber);
 
     // Persist linkage between subscription and the plan template
     let sub_plan_storage_key = sub_plan_key(id);
@@ -3190,6 +3195,7 @@ pub fn do_create_subscription_from_plan(
             interval_seconds: plan.interval_seconds,
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
+            expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
@@ -3584,6 +3590,7 @@ pub fn do_initiate_transfer(
         subscription_id,
         from: from.clone(),
         to: to.clone(),
+        created_at: env.ledger().timestamp(),
         expires_at,
     };
 
