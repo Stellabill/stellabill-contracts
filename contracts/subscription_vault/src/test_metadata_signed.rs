@@ -88,6 +88,7 @@ fn create_subscription(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     let _ = token; // touch unused param to silence the lint without complaining
     (id, subscriber, merchant)
@@ -220,6 +221,7 @@ fn subscriber_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let payload = payload_for(
@@ -263,6 +265,7 @@ fn merchant_signed_set_succeeds() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     let payload = payload_for(
@@ -298,6 +301,7 @@ fn sequential_nonces_advance() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let signer = pubkey_to_address(&env, &bytes32(&env, &sub_key.pub_bytes));
@@ -342,6 +346,7 @@ fn replayed_nonce_is_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -372,6 +377,7 @@ fn skipped_nonce_is_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -402,6 +408,7 @@ fn expires_at_equal_to_now_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let now = env.ledger().timestamp();
@@ -428,6 +435,7 @@ fn expires_at_in_past_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let now = env.ledger().timestamp();
@@ -457,6 +465,7 @@ fn expires_at_in_future_succeeds() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(
@@ -491,6 +500,7 @@ fn forged_signature_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -526,6 +536,7 @@ fn wrong_key_signature_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     // Attacker builds a fully valid signature on the right message bytes
@@ -562,6 +573,7 @@ fn chain_id_mismatch_panics() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -637,6 +649,7 @@ fn key_too_long_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -674,6 +687,7 @@ fn value_too_long_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let long_value = String::from_str(&env, &"a".repeat(257));
@@ -707,6 +721,7 @@ fn empty_key_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = SignedMetadataPayload {
@@ -738,6 +753,7 @@ fn empty_value_rejected() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = SignedMetadataPayload {
@@ -769,6 +785,7 @@ fn key_cap_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -823,6 +840,7 @@ fn subscriber_and_merchant_nonces_independent() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
 
@@ -869,6 +887,7 @@ fn nonce_overflow_is_guarded() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let signer = Address::generate(&env);
@@ -930,6 +949,7 @@ fn success_emits_signed_event() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<Address>,
         )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -947,4 +967,101 @@ fn success_emits_signed_event() {
         }
     }
     assert!(found_signed, "metadata_set_signed event must be published");
+}
+
+// ── Metadata key-limit boundary tests ────────────────────────────────────────
+//
+// These tests exercise the direct `set_metadata` entrypoint (no crypto
+// overhead) and confirm the storage-growth invariant: exactly MAX_METADATA_KEYS
+// distinct keys are allowed, the (MAX+1)th new key is rejected, but
+// overwriting an existing key at the limit always succeeds.
+
+/// Fill to exactly MAX_METADATA_KEYS via set_metadata — all writes succeed.
+/// Then attempt one more new key and assert MetadataKeyLimitReached.
+/// Finally verify every previously-written entry is still intact.
+#[test]
+fn metadata_key_limit_direct_path() {
+    let (env, client, _token, _admin) = setup();
+    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
+
+    for n in 0..crate::MAX_METADATA_KEYS {
+        let key = String::from_str(&env, &format!("key{}", n));
+        let val = String::from_str(&env, &format!("val{}", n));
+        client.set_metadata(&sub_id, &subscriber, &key, &val);
+    }
+
+    // One more new key must be rejected.
+    let overflow_key = String::from_str(&env, "overflow");
+    let res = client.try_set_metadata(
+        &sub_id,
+        &subscriber,
+        &overflow_key,
+        &String::from_str(&env, "x"),
+    );
+    assert_eq!(res, Err(Ok(crate::Error::MetadataKeyLimitReached)));
+
+    // All previous entries must still be readable.
+    for n in 0..crate::MAX_METADATA_KEYS {
+        let key = String::from_str(&env, &format!("key{}", n));
+        let expected = String::from_str(&env, &format!("val{}", n));
+        assert_eq!(client.get_metadata(&sub_id, &key), expected);
+    }
+}
+
+/// Overwriting an existing key when at MAX_METADATA_KEYS must succeed —
+/// it does not add a new slot, so the cap should not fire.
+#[test]
+fn replace_in_place_at_limit_succeeds() {
+    let (env, client, _token, _admin) = setup();
+    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
+
+    for n in 0..crate::MAX_METADATA_KEYS {
+        let key = String::from_str(&env, &format!("k{}", n));
+        let val = String::from_str(&env, "original");
+        client.set_metadata(&sub_id, &subscriber, &key, &val);
+    }
+
+    // Overwrite key0 — no new slot, so cap must not fire.
+    let key0 = String::from_str(&env, "k0");
+    let updated = String::from_str(&env, "updated");
+    client.set_metadata(&sub_id, &subscriber, &key0, &updated);
+
+    assert_eq!(client.get_metadata(&sub_id, &key0), updated);
+}
+
+/// A key whose length equals MAX_METADATA_KEY_LENGTH (32 chars) must be accepted.
+#[test]
+fn key_at_max_length_accepted() {
+    let (env, client, _token, _admin) = setup();
+    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
+
+    let key = String::from_str(&env, &"a".repeat(crate::MAX_METADATA_KEY_LENGTH as usize));
+    client.set_metadata(
+        &sub_id,
+        &subscriber,
+        &key,
+        &String::from_str(&env, "v"),
+    );
+
+    assert_eq!(
+        client.get_metadata(&sub_id, &key),
+        String::from_str(&env, "v")
+    );
+}
+
+/// A value whose length equals MAX_METADATA_VALUE_LENGTH (256 chars) must be accepted.
+#[test]
+fn value_at_max_length_accepted() {
+    let (env, client, _token, _admin) = setup();
+    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
+
+    let val = String::from_str(&env, &"v".repeat(crate::MAX_METADATA_VALUE_LENGTH as usize));
+    client.set_metadata(
+        &sub_id,
+        &subscriber,
+        &String::from_str(&env, "k"),
+        &val,
+    );
+
+    assert_eq!(client.get_metadata(&sub_id, &String::from_str(&env, "k")), val);
 }

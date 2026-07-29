@@ -134,6 +134,7 @@ fn setup_env<'a>() -> (
             &usage_enabled,
             &None,
             &None,
+            &None::<Address>,
         );
         sub_ids.push(sub_id);
 
