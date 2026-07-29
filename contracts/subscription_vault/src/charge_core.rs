@@ -477,10 +477,39 @@ pub fn charge_one(
                     crate::admin::get_treasury(env),
                 )
             };
+            // ── Fee Routing & Rounding ─────────────────────────────────────
+            //
+            // Fee is computed via integer floor division:
+            //
+            //   fee = floor(charge_amount × fee_bps / 10_000)
+            //   net = charge_amount − fee
+            //
+            // This guarantees the conservation invariant:
+            //
+            //   net + fee == charge_amount          (always exact)
+            //
+            // Because subtraction is used rather than re-addition, any remainder
+            // from the floor division stays with the merchant — rounding always
+            // favours the merchant, never the treasury. For example:
+            //
+            //   charge_amount = 1_000_000 (1 USDC) , fee_bps = 333 (3.33%)
+            //   fee = 1_000_000 × 333 / 10_000 = 33_300
+            //   net = 1_000_000 − 33_300 = 966_700
+            //   check: 966_700 + 33_300 = 1_000_000 ✓
+            //
+            // See `docs/fee_routing.md` for the full specification.
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
                     let fee = charge_amount * fee_bps as i128 / 10_000i128;
                     let net = charge_amount - fee;
+                    // Regression guard: assert conservation invariant
+                    debug_assert!(
+                        net + fee == charge_amount,
+                        "fee routing invariant violated: net ({}) + fee ({}) != charge ({})",
+                        net,
+                        fee,
+                        charge_amount
+                    );
                     (net, fee)
                 } else {
                     (charge_amount, 0i128)
@@ -1096,10 +1125,22 @@ pub fn charge_usage_one(
             sub.prepaid_balance = new_balance;
             let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
+            // ── Fee Routing & Rounding ─────────────────────────────────────
+            // Same invariant as `charge_one` above: integer floor division
+            // guarantees net + fee == usage_amount exactly.
+            // See `docs/fee_routing.md` for the full specification.
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
                     let fee = usage_amount * fee_bps as i128 / 10_000i128;
-                    (usage_amount - fee, fee)
+                    let net = usage_amount - fee;
+                    debug_assert!(
+                        net + fee == usage_amount,
+                        "fee routing invariant violated (usage): net ({}) + fee ({}) != charge ({})",
+                        net,
+                        fee,
+                        usage_amount
+                    );
+                    (net, fee)
                 } else {
                     (usage_amount, 0i128)
                 }
