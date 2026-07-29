@@ -332,7 +332,8 @@ fn write_guardians(env: &Env, guardians: &Map<Address, u32>) {
     env.storage()
         .persistent()
         .set(&DataKey::Guardians, guardians);
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         &DataKey::Guardians,
         30 * 24 * 60 * 60,
         365 * 24 * 60 * 60,
@@ -351,9 +352,7 @@ fn read_proposal(env: &Env, proposal_id: u64) -> Result<Proposal, Error> {
 fn write_proposal(env: &Env, proposal_id: u64, proposal: &Proposal) {
     let key = DataKey::Proposal(proposal_id);
     env.storage().persistent().set(&key, proposal);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, 30 * 24 * 60 * 60, 365 * 24 * 60 * 60);
+    crate::subscription::maybe_extend_ttl(&env, &key, 30 * 24 * 60 * 60, 365 * 24 * 60 * 60);
 }
 
 /// Get next proposal ID and increment counter.
