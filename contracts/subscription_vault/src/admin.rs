@@ -54,9 +54,7 @@ where
     let version = get_schema_version(env);
     if version >= 3 {
         env.storage().persistent().set(key, value);
-        env.storage()
-            .persistent()
-            .extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         env.storage().instance().remove(key);
     } else {
         env.storage().instance().set(key, value);
@@ -130,9 +128,7 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
     }
 
     env.storage().persistent().set(&storage_key, &now);
-    env.storage()
-        .persistent()
-        .extend_ttl(&storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+    crate::subscription::maybe_extend_ttl(env, &storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 
     env.events().publish(
         (Symbol::new(env, "admin_config_changed"),),
@@ -180,7 +176,8 @@ pub fn do_init(
     env.storage()
         .persistent()
         .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION);
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         &DataKey::SchemaVersion,
         SUB_TTL_THRESHOLD,
         SUB_TTL_EXTEND_TO,
@@ -677,7 +674,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Token) {
         let val: Address = instance.get(&DataKey::Token).unwrap();
         persistent.set(&DataKey::Token, &val);
-        persistent.extend_ttl(&DataKey::Token, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Token, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Token);
     }
 
@@ -685,7 +682,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Admin) {
         let val: Address = instance.get(&DataKey::Admin).unwrap();
         persistent.set(&DataKey::Admin, &val);
-        persistent.extend_ttl(&DataKey::Admin, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Admin, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Admin);
     }
 
@@ -693,7 +690,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::MinTopup) {
         let val: i128 = instance.get(&DataKey::MinTopup).unwrap();
         persistent.set(&DataKey::MinTopup, &val);
-        persistent.extend_ttl(&DataKey::MinTopup, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::MinTopup, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::MinTopup);
     }
 
@@ -701,7 +698,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::NextId) {
         let val: u32 = instance.get(&DataKey::NextId).unwrap_or(0);
         persistent.set(&DataKey::NextId, &val);
-        persistent.extend_ttl(&DataKey::NextId, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::NextId, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::NextId);
     }
 
@@ -709,7 +706,8 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::EmergencyStop) {
         let val: bool = instance.get(&DataKey::EmergencyStop).unwrap_or(false);
         persistent.set(&DataKey::EmergencyStop, &val);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::EmergencyStop,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -721,7 +719,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Treasury) {
         let val: Address = instance.get(&DataKey::Treasury).unwrap();
         persistent.set(&DataKey::Treasury, &val);
-        persistent.extend_ttl(&DataKey::Treasury, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Treasury, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Treasury);
     }
 
@@ -729,7 +727,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::FeeBps) {
         let val: u32 = instance.get(&DataKey::FeeBps).unwrap_or(0);
         persistent.set(&DataKey::FeeBps, &val);
-        persistent.extend_ttl(&DataKey::FeeBps, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::FeeBps, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::FeeBps);
     }
 
@@ -737,14 +735,15 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Operator) {
         let val: Address = instance.get(&DataKey::Operator).unwrap();
         persistent.set(&DataKey::Operator, &val);
-        persistent.extend_ttl(&DataKey::Operator, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Operator, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Operator);
     }
 
     // 9. SchemaVersion
     if instance.has(&DataKey::SchemaVersion) {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -752,7 +751,8 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
         instance.remove(&DataKey::SchemaVersion);
     } else {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -833,7 +833,8 @@ pub fn do_migrate(
         env.storage()
             .persistent()
             .set(&crate::types::DataKey::SchemaVersion, &binary_version);
-        env.storage().persistent().extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &crate::types::DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,

@@ -115,6 +115,7 @@ fn create_and_fund(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     let token_admin = token::StellarAssetClient::new(env, token);
     token_admin.mint(subscriber, &(DEPOSIT * 4));

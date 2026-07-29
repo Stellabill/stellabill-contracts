@@ -47,9 +47,7 @@ use soroban_sdk::{Address, Env, Symbol};
 fn write_coupon(env: &Env, coupon: &Coupon) {
     let key = DataKey::Coupon(coupon.code.clone());
     env.storage().persistent().set(&key, coupon);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+    crate::subscription::maybe_extend_ttl(env, &key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
 fn read_coupon(env: &Env, code: &Symbol) -> Option<Coupon> {
@@ -68,9 +66,7 @@ fn read_redemptions(env: &Env, code: &Symbol) -> u32 {
 fn write_redemptions(env: &Env, code: &Symbol, count: u32) {
     let key = DataKey::CouponRedemptions(code.clone());
     env.storage().persistent().set(&key, &count);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+    crate::subscription::maybe_extend_ttl(env, &key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,7 +221,8 @@ pub fn apply_coupon(
     // Bind coupon to subscription.
     let sub_key = DataKey::SubCoupon(subscription_id);
     env.storage().persistent().set(&sub_key, &code);
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         &sub_key,
         SUB_TTL_THRESHOLD,
         SUB_TTL_EXTEND_TO,
