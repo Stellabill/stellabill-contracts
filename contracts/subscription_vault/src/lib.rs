@@ -825,6 +825,28 @@ impl SubscriptionVault {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
     }
 
+    /// Propose a new admin address. The proposed admin must call `claim_admin_role`
+    /// within 7 days to complete the rotation.
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim a pending admin proposal. Must be called by the proposed address
+    /// before the 7-day window expires.
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal. Admin only.
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Return the active admin proposal, if one exists.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
+    }
+
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
     ///
     /// Migrates every per-merchant storage key (balances, earnings, config, pause
@@ -3480,3 +3502,6 @@ mod test_subscription_transfer;
 
 #[cfg(test)]
 mod test_split_billing;
+
+#[cfg(test)]
+mod test_admin_rotation_two_step;
