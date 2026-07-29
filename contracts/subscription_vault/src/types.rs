@@ -891,6 +891,8 @@ pub enum Error {
     UsageLimitsRequired = 6020,
     /// Requested tag set exceeds `MAX_MERCHANT_TAGS` for a single merchant.
     MerchantTagLimitExceeded = 6021,
+    /// A subscriber cannot be their own referral inviter.
+    SelfReferralNotAllowed = 6022,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -1665,6 +1667,17 @@ pub struct SubscriptionCreatedEvent {
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a referral rebate is attributed to an inviter.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ReferralAttributedEvent {
+    pub subscription_id: u32,
+    pub inviter: Address,
+    pub subscriber: Address,
     pub timestamp: u64,
     pub schema_version: u32,
 }

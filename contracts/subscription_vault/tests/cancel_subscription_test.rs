@@ -53,6 +53,7 @@ fn setup() -> (
         &false,
         &None,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // Deposit funds
@@ -142,6 +143,7 @@ fn test_cancel_with_zero_balance_refunds_nothing() {
         &false,
         &None,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // Cancel with zero balance — should succeed with no refund
@@ -184,6 +186,7 @@ fn test_cancel_refunds_prepaid_balance() {
         &false,
         &None,
         &None::<u64>,
+        &None::<Address>,
     );
     client.deposit_funds(&sub_id, &subscriber, &deposit, &None);
 
