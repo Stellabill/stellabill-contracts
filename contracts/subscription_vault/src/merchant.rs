@@ -945,41 +945,14 @@ pub fn do_rotate_merchant_address(
         }
     }
 
-                let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
-                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
-                let accrued = earnings
-                    .accruals
-                    .interval
-                    .checked_add(earnings.accruals.usage)
-                    .unwrap_or(0)
-                    .checked_add(earnings.accruals.one_off)
-                    .unwrap_or(0);
-                let withdrawn = earnings.withdrawals;
-                let refunded = earnings.refunds;
-                let ledger_sequence = env.ledger().sequence();
-                let timestamp = env.ledger().timestamp();
-
-                let ev = MerchantBalanceSnapshotEvent {
-                    merchant: pair.0.clone(),
-                    token: pair.1.clone(),
-                    balance,
-                    accrued,
-                    withdrawn,
-                    refunded,
-                    ledger_sequence,
-                    timestamp,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                };
-
-                env.events().publish(
-                    (
-                        Symbol::new(env, "merchant_balance_snapshot"),
-                        pair.0.clone(),
-                        pair.1.clone(),
-                    ),
-                    ev.clone(),
-                );
-                out.push_back(ev);
+    if !sub_ids.is_empty() {
+        let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
+        let mut new_sub_ids: soroban_sdk::Vec<u32> = storage
+            .get(&subs_key_new)
+            .unwrap_or(soroban_sdk::Vec::new(env));
+        for id in sub_ids.iter() {
+            if !new_sub_ids.contains(&id) {
+                new_sub_ids.push_back(id);
             }
         }
         storage.set(&subs_key_new, &new_sub_ids);

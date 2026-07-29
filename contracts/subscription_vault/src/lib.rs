@@ -548,6 +548,7 @@ pub use types::{
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SplitPayees, SplitChargeEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
@@ -1257,6 +1258,131 @@ impl SubscriptionVault {
             },
         );
         Ok(sub_id)
+    }
+
+    /// Create a new subscription with split-billing.
+    pub fn create_subscription_with_split(
+        env: Env,
+        subscriber: Address,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+        expires_at: Option<u64>,
+        entries: Vec<(Address, u32)>,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+
+        if entries.is_empty() {
+            return Err(Error::InvalidInput);
+        }
+        let mut total_weight: u32 = 0;
+        for entry in entries.iter() {
+            let (payee, weight) = entry;
+            if weight == 0 {
+                return Err(Error::InvalidInput);
+            }
+            total_weight = total_weight.checked_add(weight).ok_or(Error::InvalidInput)?;
+            crate::blocklist::require_not_blocklisted(&env, &payee)?;
+        }
+        if total_weight != 10_000 {
+            return Err(Error::InvalidInput);
+        }
+
+        let sub_id = subscription::do_create_subscription(
+            &env,
+            subscriber.clone(),
+            merchant.clone(),
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            expires_at,
+        )?;
+
+        let split = SplitPayees {
+            subscription_id: sub_id,
+            entries,
+        };
+        subscription::write_split_payees(&env, sub_id, &split);
+
+        let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
+        env.events().publish(
+            (Symbol::new(&env, "created"), sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                token,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+
+        Ok(sub_id)
+    }
+
+    /// Update split billing payees. Subscriber only.
+    pub fn update_split_payees(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        entries: Option<Vec<(Address, u32)>>,
+    ) -> Result<(), Error> {
+        subscriber.require_auth();
+        require_not_emergency_stop(&env)?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        if sub.subscriber != subscriber {
+            return Err(Error::Unauthorized);
+        }
+        if sub.status == SubscriptionStatus::Cancelled || sub.status == SubscriptionStatus::Expired {
+            return Err(Error::NotActive);
+        }
+
+        if let Some(ref list) = entries {
+            if list.is_empty() {
+                return Err(Error::InvalidInput);
+            }
+            let mut total_weight: u32 = 0;
+            for entry in list.iter() {
+                let (payee, weight) = entry;
+                if weight == 0 {
+                    return Err(Error::InvalidInput);
+                }
+                total_weight = total_weight.checked_add(weight).ok_or(Error::InvalidInput)?;
+                crate::blocklist::require_not_blocklisted(&env, &payee)?;
+            }
+            if total_weight != 10_000 {
+                return Err(Error::InvalidInput);
+            }
+
+            let split = SplitPayees {
+                subscription_id,
+                entries: list.clone(),
+            };
+            subscription::write_split_payees(&env, subscription_id, &split);
+        } else {
+            let key = DataKey::SplitPayees(subscription_id);
+            env.storage().persistent().remove(&key);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "split_payees_updated"), subscription_id),
+            (subscription_id, env.ledger().timestamp()),
+        );
+
+        Ok(())
+    }
+
+    /// Get split billing payees configuration.
+    pub fn get_split_payees(env: Env, subscription_id: u32) -> Option<SplitPayees> {
+        subscription::get_split_payees(&env, subscription_id)
     }
 
     /// Creates a new subscription using a specific accepted token.
@@ -2808,3 +2934,6 @@ mod test {
 
 #[cfg(test)]
 mod test_subscription_transfer;
+
+#[cfg(test)]
+mod test_split_billing;

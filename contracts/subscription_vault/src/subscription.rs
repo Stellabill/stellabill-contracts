@@ -1527,6 +1527,16 @@ pub fn do_charge_one_off(
     crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)?;
 
+    if let Some(split_payees) = get_split_payees(env, subscription_id) {
+        for entry in split_payees.entries.iter() {
+            let (payee, _) = entry;
+            crate::blocklist::require_not_blocklisted(env, &payee)?;
+            if crate::merchant::get_merchant_paused(env, payee.clone()) {
+                return Err(Error::MerchantPaused);
+            }
+        }
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
@@ -1629,10 +1639,10 @@ pub fn do_charge_one_off(
     } else {
         (amount, 0i128)
     };
-    crate::merchant::credit_merchant_balance_for_token(
+    crate::charge_core::credit_charge_payees(
         env,
-        &sub.merchant,
-        &sub.token,
+        subscription_id,
+        &sub,
         merchant_amount,
         BillingChargeKind::OneOff,
     )?;
@@ -2745,4 +2755,23 @@ pub fn do_veto_transfer(
     );
 
     Ok(())
+}
+
+pub fn get_split_payees(env: &Env, subscription_id: u32) -> Option<crate::types::SplitPayees> {
+    let key = DataKey::SplitPayees(subscription_id);
+    let opt: Option<crate::types::SplitPayees> = env.storage().persistent().get(&key);
+    if opt.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+    }
+    opt
+}
+
+pub fn write_split_payees(env: &Env, subscription_id: u32, split: &crate::types::SplitPayees) {
+    let key = DataKey::SplitPayees(subscription_id);
+    env.storage().persistent().set(&key, split);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
 }

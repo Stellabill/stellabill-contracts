@@ -213,6 +213,10 @@ pub enum DataKey {
     CouponRedemptions(soroban_sdk::Symbol),
     /// Issued credentials keyed by subscription ID. Discriminant 58.
     Credential(u32),
+    /// Split payees details for split-billing. Discriminant 59.
+    SplitPayees(u32),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
+    BuyoutPremiumBps,
 }
 
 impl DataKey {
@@ -278,6 +282,8 @@ impl DataKey {
             DataKey::Coupon(_) => 56,
             DataKey::CouponRedemptions(_) => 57,
             DataKey::Credential(_) => 58,
+            DataKey::SplitPayees(_) => 59,
+            DataKey::BuyoutPremiumBps => 60,
         }
     }
 
@@ -423,6 +429,24 @@ pub struct CredentialBadge {
     pub tier: u32,
     pub issued_at: u64,
     pub revoked: bool,
+}
+
+/// Split billing payees and their basis points weights.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitPayees {
+    pub subscription_id: u32,
+    pub entries: Vec<(Address, u32)>,
+}
+
+/// Event emitted when split charge is distributed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitChargeEvent {
+    pub subscription_id: u32,
+    pub payees: Vec<(Address, i128)>,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Event emitted when a soulbound credential is issued for a new subscription.
@@ -750,8 +774,6 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
-    /// A bulk operation was called with more ids than `BATCH_MAX_SIZE` allows.
-    BatchTooLarge = 6018,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
