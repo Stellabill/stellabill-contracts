@@ -78,3 +78,7 @@ path = "benches/charge_cold_warm.rs"
 name = "withdraw_fixed_cost"
 path = "benches/withdraw_fixed_cost.rs"
 
+[[test]]
+name = "gov_tally"
+path = "benches/gov_tally.rs"
+
