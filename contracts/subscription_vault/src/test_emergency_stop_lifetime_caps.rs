@@ -381,5 +381,4 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
         client.try_charge_one_off(&sub_id, &merchant, &1i128, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::LifetimeCapReached))
     );
->>>>>>> upstream/main
 }

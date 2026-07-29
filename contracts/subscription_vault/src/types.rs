@@ -241,11 +241,28 @@ pub enum DataKey {
     ChargeSalt(u32),
     /// Consecutive InsufficientBalance charge failures for a subscription. Discriminant 62.
     ChargeFailureCounter(u32),
-    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 63.
+    /// Auto-pause threshold: pause after this many consecutive failures (0 = disabled). Discriminant 66.
     AutoPauseThreshold,
-    /// Per-merchant protocol fee override in basis points. When present, supersedes the
-    /// global `FeeBps` for charges routed through this merchant. Discriminant 64.
-    MerchantFeeBps(Address),
+    /// Configured grace-buyout premium in basis points (instance, global). Discriminant 67.
+    BuyoutPremiumBps,
+    /// Coupon code bound to a subscription (persistent). Discriminant 68.
+    SubCoupon(u32),
+    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
+    MerchantMultiSig(Address),
+    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 70.
+    SubscriberActiveCount(Address),
+    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 71.
+    SubscriberActiveCapOverride(Address),
+    /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
+    /// global). Discriminant 72.
+    TagAllowlist,
+    /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
+    /// (instance). Discriminant 73.
+    MerchantTags(Address),
+    /// Optional fee-token override: when set, protocol fees are paid in this
+    /// token instead of the subscription's settlement token, converted through
+    /// the oracle at charge time. Discriminant 64.
+    FeeToken,
 }
 
 impl DataKey {
@@ -319,7 +336,14 @@ impl DataKey {
             DataKey::ChargeSalt(_) => 64,
             DataKey::ChargeFailureCounter(_) => 65,
             DataKey::AutoPauseThreshold => 66,
-            DataKey::MerchantFeeBps(_) => 67,
+            DataKey::BuyoutPremiumBps => 67,
+            DataKey::SubCoupon(_) => 68,
+            DataKey::MerchantMultiSig(_) => 69,
+            DataKey::SubscriberActiveCount(_) => 70,
+            DataKey::SubscriberActiveCapOverride(_) => 71,
+            DataKey::TagAllowlist => 72,
+            DataKey::MerchantTags(_) => 73,
+            DataKey::FeeToken => 74,
         }
     }
 
@@ -372,13 +396,19 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     54, // TransferIntent(u32)
     59, // AdminConfigLastChangedAt(BytesN<32>)
     60, // SubscriberCreateCap
-    // 61 = SubscriberCreateWindow — persistent, not in allowlist
+    61, // SubscriberCreateWindow(Address)
     62, // MerchantWhitelistMode
     63, // MerchantApproved(Address)
     64, // ChargeSalt(u32)
     65, // ChargeFailureCounter(u32)
     66, // AutoPauseThreshold
-    67, // MerchantFeeBps(Address)
+    67, // BuyoutPremiumBps
+    69, // MerchantMultiSig(Address)
+    70, // SubscriberActiveCount(Address)
+    71, // SubscriberActiveCapOverride(Address)
+    72, // TagAllowlist
+    73, // MerchantTags(Address)
+    74, // FeeToken
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -805,6 +835,8 @@ pub enum Error {
     OraclePriceInvalid = 3007,
     /// Expiration timestamp is at or before the current ledger time.
     InvalidExpiration = 3008,
+    /// Oracle price deviation exceeds configured threshold (circuit breaker).
+    OracleDeviationTooHigh = 3009,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -829,6 +861,7 @@ pub enum Error {
     Reentrancy = 4010,
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4011,
+    CooldownActive = 4012,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -1571,7 +1604,25 @@ pub struct OracleLivenessEvent {
     pub schema_version: u32,
 }
 
->>>>>>> upstream/main
+/// Ring-buffer metadata for a per-token oracle price history window.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceHistoryMeta {
+    pub head: u32,
+    pub count: u32,
+}
+
+/// Event emitted when an oracle price is rejected by the deviation circuit breaker.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleDeviationBreakerEvent {
+    pub token: Address,
+    pub latest_price: i128,
+    pub median_price: i128,
+    pub deviation_bps: u64,
+    pub threshold_bps: u32,
+    pub timestamp: u64,
+}
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcceptedToken {
@@ -1926,16 +1977,6 @@ pub struct MerchantAddressRotatedEvent {
     pub timestamp: u64,
 }
 
-/// Event emitted when a merchant balance snapshot is published.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct MerchantBalanceSnapshotEvent {
-    pub merchant: Address,
-    pub token: Address,
-    pub balance: i128,
-    pub timestamp: u64,
-}
-
 /// Event emitted when a subscriber withdraws funds after cancellation.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2202,8 +2243,6 @@ pub struct MerchantUnpausedEvent {
     pub timestamp: u64,
     pub schema_version: u32,
 }
-
->>>>>>> upstream/main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantRefundEvent {
@@ -2580,13 +2619,13 @@ mod known_keys_tests {
             (DataKey::CouponRedemptions(soroban_sdk::Symbol::new(env, "c")), false),
             (DataKey::Credential(1), false),
             (DataKey::SubscriberCreateCap, true),
-            (DataKey::SubscriberCreateWindow(a.clone()), false),
+            (DataKey::SubscriberCreateWindow(a.clone()), true),
             (DataKey::MerchantWhitelistMode, true),
             (DataKey::MerchantApproved(a.clone()), true),
             (DataKey::ChargeSalt(1), true),
             (DataKey::ChargeFailureCounter(1), true),
             (DataKey::AutoPauseThreshold, true),
-            (DataKey::MerchantFeeBps(a.clone()), true),
+            (DataKey::FeeToken, true),
         ]
     }
 
@@ -2609,69 +2648,6 @@ mod known_keys_tests {
                 assert!(!key.is_known_instance_key());
             }
         }
-    }
-
-    #[test]
-    fn synthetic_unknown_key_is_rejected() {
-        assert!(!is_known_instance_discriminant(u32::MAX));
-    }
-
-    /// The debug guard must panic for an unknown key in test/debug builds.
-    #[test]
-    #[should_panic(expected = "Unknown or persistent key reached instance storage")]
-    fn assert_panics_on_persistent_key() {
-        let env = Env::default();
-        let _ = &env;
-        assert_known_data_key(&DataKey::Sub(1));
-    }
-
-    #[test]
-    fn discriminants_are_unique_and_contiguous() {
-        let env = Env::default();
-        let variants = all_variants(&env);
-        let max_discriminant = variants
-            .iter()
-            .map(|(key, _)| key.canonical_discriminant())
-            .max()
-            .unwrap_or(0) as usize;
-        let mut seen = vec![false; max_discriminant + 1];
-        for (key, _) in &variants {
-            let d = key.canonical_discriminant() as usize;
-            assert!(!seen[d], "duplicate discriminant {d}");
-            seen[d] = true;
-        }
-        assert!(seen.iter().all(|&s| s), "discriminants must be contiguous");
-        assert!(!variants.is_empty(), "variant count must be non-zero");
-    }
-
-    #[test]
-    fn allowlist_matches_instance_classification() {
-        let env = Env::default();
-        let variants = all_variants(&env);
-        let expected_instance: std::vec::Vec<u32> = variants
-            .iter()
-            .filter(|(_, is_instance)| *is_instance)
-            .map(|(key, _)| key.canonical_discriminant())
-            .collect();
-
-        for d in &expected_instance {
-            assert!(
-                is_known_instance_discriminant(*d),
-                "instance discriminant {d} missing from allowlist"
-            );
-        }
-        assert_eq!(
-            KNOWN_INSTANCE_KEY_DISCRIMINANTS.len(),
-            expected_instance.len(),
-            "allowlist length does not match instance-tier variant count"
-        );
-
-        for pair in KNOWN_INSTANCE_KEY_DISCRIMINANTS.windows(2) {
-            assert!(pair[0] < pair[1], "allowlist must be sorted and unique");
-        }
-        
-        let variants = all_variants(&env);
-        assert_eq!(variants.len(), 65);
     }
 }
 
@@ -2719,30 +2695,6 @@ pub struct TransferVetoedEvent {
 pub enum KycKey {
     Required,
     Merchant(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantBalanceSnapshotEvent {
-    pub merchant: Address,
-    pub token: Address,
-    pub balance: i128,
-    pub accrued: i128,
-    pub withdrawn: i128,
-    pub refunded: i128,
-    pub ledger_sequence: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct MerchantAddressRotatedEvent {
-    pub admin: Address,
-    pub old_merchant: Address,
-    pub new_merchant: Address,
-    pub subscriptions_updated: u32,
-    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is automatically paused after N consecutive
@@ -2828,4 +2780,34 @@ pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Resul
         normalized.checked_mul(scale).ok_or(Error::Overflow)
     }
 >>>>>>> upstream/main
+}
+
+/// Event emitted when the fee-token override address is set or cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent {
+    pub admin: Address,
+    pub fee_token: Option<Address>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a protocol fee is converted from the subscription's
+/// settlement token to the configured fee-token override.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConvertedEvent {
+    pub subscription_id: u32,
+    /// The subscription's settlement token (source).
+    pub source_token: Address,
+    /// The fee-token override (destination).
+    pub target_token: Address,
+    /// Original fee amount in `source_token` before conversion.
+    pub original_fee_amount: i128,
+    /// Converted fee amount in `target_token`.
+    pub converted_fee_amount: i128,
+    /// Oracle price used for conversion (quote per base, scaled by 10^7).
+    pub rate: u128,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }

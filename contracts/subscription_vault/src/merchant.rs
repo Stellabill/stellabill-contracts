@@ -22,10 +22,11 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
-    MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
+    MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantMultiSigConfig, MerchantPausedEvent, MerchantRevokedEvent,
+    MerchantUnpausedEvent, MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule,
+    ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
     MAX_FEE_BIPS, is_valid_allowed_operations, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -744,6 +745,7 @@ pub fn withdraw_merchant_funds_for_token(
         let mut iter = 0u32;
         while iter < required_signers {
             if let Some(signer) = config.signers.get(iter) {
+                let signer: Address = signer;
                 signer.require_auth();
             }
             iter += 1;
@@ -827,7 +829,12 @@ pub fn withdraw_merchant_funds_for_token(
             merchant: merchant.clone(),
             token: token_addr.clone(),
             balance: new_balance,
+            accrued: 0,
+            withdrawn: 0,
+            refunded: 0,
+            ledger_sequence: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
