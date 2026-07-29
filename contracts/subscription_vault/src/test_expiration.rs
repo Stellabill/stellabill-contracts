@@ -64,7 +64,7 @@ fn test_expiration_timing_and_charging() {
         &Some(expires_at),
     &None::<u32>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &(amount * 5, &None::<soroban_sdk::BytesN<32>>));
+    client.deposit_funds(&sub_id, &subscriber, &(amount * 5), &None::<soroban_sdk::BytesN<32>>);
 
     // Before expiry: charge succeeds
     env.ledger().with_mut(|l| l.timestamp = T0 + INTERVAL);

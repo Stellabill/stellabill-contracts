@@ -278,7 +278,7 @@ fn test_grace_buyout_then_normal_charge() {
     set_buyout_premium(&env, &client, 200); // 2%
 
     let deposit = AMOUNT + AMOUNT * 2 / 100;
-    token_admin.mint(&subscriber, &deposit * 2);
+    token_admin.mint(&subscriber, &(deposit * 2));
 
     force_into_grace_period(&env, &client, id);
 

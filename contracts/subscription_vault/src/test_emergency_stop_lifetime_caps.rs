@@ -119,6 +119,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(client.get_admin(), admin);
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(!client.get_emergency_stop_status());
 
@@ -141,10 +142,12 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
         Symbol::new(&env, "emergency_stop_enabled")
     );
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.enable_emergency_stop(&admin);
     assert!(env.events().all().is_empty());
     assert!(client.get_emergency_stop_status());
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     let disabled_events = env.events().all();
     assert_eq!(disabled_events.len(), 1);
@@ -153,6 +156,7 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
         Symbol::new(&env, "emergency_stop_disabled")
     );
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(env.events().all().is_empty());
     assert!(!client.get_emergency_stop_status());
@@ -205,6 +209,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     client.enable_emergency_stop(&admin);
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
 
     let ids = Vec::from_array(&env, [sub_id]);
@@ -353,6 +358,17 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     // Capture events immediately after the mutating call.
     // In this test environment, subsequent view calls may reset the event buffer.
     let events = env.events().all();
+
+    // env.events().all() returns only events from the LAST contract call.
+    // Capture events immediately after charge_one_off, before any other calls.
+    let all_events = env.events().all();
+    let mut cap_events = 0u32;
+    for event in all_events.iter() {
+        if topic0(&env, &event) == Symbol::new(&env, "lifetime_cap_reached") {
+            cap_events += 1;
+        }
+    }
+    assert_eq!(cap_events, 1);
 
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);

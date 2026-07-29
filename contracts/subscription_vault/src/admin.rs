@@ -5,14 +5,16 @@
 #![allow(dead_code)]
 
 use crate::types::{
-    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
     ChargeExecutionResult,
 };
-use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{token, Address, Bytes, Env, String, Symbol, Vec};
 
 pub fn get_schema_version(env: &Env) -> u32 {
     if let Some(v) = env
@@ -54,9 +56,7 @@ where
     let version = get_schema_version(env);
     if version >= 3 {
         env.storage().persistent().set(key, value);
-        env.storage()
-            .persistent()
-            .extend_ttl(key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         env.storage().instance().remove(key);
     } else {
         env.storage().instance().set(key, value);
@@ -78,6 +78,71 @@ pub fn has_config(env: &Env, key: &DataKey) -> bool {
 pub fn remove_config(env: &Env, key: &DataKey) {
     env.storage().persistent().remove(key);
     env.storage().instance().remove(key);
+}
+
+// ── Admin-config cooldown ────────────────────────────────────────────────────
+
+/// Default per-key cooldown in seconds between protocol-wide admin config
+/// mutations.  Six hours (21 600 s) gives guardians time to detect and respond
+/// to a compromised admin key while keeping legitimate operations fast.
+pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
+
+/// Hash a human-readable `key_label` (e.g. `"MinTopup"`) into a
+/// collision-free `BytesN<32>` used as the persistent-storage key for the
+/// per-config-key cooldown timestamp.
+fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
+    let mut label_bytes = soroban_sdk::Bytes::new(env);
+    for &b in key_label.as_bytes() {
+        label_bytes.push_back(b);
+    }
+    env.crypto().sha256(&label_bytes).into()
+}
+
+/// Enforce a per-key cooldown on protocol-wide admin config mutations.
+///
+/// 1. Hashes `key_label` to derive the storage key.
+/// 2. Reads the previous mutation timestamp (0 if this is the first mutation).
+/// 3. If the current ledger timestamp is within [`CONFIG_COOLDOWN_SECS`] of
+///    `prev_ts`, returns [`Error::CooldownActive`].
+/// 4. Otherwise, records the current timestamp and emits
+///    [`AdminConfigChangedEvent`].
+///
+/// Call this **before** each config-mutating write.  Because Soroban
+/// transactions are atomic, if the subsequent mutation fails the entire
+/// transaction (including the timestamp write and event) reverts.
+///
+/// Governance proposals that execute through `do_execute_proposal` call
+/// `write_config` directly and intentionally **bypass** this guard, allowing
+/// guardians to override the cooldown when a supermajority agrees.
+pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error> {
+    let hash = hash_key_label(env, key_label);
+    let storage_key = DataKey::AdminConfigLastChangedAt(hash);
+
+    let prev_ts: u64 = env
+        .storage()
+        .persistent()
+        .get::<_, u64>(&storage_key)
+        .unwrap_or(0);
+
+    let now = env.ledger().timestamp();
+    if prev_ts > 0 && now.saturating_sub(prev_ts) < CONFIG_COOLDOWN_SECS {
+        return Err(Error::CooldownActive);
+    }
+
+    env.storage().persistent().set(&storage_key, &now);
+    crate::subscription::maybe_extend_ttl(env, &storage_key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_config_changed"),),
+        AdminConfigChangedEvent {
+            key_label: String::from_str(env, key_label),
+            prev_ts,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(prev_ts)
 }
 
 fn accepted_tokens_key() -> DataKey {
@@ -113,7 +178,8 @@ pub fn do_init(
     env.storage()
         .persistent()
         .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION);
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         &DataKey::SchemaVersion,
         SUB_TTL_THRESHOLD,
         SUB_TTL_EXTEND_TO,
@@ -146,7 +212,7 @@ pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     admin.require_auth();
     let stored_admin = require_admin(env)?;
     if admin != &stored_admin {
-        return Err(Error::Unauthorized);
+        return Err(Error::Forbidden);
     }
     Ok(())
 }
@@ -188,6 +254,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     if min_topup <= 0 {
         return Err(Error::InvalidAmount);
     }
+    enforce_config_cooldown(env, "MinTopup")?;
     write_config(env, &DataKey::MinTopup, &min_topup);
     env.events()
         .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
@@ -200,6 +267,7 @@ pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
 
 pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "GracePeriod")?;
     env.storage()
         .instance()
         .set(&DataKey::GracePeriod, &grace_period);
@@ -212,6 +280,20 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
         .instance()
         .get(&DataKey::GracePeriod)
         .unwrap_or(0))
+}
+
+pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    write_config(env, &DataKey::SubscriberCreateCap, &cap);
+    env.events().publish(
+        (Symbol::new(env, "subscriber_create_cap_updated"),),
+        cap,
+    );
+    Ok(())
+}
+
+pub fn get_subscriber_create_cap(env: &Env) -> u32 {
+    read_config(env, &DataKey::SubscriberCreateCap).unwrap_or(50u32)
 }
 
 pub fn get_token(env: &Env) -> Result<Address, Error> {
@@ -241,6 +323,7 @@ pub fn add_accepted_token(
 
     let storage = env.storage().instance();
     if !storage.has(&accepted_token_decimals_key(&token)) {
+        enforce_config_cooldown(env, "AcceptedTokens")?;
         let mut tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
         tokens.push_back(token.clone());
         storage.set(&accepted_tokens_key(), &tokens);
@@ -256,6 +339,8 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     if token == default_token {
         return Err(Error::InvalidInput);
     }
+
+    enforce_config_cooldown(env, "AcceptedTokens")?;
 
     let storage = env.storage().instance();
     storage.remove(&accepted_token_decimals_key(&token));
@@ -283,6 +368,26 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     out
 }
 
+/// Cached admin configuration values to avoid repeated instance-storage
+/// lookups inside batch loops.
+pub(crate) struct CachedAdminConfig {
+    pub fee_bps: u32,
+    pub treasury: Option<Address>,
+    pub grace_duration: u64,
+    pub auto_pause_threshold: u32,
+}
+
+/// Read all admin charge-config values from storage at once.
+/// Returns `Err` when `get_grace_period` fails (contract not initialized).
+pub(crate) fn read_cached_admin_config(env: &Env) -> Result<CachedAdminConfig, Error> {
+    Ok(CachedAdminConfig {
+        fee_bps: get_protocol_fee_bps(env),
+        treasury: get_treasury(env),
+        grace_duration: get_grace_period(env)?,
+        auto_pause_threshold: get_auto_pause_threshold(env),
+    })
+}
+
 /// Execute the core batch-charge loop without any auth or nonce checks.
 ///
 /// Called by both `do_batch_charge` (admin path) and
@@ -293,9 +398,15 @@ pub(crate) fn execute_batch_charge(
     subscription_ids: &Vec<u32>,
 ) -> Vec<BatchChargeResult> {
     let now = env.ledger().timestamp();
+    // Read all admin config values once so they are cached across the batch loop.
+    let cached_admin = read_cached_admin_config(env);
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
-        let r = charge_one(env, id, now, None);
+        let admin_ref = match &cached_admin {
+            Ok(cfg) => Some(cfg),
+            Err(_) => None,
+        };
+        let r = charge_one(env, id, now, None, admin_ref);
         let res = match r {
             Ok(ChargeExecutionResult::Charged) => BatchChargeResult {
                 success: true,
@@ -310,6 +421,11 @@ pub(crate) fn execute_batch_charge(
                 error_code: Error::LifetimeCapReached.to_code(),
             },
             Ok(ChargeExecutionResult::ScheduledCancellation) => BatchChargeResult {
+                success: true,
+                error_code: 0,
+            },
+            // auto_renew=false and interval elapsed: silently skip without error.
+            Ok(ChargeExecutionResult::Skipped) => BatchChargeResult {
                 success: true,
                 error_code: 0,
             },
@@ -345,7 +461,7 @@ pub fn do_charge_subscription(
     let _admin = require_stored_admin_auth(env)?;
 
     let now = env.ledger().timestamp();
-    charge_one(env, subscription_id, now, None)
+    charge_one(env, subscription_id, now, None, None)
 }
 
 /// Performs a single usage-based charge. Admin only.
@@ -392,6 +508,8 @@ pub fn do_rotate_admin(
     if new_admin == env.current_contract_address() {
         return Err(Error::InvalidNewAdmin);
     }
+
+    enforce_config_cooldown(env, "Admin")?;
 
     // Atomic swap: write new admin before emitting the event so any indexer
     // that reads state on the event sees the already-updated value.
@@ -472,33 +590,97 @@ pub fn do_recover_stranded_funds(
 /// Set protocol fee basis points and treasury address. Admin only.
 ///
 /// fee_bps must be in 0..=10_000. Setting fee_bps to 0 disables fee collection.
-pub fn set_protocol_fee(
+const TREASURY_CHANGE_DELAY_SECS: u64 = 48 * 24 * 60 * 60;
+
+pub fn queue_treasury_change(
     env: &Env,
     admin: Address,
     treasury: Address,
     fee_bps: u32,
-) -> Result<(), crate::types::Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(crate::types::Error::Unauthorized);
-    }
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
     if fee_bps > 10_000 {
-        return Err(crate::types::Error::InvalidInput);
+        return Err(Error::InvalidInput);
     }
+    if env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+        return Err(Error::InvalidInput);
+    }
+
+    let effective_at = env.ledger().timestamp().saturating_add(TREASURY_CHANGE_DELAY_SECS);
+    let pending = PendingTreasuryChange {
+        new_treasury: treasury.clone(),
+        new_fee_bps: fee_bps,
+        effective_at,
+    };
+    env.storage().persistent().set(&DataKey::PendingTreasuryChange, &pending);
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::PendingTreasuryChange, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+
+    enforce_config_cooldown(env, "ProtocolFee")?;
     write_config(env, &DataKey::FeeBps, &fee_bps);
     write_config(env, &DataKey::Treasury, &treasury);
     env.events().publish(
-        (Symbol::new(env, "protocol_fee_configured"),),
-        crate::types::ProtocolFeeConfiguredEvent {
+        (Symbol::new(env, "treasury_change_queued"),),
+        TreasuryChangeQueuedEvent {
             admin: admin.clone(),
             treasury,
             fee_bps,
+            effective_at,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
+}
+
+pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    let pending = env
+        .storage()
+        .persistent()
+        .get::<_, PendingTreasuryChange>(&DataKey::PendingTreasuryChange)
+        .ok_or(Error::NotFound)?;
+
+    let now = env.ledger().timestamp();
+    if now < pending.effective_at {
+        return Err(Error::TimelockNotElapsed);
+    }
+
+    write_config(env, &DataKey::FeeBps, &pending.new_fee_bps);
+    write_config(env, &DataKey::Treasury, &pending.new_treasury);
+    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+
+    env.events().publish(
+        (Symbol::new(env, "treasury_change_executed"),),
+        TreasuryChangeExecutedEvent {
+            admin: admin.clone(),
+            treasury: pending.new_treasury.clone(),
+            fee_bps: pending.new_fee_bps,
+            effective_at: pending.effective_at,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+pub fn cancel_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    if !env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+        return Err(Error::NotFound);
+    }
+    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+    Ok(())
+}
+
+pub fn set_protocol_fee(
+    env: &Env,
+    admin: Address,
+    treasury: Address,
+    fee_bps: u32,
+) -> Result<(), Error> {
+    queue_treasury_change(env, admin, treasury, fee_bps)
 }
 
 /// Return the configured protocol fee in basis points (0 = disabled).
@@ -511,9 +693,66 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
     read_config(env, &DataKey::Treasury)
 }
 
+/// Set the fee-token override address. Admin only.
+///
+/// When set, protocol fees are charged in `fee_token` instead of the
+/// subscription's settlement token, converted through the oracle at charge
+/// time. Pass `None` to clear the override and revert to the default behaviour
+/// (fees paid in the subscription's settlement token).
+pub fn set_fee_token(
+    env: &Env,
+    admin: Address,
+    fee_token: Option<Address>,
+) -> Result<(), crate::types::Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(crate::types::Error::Unauthorized);
+    }
+    enforce_config_cooldown(env, "FeeToken")?;
+    if let Some(ref token) = fee_token {
+        write_config(env, &DataKey::FeeToken, token);
+    } else {
+        remove_config(env, &DataKey::FeeToken);
+    }
+    env.events().publish(
+        (Symbol::new(env, "fee_token_configured"),),
+        FeeTokenConfiguredEvent {
+            admin,
+            fee_token,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+/// Return the configured fee-token override address, or `None` if not set.
+pub fn get_fee_token(env: &Env) -> Option<Address> {
+    read_config(env, &DataKey::FeeToken)
+}
+
 /// Return the configured buyout premium in basis points, defaulting to 0.
 pub fn get_buyout_premium_bps(env: &Env) -> u32 {
     read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
+}
+
+/// Set the auto-pause threshold (number of consecutive InsufficientBalance failures
+/// before a subscription is automatically paused). `0` disables auto-pause.
+pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::AutoPauseThreshold, &threshold);
+    Ok(())
+}
+
+/// Return the configured auto-pause threshold. `0` means disabled.
+pub fn get_auto_pause_threshold(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::AutoPauseThreshold)
+        .unwrap_or(0u32)
 }
 
 // ── Schema migration ──────────────────────────────────────────────────────────
@@ -548,7 +787,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Token) {
         let val: Address = instance.get(&DataKey::Token).unwrap();
         persistent.set(&DataKey::Token, &val);
-        persistent.extend_ttl(&DataKey::Token, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Token, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Token);
     }
 
@@ -556,7 +795,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Admin) {
         let val: Address = instance.get(&DataKey::Admin).unwrap();
         persistent.set(&DataKey::Admin, &val);
-        persistent.extend_ttl(&DataKey::Admin, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Admin, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Admin);
     }
 
@@ -564,7 +803,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::MinTopup) {
         let val: i128 = instance.get(&DataKey::MinTopup).unwrap();
         persistent.set(&DataKey::MinTopup, &val);
-        persistent.extend_ttl(&DataKey::MinTopup, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::MinTopup, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::MinTopup);
     }
 
@@ -572,7 +811,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::NextId) {
         let val: u32 = instance.get(&DataKey::NextId).unwrap_or(0);
         persistent.set(&DataKey::NextId, &val);
-        persistent.extend_ttl(&DataKey::NextId, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::NextId, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::NextId);
     }
 
@@ -580,7 +819,8 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::EmergencyStop) {
         let val: bool = instance.get(&DataKey::EmergencyStop).unwrap_or(false);
         persistent.set(&DataKey::EmergencyStop, &val);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::EmergencyStop,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -592,7 +832,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Treasury) {
         let val: Address = instance.get(&DataKey::Treasury).unwrap();
         persistent.set(&DataKey::Treasury, &val);
-        persistent.extend_ttl(&DataKey::Treasury, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Treasury, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Treasury);
     }
 
@@ -600,7 +840,7 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::FeeBps) {
         let val: u32 = instance.get(&DataKey::FeeBps).unwrap_or(0);
         persistent.set(&DataKey::FeeBps, &val);
-        persistent.extend_ttl(&DataKey::FeeBps, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::FeeBps, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::FeeBps);
     }
 
@@ -608,14 +848,15 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Operator) {
         let val: Address = instance.get(&DataKey::Operator).unwrap();
         persistent.set(&DataKey::Operator, &val);
-        persistent.extend_ttl(&DataKey::Operator, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(env, &DataKey::Operator, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::Operator);
     }
 
     // 9. SchemaVersion
     if instance.has(&DataKey::SchemaVersion) {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -623,7 +864,8 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
         instance.remove(&DataKey::SchemaVersion);
     } else {
         persistent.set(&DataKey::SchemaVersion, &3u32);
-        persistent.extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -643,7 +885,6 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
 
     do_migrate_config_to_persistent_internal(env)?;
 
-    // Emit event
     env.events().publish(
         (Symbol::new(env, "schema_migrated"),),
         crate::types::SchemaMigratedEvent {
@@ -664,14 +905,14 @@ pub fn do_migrate(
     admin: Address,
     binary_version: u32,
 ) -> Result<(), crate::types::Error> {
-    // Auth first — no state reads before the caller is verified.
     require_admin_auth(env, &admin)?;
 
     let stored_version = get_schema_version(env);
 
-    // Downgrade guard: reject if on-chain version is newer than the binary.
+    // Version mismatch guard: reject if on-chain version is neither a valid
+    // upgradable version nor the current binary version.
     if stored_version > binary_version {
-        return Err(crate::types::Error::SchemaMigrationDowngrade);
+        return Err(crate::types::Error::SchemaVersionMismatch);
     }
 
     // Idempotent no-op: already at the target version.
@@ -679,16 +920,12 @@ pub fn do_migrate(
         return Ok(());
     }
 
-    // ── Forward upgrade ladder ────────────────────────────────────────────────
     let mut current = stored_version;
     while current < binary_version {
         match (current, binary_version) {
-            // v0/v1 → v2: SchemaVersion key was not written by early init
-            // calls. No data-shape changes needed; writing the key is enough.
             (v, _) if v < 2 => {
                 current = 2;
             }
-            // v2 → v3: config keys migration
             (2, _) => {
                 do_migrate_config_to_persistent_internal(env)?;
                 current = 3;
@@ -709,12 +946,12 @@ pub fn do_migrate(
         }
     }
 
-    // Commit the new version atomically after all upgrade steps succeed.
     if binary_version >= 3 {
         env.storage()
             .persistent()
             .set(&crate::types::DataKey::SchemaVersion, &binary_version);
-        env.storage().persistent().extend_ttl(
+        crate::subscription::maybe_extend_ttl(
+            env,
             &crate::types::DataKey::SchemaVersion,
             SUB_TTL_THRESHOLD,
             SUB_TTL_EXTEND_TO,
@@ -728,7 +965,6 @@ pub fn do_migrate(
             .set(&crate::types::DataKey::SchemaVersion, &binary_version);
     }
 
-    // Emit audit event.
     env.events().publish(
         (soroban_sdk::Symbol::new(env, "schema_migrated"),),
         crate::types::SchemaMigratedEvent {
@@ -741,4 +977,102 @@ pub fn do_migrate(
     );
 
     Ok(())
+}
+
+// ── Two-step admin proposal ──────────────────────────────────────────────────
+
+const PROPOSAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn proposal_key(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_proposal")
+}
+
+pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &current_admin)?;
+
+    if new_admin == env.current_contract_address() {
+        return Err(Error::InvalidNewAdmin);
+    }
+
+    let storage = env.storage().instance();
+    if storage.has(&proposal_key(env)) {
+        return Err(Error::ProposalAlreadyExists);
+    }
+
+    let now = env.ledger().timestamp();
+    let proposal = AdminProposal {
+        new_admin: new_admin.clone(),
+        proposed_at: now,
+        expires_at: now.saturating_add(PROPOSAL_WINDOW_SECS),
+    };
+    storage.set(&proposal_key(env), &proposal);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_created"),),
+        AdminProposalCreatedEvent {
+            old_admin: current_admin,
+            new_admin,
+            expires_at: proposal.expires_at,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
+    claimant.require_auth();
+
+    let storage = env.storage().instance();
+    let proposal: AdminProposal = storage
+        .get(&proposal_key(env))
+        .ok_or(Error::ProposalNotFound)?;
+
+    let now = env.ledger().timestamp();
+    if now > proposal.expires_at {
+        storage.remove(&proposal_key(env));
+        return Err(Error::ProposalExpired);
+    }
+
+    if claimant != proposal.new_admin {
+        return Err(Error::InvalidClaimant);
+    }
+
+    let old_admin: Address = require_admin(env)?;
+
+    storage.remove(&proposal_key(env));
+    storage.set(&Symbol::new(env, "admin"), &claimant);
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_claimed"),),
+        AdminProposalClaimedEvent {
+            old_admin,
+            new_admin: claimant,
+            timestamp: now,
+        },
+    );
+    Ok(())
+}
+
+pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+
+    let storage = env.storage().instance();
+    if !storage.has(&proposal_key(env)) {
+        return Err(Error::NoActiveProposal);
+    }
+
+    storage.remove(&proposal_key(env));
+
+    env.events().publish(
+        (Symbol::new(env, "admin_proposal_cancelled"),),
+        AdminProposalCancelledEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn get_admin_proposal(env: &Env) -> Option<AdminProposal> {
+    env.storage().instance().get(&proposal_key(env))
 }

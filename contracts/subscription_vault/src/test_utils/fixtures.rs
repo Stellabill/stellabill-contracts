@@ -1,5 +1,5 @@
 use crate::{types::DataKey, SubscriptionStatus, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
 const DEFAULT_INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -117,7 +117,7 @@ pub fn create_active_subscription(
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
 
-    env.ledger().set_timestamp(start_time);
+    env.ledger().with_mut(|l| l.timestamp = start_time);
 
     let id = client.create_subscription(
         &subscriber,
