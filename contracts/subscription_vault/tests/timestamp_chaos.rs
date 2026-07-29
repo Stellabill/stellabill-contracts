@@ -316,6 +316,7 @@ fn test_backward_jump_across_grace_boundary_no_panic() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     ce.client.deposit_funds(&id, &subscriber, &AMOUNT, &None);
 

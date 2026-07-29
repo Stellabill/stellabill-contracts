@@ -47,6 +47,7 @@ fn create_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
     (id, subscriber, merchant)
 }
@@ -218,6 +219,7 @@ fn test_deposit_credit_limit_aggregate_two_subs() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<Address>,
     );
 
     // Set credit limit: 15_000_000

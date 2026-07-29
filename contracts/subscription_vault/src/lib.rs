@@ -48,9 +48,40 @@ pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+<<<<<<< HEAD
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test;
+#[cfg(test)]
+mod test_auth_fuzz;
+#[cfg(test)]
+mod test_expiration;
+#[cfg(test)]
+mod test_governance;
+#[cfg(test)]
+mod test_insufficient_balance;
+#[cfg(test)]
+mod test_multi_actor;
+#[cfg(test)]
+mod test_recovery;
+#[cfg(test)]
+mod test_refactor_check;
+#[cfg(test)]
+mod test_safe_math_regression;
+#[cfg(test)]
+mod test_security;
+#[cfg(test)]
+mod test_usage_limits;
+#[cfg(test)]
+mod test_deterministic_charging;
+#[cfg(test)]
+mod test_emergency_stop_lifetime_caps;
+=======
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
+>>>>>>> upstream/main
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
@@ -573,10 +604,20 @@ pub use types::{
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
     CapInfo, Coupon, OracleKind,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+<<<<<<< HEAD
+    EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
+    MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
+    MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
+    OracleDeviationBreakerEvent, OraclePrice, OraclePriceHistoryMeta, PartialRefundEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    ProtocolFeeConfiguredEvent, RecoveryEvent,
+    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+=======
     EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    ReferralAttributedEvent,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
@@ -587,6 +628,7 @@ pub use types::{
     SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+>>>>>>> upstream/main
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
@@ -1265,6 +1307,7 @@ impl SubscriptionVault {
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -1274,6 +1317,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription(
@@ -1285,6 +1329,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         env.events().publish(
@@ -1317,6 +1362,7 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        inviter: Option<Address>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
         let sub_id = subscription::do_create_subscription_with_token(
@@ -1329,6 +1375,7 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            inviter.clone(),
         )?;
         env.events().publish(
             (Symbol::new(&env, "created"), sub_id),
@@ -2455,9 +2502,50 @@ impl SubscriptionVault {
         oracle::get_oracle_config(&env)
     }
 
+<<<<<<< HEAD
+// ── Oracle Deviation Circuit Breaker ──────────────────────────────────────────
+
+    /// Configure the oracle price deviation circuit-breaker threshold.
+    ///
+    /// The threshold is expressed in basis points (bps, where 1 % = 100 bps).
+    /// When the latest oracle price deviates from the median of the last N
+    /// samples by more than this amount, the charge is rejected with
+    /// [`Error::OracleDeviationTooHigh`] and an [`OracleDeviationBreakerEvent`]
+    /// is emitted.
+    ///
+    /// A value of `0` rejects **any** price change (strict mode).
+    /// When never called, the deviation check is disabled entirely.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the admin.
+    pub fn set_oracle_deviation_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_deviation_bps(&env, bps);
+        Ok(())
+    }
+
+    /// Return the current deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: Env) -> Option<u32> {
+        oracle::get_oracle_deviation_bps(&env)
+    }
+
+    /// Return the recorded oracle price history for a token (insertion order).
+    pub fn get_oracle_price_history(env: Env, token: Address) -> Vec<i128> {
+        oracle::get_oracle_price_history(&env, &token)
+=======
     /// Emit oracle liveness event.
     pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
         oracle::emit_oracle_liveness(&env)
+>>>>>>> upstream/main
     }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
@@ -2592,6 +2680,54 @@ impl SubscriptionVault {
     /// Get protocol fee bps.
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
+    }
+
+    /// Set a per-merchant protocol fee override in basis points. Admin only.
+    ///
+    /// When set, this value supersedes the global `FeeBps` for all charges
+    /// routed through `merchant`. Use this to grant a merchant a discounted
+    /// protocol fee.
+    ///
+    /// Constraints:
+    /// - `fee_bps` must be ≤ `MAX_FEE_BIPS` (10 000).
+    /// - `fee_bps` must be ≤ the current global fee bps (discount, not surcharge).
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the stored admin.
+    /// - [`Error::InvalidFeeBips`] — `fee_bps` exceeds `MAX_FEE_BIPS` or the
+    ///   current global fee.
+    ///
+    /// # Events
+    /// Emits [`MerchantFeeOverrideSetEvent`] with `fee_bps = Some(value)`.
+    pub fn set_merchant_fee_override(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        fee_bps: u32,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_fee_override(&env, admin, merchant, fee_bps)
+    }
+
+    /// Clear the per-merchant fee override, reverting to the global fee. Admin only.
+    ///
+    /// Idempotent: clearing a non-existent override is a no-op (no error).
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the stored admin.
+    ///
+    /// # Events
+    /// Emits [`MerchantFeeOverrideSetEvent`] with `fee_bps = None`.
+    pub fn clear_merchant_fee_override(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+    ) -> Result<(), Error> {
+        merchant::clear_merchant_fee_override(&env, admin, merchant)
+    }
+
+    /// Get the per-merchant fee override in basis points, or `None` if not set.
+    pub fn get_merchant_fee_override(env: Env, merchant: Address) -> Option<u32> {
+        merchant::get_merchant_fee_override_bps(&env, &merchant)
     }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
@@ -3001,3 +3137,6 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_merchant_tags;
+
+#[cfg(test)]
+mod test_referral_self;
