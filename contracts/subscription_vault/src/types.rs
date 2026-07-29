@@ -93,6 +93,14 @@ pub struct MerchantKyc {
 /// canonical, frozen identifiers for each key and match
 /// [`DataKey::canonical_discriminant`]. **Never reorder or remove a variant** —
 /// doing so shifts all subsequent discriminants and silently corrupts live
+/// Discriminant for [`DataKey::Kyc`] — selects which KYC record to look up.
+#[contracttype(export = false)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    /// Per-merchant KYC status record.
+    MerchantStatus(Address),
+}
+
 /// storage. Only append new variants at the end.
 ///
 /// The **Storage tier** column is authoritative: every instance-tier key below
@@ -228,13 +236,23 @@ pub enum DataKey {
     /// Discriminant 59.
     AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
     SubscriberCreateCap,
+    /// Discriminant 61.
     SubscriberCreateWindow(Address),
+    /// Merchant allowlist mode flag (instance). Discriminant 62.
+    MerchantWhitelistMode,
+    /// Approved merchant address (instance). Discriminant 63.
+    MerchantApproved(Address),
+    /// Charge salt for replay protection. Discriminant 64.
     ChargeSalt(u32),
-    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    /// Consecutive charge failure counter per subscription. Discriminant 65.
+    ChargeFailureCounter(u32),
+    /// Auto-pause threshold (consecutive failures before auto-pause). Discriminant 66.
+    AutoPauseThreshold,
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 79.
     DelegatedPayerGrant(Address, Address),
-    /// Split payees details for split-billing. Discriminant 59.
+    /// Split payees details for split-billing. Discriminant 80.
     SplitPayees(u32),
-    /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 67.
     BuyoutPremiumBps,
     /// Coupon code bound to a subscription (persistent). Discriminant 68.
     SubCoupon(u32),
@@ -252,7 +270,7 @@ pub enum DataKey {
     MerchantTags(Address),
     /// Optional fee-token override: when set, protocol fees are paid in this
     /// token instead of the subscription's settlement token, converted through
-    /// the oracle at charge time. Discriminant 64.
+    /// the oracle at charge time. Discriminant 74.
     FeeToken,
     /// Cancellation refund escrow record keyed by subscription ID. Discriminant 75.
     CancellationEscrow(u32),
@@ -323,31 +341,33 @@ impl DataKey {
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
             DataKey::PendingTreasuryChange => 54,
-            DataKey::TransferIntent(_) => 54,
-            DataKey::Kyc(_) => 55,
-            DataKey::Coupon(_) => 56,
-            DataKey::CouponRedemptions(_) => 57,
-            DataKey::Credential(_) => 58,
-            DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 60,
-            DataKey::SubscriberCreateWindow(_) => 61,
-            DataKey::MerchantWhitelistMode => 62,
-            DataKey::MerchantApproved(_) => 63,
-            DataKey::ChargeSalt(_) => 64,
-            DataKey::ChargeFailureCounter(_) => 65,
-            DataKey::AutoPauseThreshold => 66,
-            DataKey::BuyoutPremiumBps => 67,
-            DataKey::SubCoupon(_) => 68,
-            DataKey::MerchantMultiSig(_) => 69,
-            DataKey::SubscriberActiveCount(_) => 70,
-            DataKey::SubscriberActiveCapOverride(_) => 71,
-            DataKey::TagAllowlist => 72,
-            DataKey::MerchantTags(_) => 73,
-            DataKey::FeeToken => 74,
-            DataKey::CancellationEscrow(_) => 75,
-            DataKey::MerchantFeeBps(_) => 76,
-            DataKey::OraclePriceHistoryMeta(_) => 77,
-            DataKey::OraclePriceHistoryEntry(_, _) => 78,
+            DataKey::TransferIntent(_) => 55,
+            DataKey::Kyc(_) => 56,
+            DataKey::Coupon(_) => 57,
+            DataKey::CouponRedemptions(_) => 58,
+            DataKey::Credential(_) => 59,
+            DataKey::AdminConfigLastChangedAt(_) => 60,
+            DataKey::SubscriberCreateCap => 61,
+            DataKey::SubscriberCreateWindow(_) => 62,
+            DataKey::MerchantWhitelistMode => 63,
+            DataKey::MerchantApproved(_) => 64,
+            DataKey::ChargeSalt(_) => 65,
+            DataKey::ChargeFailureCounter(_) => 66,
+            DataKey::AutoPauseThreshold => 67,
+            DataKey::BuyoutPremiumBps => 68,
+            DataKey::SubCoupon(_) => 69,
+            DataKey::MerchantMultiSig(_) => 70,
+            DataKey::SubscriberActiveCount(_) => 71,
+            DataKey::SubscriberActiveCapOverride(_) => 72,
+            DataKey::TagAllowlist => 73,
+            DataKey::MerchantTags(_) => 74,
+            DataKey::FeeToken => 75,
+            DataKey::CancellationEscrow(_) => 76,
+            DataKey::MerchantFeeBps(_) => 77,
+            DataKey::OraclePriceHistoryMeta(_) => 78,
+            DataKey::OraclePriceHistoryEntry(_, _) => 79,
+            DataKey::DelegatedPayerGrant(_, _) => 80,
+            DataKey::SplitPayees(_) => 81,
         }
     }
 
@@ -397,25 +417,24 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
-    54, // TransferIntent(u32)
-    59, // AdminConfigLastChangedAt(BytesN<32>)
-    60, // SubscriberCreateCap
-    61, // SubscriberCreateWindow(Address)
-    62, // MerchantWhitelistMode
-    63, // MerchantApproved(Address)
-    64, // ChargeSalt(u32)
-    65, // ChargeFailureCounter(u32)
-    66, // AutoPauseThreshold
-    67, // BuyoutPremiumBps
-    69, // MerchantMultiSig(Address)
-    70, // SubscriberActiveCount(Address)
-    71, // SubscriberActiveCapOverride(Address)
-    72, // TagAllowlist
-    73, // MerchantTags(Address)
-    74, // FeeToken
-    76, // MerchantFeeBps(Address)
-    77, // OraclePriceHistoryMeta(Address)
-    78, // OraclePriceHistoryEntry(Address, u32)
+    55, // TransferIntent(u32)
+    61, // SubscriberCreateCap
+    62, // SubscriberCreateWindow(Address)
+    63, // MerchantWhitelistMode
+    64, // MerchantApproved(Address)
+    65, // ChargeSalt(u32)
+    66, // ChargeFailureCounter(u32)
+    67, // AutoPauseThreshold
+    68, // BuyoutPremiumBps
+    70, // MerchantMultiSig(Address)
+    71, // SubscriberActiveCount(Address)
+    72, // SubscriberActiveCapOverride(Address)
+    73, // TagAllowlist
+    74, // MerchantTags(Address)
+    75, // FeeToken
+    77, // MerchantFeeBps(Address)
+    78, // OraclePriceHistoryMeta(Address)
+    79, // OraclePriceHistoryEntry(Address, u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
