@@ -30,6 +30,7 @@
 
 #![allow(dead_code)]
 
+use crate::oracle_adapter::{dispatch_price, PRICE_SCALE};
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
 use crate::state_machine::transition_to;
@@ -37,13 +38,28 @@ use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
 use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
-    Error, GracePeriodEnteredEvent, LifetimeCapReachedEvent, SubscriptionAutoPausedEvent,
-    SubscriptionCancelledEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
-    SNAPSHOT_FLAG_USAGE_CHARGED,
+    Error, FeeConvertedEvent, GracePeriodEnteredEvent, LifetimeCapReachedEvent,
+    SubscriptionAutoPausedEvent, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
+    UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
 };
-use soroban_sdk::{symbol_short, Env, String, Symbol};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
+
+/// Resolve the effective fee rate in basis points for a charge to `merchant`.
+///
+/// Priority:
+/// 1. If a per-merchant override is set (`DataKey::MerchantFeeBps`), use it.
+/// 2. Otherwise fall back to the global `DataKey::FeeBps`.
+///
+/// A zero return value means no fee is collected.
+#[inline(always)]
+fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
+    if let Some(override_bps) = crate::merchant::get_merchant_fee_override_bps(env, merchant) {
+        return override_bps;
+    }
+    crate::admin::get_protocol_fee_bps(env)
+}
 
 /// Emits a [`ChargeFailureEvent`] and returns `err` unchanged.
 ///
@@ -69,6 +85,81 @@ fn charge_fail(
         },
     );
     err
+}
+
+/// Result of a fee-token conversion attempt.
+struct FeeConversion {
+    /// Converted fee amount in the target token. Equals `original` when no
+    /// conversion took place.
+    effective_amount: i128,
+    /// Target token address, or `None` when no conversion was applied.
+    target_token: Option<Address>,
+    /// Oracle price used for conversion (quote per base, scaled by 10^7).
+    /// 0 when no conversion was applied.
+    rate: u128,
+}
+
+/// Attempt to convert a fee amount from `source_token` to the configured
+/// fee-token override using the oracle.
+///
+/// Returns the fee amount unchanged (with `target_token = None`) when:
+/// - No fee-token override is configured.
+/// - The override matches `source_token`.
+/// - The oracle is not available (not configured, or price fetch fails).
+/// - Conversion would round to zero (precision loss guard).
+fn convert_fee(
+    env: &Env,
+    source_token: &Address,
+    fee_amount: i128,
+) -> FeeConversion {
+    let fee_token_opt = crate::admin::get_fee_token(env);
+    let fee_token = match fee_token_opt {
+        Some(ref t) if t != source_token => t.clone(),
+        _ => {
+            return FeeConversion {
+                effective_amount: fee_amount,
+                target_token: None,
+                rate: 0,
+            };
+        }
+    };
+
+    let oracle_config = crate::oracle::get_oracle_config(env);
+    if !oracle_config.enabled || oracle_config.oracle.is_none() {
+        return FeeConversion {
+            effective_amount: fee_amount,
+            target_token: None,
+            rate: 0,
+        };
+    }
+
+    match dispatch_price(env, &oracle_config, source_token, &fee_token) {
+        Ok(price) => {
+            let converted = (fee_amount as u128)
+                .checked_mul(price)
+                .and_then(|v| v.checked_div(PRICE_SCALE))
+                .unwrap_or(0) as i128;
+
+            if converted > 0 {
+                FeeConversion {
+                    effective_amount: converted,
+                    target_token: Some(fee_token),
+                    rate: price,
+                }
+            } else {
+                FeeConversion {
+                    effective_amount: fee_amount,
+                    target_token: None,
+                    rate: 0,
+                }
+            }
+        }
+        Err(_) => FeeConversion {
+            effective_amount: fee_amount,
+            target_token: None,
+            rate: 0,
+        },
+    }
 }
 
 /// Performs a single interval-based charge with optional replay protection.
@@ -367,15 +458,33 @@ pub fn charge_one(
                 merchant_amount,
                 BillingChargeKind::Interval,
             )?;
+            let conversion = if fee_amount > 0 {
+                Some(convert_fee(env, &sub.token, fee_amount))
+            } else {
+                None
+            };
             let should_emit_fee_event = if fee_amount > 0 {
                 if let Some(ref treasury) = treasury_opt {
-                    crate::merchant::credit_merchant_balance_for_token(
-                        env,
-                        treasury,
-                        &sub.token,
-                        fee_amount,
-                        BillingChargeKind::Interval,
-                    )?;
+                    let conv = conversion.as_ref().unwrap();
+                    let fee_token = conv.target_token.clone();
+                    let fee_credit_amount = conv.effective_amount;
+                    if let Some(ref ft) = fee_token {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury,
+                            ft,
+                            fee_credit_amount,
+                            BillingChargeKind::Interval,
+                        )?;
+                    } else {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury,
+                            &sub.token,
+                            fee_credit_amount,
+                            BillingChargeKind::Interval,
+                        )?;
+                    }
                     Some((treasury.clone(), fee_amount))
                 } else {
                     None
@@ -427,6 +536,24 @@ pub fn charge_one(
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
+                // Emit fee conversion event when fee-token override was applied
+                if let Some(conv) = &conversion {
+                    if let Some(ref target) = conv.target_token {
+                        env.events().publish(
+                            (Symbol::new(env, "fee_converted"), subscription_id),
+                            FeeConvertedEvent {
+                                subscription_id,
+                                source_token: sub.token.clone(),
+                                target_token: target.clone(),
+                                original_fee_amount: fee,
+                                converted_fee_amount: conv.effective_amount,
+                                rate: conv.rate,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                }
             }
 
             append_statement(
@@ -883,7 +1010,7 @@ pub fn charge_usage_one(
     match crate::safe_math::safe_sub_balance(sub.prepaid_balance, usage_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
@@ -902,15 +1029,33 @@ pub fn charge_usage_one(
                 merchant_amount,
                 BillingChargeKind::Usage,
             )?;
+            let conversion = if fee_amount > 0 {
+                Some(convert_fee(env, &sub.token, fee_amount))
+            } else {
+                None
+            };
             let should_emit_fee_event = if fee_amount > 0 {
                 if let Some(ref treasury) = treasury_opt {
-                    crate::merchant::credit_merchant_balance_for_token(
-                        env,
-                        treasury,
-                        &sub.token,
-                        fee_amount,
-                        BillingChargeKind::Usage,
-                    )?;
+                    let conv = conversion.as_ref().unwrap();
+                    let fee_token = conv.target_token.clone();
+                    let fee_credit_amount = conv.effective_amount;
+                    if let Some(ref ft) = fee_token {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury,
+                            ft,
+                            fee_credit_amount,
+                            BillingChargeKind::Usage,
+                        )?;
+                    } else {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury,
+                            &sub.token,
+                            fee_credit_amount,
+                            BillingChargeKind::Usage,
+                        )?;
+                    }
                     Some((treasury.clone(), fee_amount))
                 } else {
                     None
@@ -948,6 +1093,24 @@ pub fn charge_usage_one(
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
                 );
+                // Emit fee conversion event when fee-token override was applied
+                if let Some(conv) = &conversion {
+                    if let Some(ref target) = conv.target_token {
+                        env.events().publish(
+                            (Symbol::new(env, "fee_converted"), subscription_id),
+                            FeeConvertedEvent {
+                                subscription_id,
+                                source_token: sub.token.clone(),
+                                target_token: target.clone(),
+                                original_fee_amount: fee,
+                                converted_fee_amount: conv.effective_amount,
+                                rate: conv.rate,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                }
             }
 
             env.storage().instance().set(&ref_key, &true); // Mark reference as used
@@ -1036,3 +1199,43 @@ pub fn charge_usage_one(
         }
     }
 }
+
+/// Calculates the prorated first-charge amount for a subscription starting mid-interval.
+///
+/// Proration scales `amount` linearly by `remaining_seconds / interval`.
+///
+/// # Security & Invariants
+/// - Rejects negative amounts with `Error::InvalidAmount`.
+/// - Rejects zero interval with `Error::InvalidInput`.
+/// - Caps at `amount` when `remaining_seconds >= interval`.
+/// - Guarantees result is always in `[0, amount]` without `i128` overflow or underflow.
+pub fn calculate_prorated_first_charge(
+    amount: i128,
+    interval: u64,
+    remaining_seconds: u64,
+) -> Result<i128, Error> {
+    if amount < 0 {
+        return Err(Error::InvalidAmount);
+    }
+    if interval == 0 {
+        return Err(Error::InvalidInput);
+    }
+    if remaining_seconds == 0 {
+        return Ok(0);
+    }
+    if remaining_seconds >= interval {
+        return Ok(amount);
+    }
+
+    let int_i128 = interval as i128;
+    let q = amount / int_i128;
+    let r = amount % int_i128;
+
+    let q_part = q.saturating_mul(remaining_seconds as i128);
+    let prod_r = (r as u128).saturating_mul(remaining_seconds as u128);
+    let r_part = (prod_r / (interval as u128)) as i128;
+
+    let prorated = q_part.saturating_add(r_part).min(amount).max(0);
+    Ok(prorated)
+}
+
