@@ -2165,11 +2165,21 @@ pub fn do_charge_one_off(
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
     let fee_bps = crate::admin::get_protocol_fee_bps(env);
-    let treasury_opt = crate::admin::get_treasury(env);
-    let (merchant_amount, fee_amount) = if fee_bps > 0 {
-        if let Some(ref _t) = treasury_opt {
-            let fee = amount * fee_bps as i128 / 10_000i128;
-            (amount - fee, fee)
+    let treasury_opt = crate::admin::get_treasury(env);            // ── Fee Routing & Rounding ─────────────────────────────────────
+            // Same invariant as charge_core: integer floor division guarantees
+            // net + fee == amount exactly. See `docs/fee_routing.md`.
+            let (merchant_amount, fee_amount) = if fee_bps > 0 {
+                if let Some(ref _t) = treasury_opt {
+                    let fee = amount * fee_bps as i128 / 10_000i128;
+                    let net = amount - fee;
+                    debug_assert!(
+                        net + fee == amount,
+                        "fee routing invariant violated (subscription): net ({}) + fee ({}) != charge ({})",
+                        net,
+                        fee,
+                        amount
+                    );
+                    (net, fee)
         } else {
             (amount, 0i128)
         }
