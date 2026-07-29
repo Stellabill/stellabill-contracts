@@ -22,11 +22,13 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantBalanceSnapshotEvent, MerchantConfig,
-    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
+    MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
+    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
+    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate,
+    ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot,
+    is_valid_allowed_operations, MAX_FEE_BIPS, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 

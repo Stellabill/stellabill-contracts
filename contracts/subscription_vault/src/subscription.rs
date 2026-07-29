@@ -42,7 +42,8 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    BillingChargeKind, CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, Error,
+    FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent, ReferralAttributedEvent,
@@ -50,7 +51,7 @@ use crate::types::{
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
     SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
-    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    UsageLimitsConfiguredEvent, BATCH_MAX_SIZE, CANCELLATION_ESCROW_WINDOW_SECS, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -149,16 +150,12 @@ pub fn get_plan_template(env: &Env, plan_template_id: u32) -> Result<PlanTemplat
 
 /// Helper to conditionally extend a persistent storage entry's TTL.
 ///
-/// Checks the entry's remaining TTL via `get_ttl`. If the remaining TTL is
-/// less than `threshold`, invokes `extend_ttl` to extend it to `extend_to`.
-/// This avoids unnecessary write operations when the remaining TTL is already
-/// sufficient.
+/// Delegates to `Persistent::extend_ttl` which internally only extends when
+/// the remaining TTL is below the threshold.
 pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_to: u32) {
-    if env.storage().persistent().get_ttl(key) < threshold {
-        env.storage()
-            .persistent()
-            .extend_ttl(key, threshold, extend_to);
-    }
+    env.storage()
+        .persistent()
+        .extend_ttl(key, threshold, extend_to);
 }
 
 pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
@@ -652,7 +649,7 @@ pub fn do_create_subscription_with_token(
         (Symbol::new(env, "subscription_created"), id),
         SubscriptionCreatedEvent {
             subscription_id: id,
-            subscriber,
+            subscriber: subscriber.clone(),
             merchant,
             token,
             amount,
@@ -1076,20 +1073,44 @@ fn apply_cancellation(
     }
     let refund_amount = sub.prepaid_balance;
 
-    // EFFECTS: zero balance before external token transfer (CEI pattern).
+    // EFFECTS: zero balance before escrow (CEI pattern).
     sub.prepaid_balance = 0;
     let token_addr = sub.token.clone();
     write_subscription(env, subscription_id, &sub);
 
-    // INTERACTIONS: transfer remaining prepaid balance to subscriber.
+    // Instead of immediately refunding, place the refund into a time-locked
+    // escrow so the merchant has a window to dispute the cancellation (#569).
     if refund_amount > 0 {
-        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &sub.subscriber,
-            &refund_amount,
+        let now = env.ledger().timestamp();
+        let released_at = now.checked_add(CANCELLATION_ESCROW_WINDOW_SECS)
+            .ok_or(Error::Overflow)?;
+
+        let escrow = CancellationEscrow {
+            subscription_id,
+            amount: refund_amount,
+            token: token_addr.clone(),
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            released_at,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::CancellationEscrow(subscription_id), &escrow);
+
+        env.events().publish(
+            (Symbol::new(env, "cancellation_escrow_opened"), subscription_id),
+            CancellationEscrowOpenedEvent {
+                subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
+                token: token_addr,
+                amount: refund_amount,
+                released_at,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
         );
-        crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
     }
 
     // Remove from index

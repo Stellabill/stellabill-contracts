@@ -111,7 +111,10 @@
 
 pub use crate::charge_core::{charge_one, charge_usage_one};
 pub use crate::coupon::{apply_coupon, create_coupon, get_coupon, revoke_coupon};
-pub use crate::dispute::{do_get_dispute, do_get_subscription_dispute, do_open_dispute};
+pub use crate::dispute::{
+    do_claim_cancellation_escrow, do_get_cancellation_escrow, do_get_dispute,
+    do_get_subscription_dispute, do_open_dispute,
+};
 pub use crate::metadata::{
     delete_metadata, do_set_metadata_signed, get_metadata, list_metadata_keys, set_metadata,
 };

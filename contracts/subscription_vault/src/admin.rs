@@ -5,12 +5,12 @@
 #![allow(dead_code)]
 
 use crate::types::{
-    AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, PendingTreasuryChange,
-    RecoveryEvent, RecoveryReason, TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent,
-    SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
-    AcceptedToken, AdminConfigChangedEvent, AdminRotatedEvent, BatchChargeResult, DataKey, Error,
-    RecoveryEvent, RecoveryReason, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
->>>>>>> upstream/main
+    AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    DataKey, Error, FeeTokenConfiguredEvent, MerchantApprovedEvent, MerchantFeeOverrideSetEvent,
+    MerchantMultiSigConfig, MerchantRevokedEvent, MerchantWhitelistModeEvent, PayoutSchedule,
+    PendingTreasuryChange, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -749,7 +749,6 @@ pub fn do_set_auto_pause_threshold(env: &Env, admin: Address, threshold: u32) ->
     Ok(())
 }
 
-<<<<<<< HEAD
 // ── Two-step admin proposal ──────────────────────────────────────────────────
 
 const PROPOSAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
@@ -847,7 +846,7 @@ pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> 
 pub fn get_admin_proposal(env: &Env) -> Option<AdminProposal> {
     env.storage().instance().get(&proposal_key(env))
 }
-=======
+
 /// Return the configured auto-pause threshold. `0` means disabled.
 pub fn get_auto_pause_threshold(env: &Env) -> u32 {
     env.storage()
@@ -964,7 +963,6 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
 
     do_migrate_config_to_persistent_internal(env)?;
 
-    // Emit event
     env.events().publish(
         (Symbol::new(env, "schema_migrated"),),
         crate::types::SchemaMigratedEvent {
@@ -985,31 +983,24 @@ pub fn do_migrate(
     admin: Address,
     binary_version: u32,
 ) -> Result<(), crate::types::Error> {
-    // Auth first — no state reads before the caller is verified.
     require_admin_auth(env, &admin)?;
 
     let stored_version = get_schema_version(env);
 
-    // Downgrade guard: reject if on-chain version is newer than the binary.
     if stored_version > binary_version {
         return Err(crate::types::Error::SchemaMigrationDowngrade);
     }
 
-    // Idempotent no-op: already at the target version.
     if stored_version == binary_version {
         return Ok(());
     }
 
-    // ── Forward upgrade ladder ────────────────────────────────────────────────
     let mut current = stored_version;
     while current < binary_version {
         match (current, binary_version) {
-            // v0/v1 → v2: SchemaVersion key was not written by early init
-            // calls. No data-shape changes needed; writing the key is enough.
             (v, _) if v < 2 => {
                 current = 2;
             }
-            // v2 → v3: config keys migration
             (2, _) => {
                 do_migrate_config_to_persistent_internal(env)?;
                 current = 3;
@@ -1020,7 +1011,6 @@ pub fn do_migrate(
         }
     }
 
-    // Commit the new version atomically after all upgrade steps succeed.
     if binary_version >= 3 {
         env.storage()
             .persistent()
@@ -1040,7 +1030,6 @@ pub fn do_migrate(
             .set(&crate::types::DataKey::SchemaVersion, &binary_version);
     }
 
-    // Emit audit event.
     env.events().publish(
         (soroban_sdk::Symbol::new(env, "schema_migrated"),),
         crate::types::SchemaMigratedEvent {
@@ -1054,4 +1043,3 @@ pub fn do_migrate(
 
     Ok(())
 }
->>>>>>> upstream/main
