@@ -82,3 +82,7 @@ path = "benches/withdraw_fixed_cost.rs"
 name = "gov_tally"
 path = "benches/gov_tally.rs"
 
+[[test]]
+name = "abi_hash_regression"
+path = "tests/abi_hash_regression.rs"
+
