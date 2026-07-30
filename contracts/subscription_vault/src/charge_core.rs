@@ -477,6 +477,15 @@ pub fn charge_one(
                     crate::admin::get_treasury(env),
                 )
             };
+            // Determine the protocol fee and merchant credit.
+            //
+            // Rounding rule: percentage fee is computed with integer division
+            // (truncating). Any remainder from the division is deterministically
+            // allocated to the merchant credit (i.e. merchant receives
+            // `charge_amount - fee`). This ensures `merchant_amount + fee_amount == charge_amount`
+            // exactly in the charge token and prevents 1-unit dust from remaining
+            // in the vault. Converted fees (fee-token overrides) are handled
+            // separately and do not affect the source-token accounting invariant.
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
                     let fee = charge_amount * fee_bps as i128 / 10_000i128;
@@ -488,6 +497,14 @@ pub fn charge_one(
             } else {
                 (charge_amount, 0i128)
             };
+
+            // Invariant sanity check: the split must sum exactly to the charged amount.
+            // If this ever fails it indicates an arithmetic bug; keep as a debug
+            // assertion so normal execution is unaffected in release builds.
+            debug_assert!(
+                merchant_amount + fee_amount == charge_amount,
+                "fee + merchant != charge_amount (fee routing invariant)"
+            );
             credit_charge_payees(
                 env,
                 subscription_id,
@@ -1294,6 +1311,14 @@ pub fn charge_usage_one(
     }
 }
 
+// Distribute `net_merchant_amount` among configured split payees.
+//
+// Rounding rule: per-payee shares are computed using integer division
+// (`share = net * weight / 10000`). To ensure the total distributed
+// amount equals `net_merchant_amount` exactly, any remainder from the
+// per-payee truncation is allocated to the first payee (index 0).
+// This deterministic allocation prevents dust from accumulating in the
+// vault and makes accounting auditable.
 pub(crate) fn credit_charge_payees(
     env: &Env,
     subscription_id: u32,
