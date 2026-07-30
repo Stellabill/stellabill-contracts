@@ -3517,3 +3517,6 @@ mod test_split_billing;
 
 #[cfg(test)]
 mod test_merchant_vacation;
+
+#[cfg(test)]
+mod test_emergency_stop_view_surface;
