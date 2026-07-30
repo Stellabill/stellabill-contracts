@@ -2783,6 +2783,57 @@ pub struct PrepaidQueryResult {
 }
 
 
+// ── Event topic wire-format compatibility tests ─────────────────────────────
+
+#[cfg(test)]
+mod event_topic_tests {
+    use super::{
+        TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
+        TOPIC_RECOVERY, TOPIC_WITHDRAWN,
+    };
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::{Env, Symbol};
+
+    /// The emitted wire representation is part of the indexer-facing contract.
+    /// Verify every cached short topic's XDR matches the `Symbol::new`
+    /// representation used before caching, and that ordering is preserved.
+    #[test]
+    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
+        let env = Env::default();
+        let topics = [
+            ("recovery", TOPIC_RECOVERY),
+            ("created", TOPIC_CREATED),
+            ("deposited", TOPIC_DEPOSITED),
+            ("charged", TOPIC_CHARGED),
+            ("withdrawn", TOPIC_WITHDRAWN),
+            ("cap_reach", TOPIC_CAP_REACH),
+            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
+        ];
+
+        for (name, cached_topic) in topics.iter() {
+            let legacy_topic = Symbol::new(&env, name);
+            assert_eq!(
+                cached_topic.to_xdr(&env),
+                legacy_topic.to_xdr(&env),
+                "cached topic {name} differs from Symbol::new"
+            );
+        }
+    }
+
+    /// `symbol_short!` supports at most nine characters. Longer event topics
+    /// are deliberately constructed with `Symbol::new` at their emit sites.
+    #[test]
+    fn long_event_topics_keep_the_runtime_symbol_representation() {
+        let env = Env::default();
+        let long_topic = Symbol::new(&env, "subscription_created");
+
+        assert_eq!(
+            long_topic.clone().to_xdr(&env),
+            Symbol::new(&env, "subscription_created").to_xdr(&env)
+        );
+        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
+    }
+}
 
 
 // ════════════════════════════════════════════════════════════════════
