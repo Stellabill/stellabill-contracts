@@ -2833,6 +2833,76 @@ mod event_topic_tests {
         );
         assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
+
+    /// SDK 22 `Events::all()` requires contract context. Register a real
+    /// `SubscriptionVault`, publish every cached topic through it, then
+    /// retrieve all emitted events inside the same contract invocation
+    /// and verify the topic wire format is byte-for-byte identical to
+    /// the cached constants used at emit sites.
+    #[test]
+    fn event_roundtrip_through_registered_contract_preserves_topic_wire_format() {
+        use crate::{SubscriptionVault, SubscriptionVaultClient};
+        use soroban_sdk::{
+            testutils::{Address as _, Events},
+            Address, FromVal,
+        };
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+        // Use the test client for init (emits its own events).
+        client.init(&token, &6u32, &admin, &1_000_000i128, &604_800u64);
+
+        let topics = [
+            ("recovery", TOPIC_RECOVERY),
+            ("created", TOPIC_CREATED),
+            ("deposited", TOPIC_DEPOSITED),
+            ("charged", TOPIC_CHARGED),
+            ("withdrawn", TOPIC_WITHDRAWN),
+            ("cap_reach", TOPIC_CAP_REACH),
+            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
+        ];
+
+        // Publish, retrieve, and verify inside the same as_contract
+        // invocation so Events::all() has consistent contract context.
+        env.as_contract(&contract_id, || {
+            let start = env.events().all().len();
+
+            for (_, topic) in topics.iter() {
+                env.events().publish((topic,), ());
+            }
+
+            let emitted = env.events().all();
+            let skip = start as usize;
+
+            assert_eq!(
+                emitted.len() - start,
+                topics.len() as u32,
+                "expected {} new events after publishing via contract, got {}",
+                topics.len(),
+                emitted.len() - start
+            );
+
+            for (i, (name, cached_topic)) in topics.iter().enumerate() {
+                let evt = emitted.get((skip + i) as u32).unwrap();
+                let emitted_topic = Symbol::from_val(&env, &evt.1.get(0).unwrap());
+                assert_eq!(
+                    emitted_topic.to_xdr(&env),
+                    cached_topic.to_xdr(&env),
+                    "roundtrip topic '{name}' XDR differs from cached constant"
+                );
+            }
+        });
+    }
 }
 
 
