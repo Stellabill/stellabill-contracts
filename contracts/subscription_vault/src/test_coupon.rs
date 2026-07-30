@@ -226,6 +226,48 @@ fn test_apply_coupon_already_applied() {
 }
 
 #[test]
+fn test_apply_same_coupon_twice_fails() {
+    let (env, client, _admin, token) = setup();
+    let merchant = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let code = Symbol::new(&env, "DOUBLE_APPLY");
+
+    client
+        .mock_all_auths()
+        .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(
+            &subscriber,
+            &merchant,
+            &1000,
+            &86400,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<Address>,
+        );
+
+    // First application succeeds.
+    client
+        .mock_all_auths()
+        .apply_coupon(&subscriber, &sub_id, &code);
+
+    // Second application of the same coupon must fail.
+    let result = client.try_apply_coupon(&subscriber, &sub_id, &code);
+
+    assert_eq!(
+        result.err().unwrap().unwrap().to_code(),
+        Error::CouponAlreadyApplied.to_code()
+    );
+
+    // Coupon remains bound to the subscription.
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.code, code);
+}
+
+#[test]
 fn test_apply_coupon_token_mismatch() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
