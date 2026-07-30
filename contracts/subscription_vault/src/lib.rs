@@ -596,6 +596,7 @@ pub mod operator {
 
 /// Metadata: per-subscription key-value annotations.
 pub use metadata::*;
+pub use subscription::compute_cancel_refund;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
