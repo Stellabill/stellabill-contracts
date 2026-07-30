@@ -12,7 +12,7 @@
 
 use crate::types::{
     DataKey, Error, Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
-    ProposalSubmittedEvent, ProposalVotedEvent, EVENT_SCHEMA_VERSION,
+    ProposalSubmittedEvent, ProposalVotedEvent, VoteLockedEvent, EVENT_SCHEMA_VERSION,
 };
 use soroban_sdk::{Address, Env, Map, String, Symbol, Vec};
 
@@ -128,10 +128,16 @@ pub fn do_submit_proposal(
 /// Guardian weight at vote time is recorded; if guardian is removed later,
 /// this vote is invalidated during execute phase.
 ///
+/// Votes are **locked** once the proposal's ETA (timelock) is reached —
+/// guardians cannot add or change votes after the timelock opens. This
+/// prevents vote-flip griefing where a guardian could feign support during
+/// the voting window then flip their vote right at execution time.
+///
 /// # Errors
 /// - `NotFound` if proposal does not exist.
-/// - `InvalidInput` if proposal already executed or ETA not passed yet.
+/// - `InvalidInput` if proposal already executed.
 /// - `Unauthorized` if caller is not a valid guardian.
+/// - `InvalidInput` if the timelock (ETA) has passed and votes are locked.
 pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool) -> Result<(), Error> {
     let guardian = crate::admin::require_stored_admin_auth(env)?;
 
@@ -146,6 +152,27 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool) -> Result<
         return Err(Error::InvalidInput);
     }
 
+    let now = env.ledger().timestamp();
+
+    // ── Timelock guard: votes are locked once ETA is reached ────────────
+    //
+    // If the proposal's timelock has passed, no further votes may be
+    // recorded. This prevents a guardian from feigning support during the
+    // voting window and then flipping their vote to grief execution.
+    if now >= proposal.eta {
+        env.events().publish(
+            (Symbol::new(env, "vote_locked"),),
+            VoteLockedEvent {
+                proposal_id,
+                guardian: guardian.clone(),
+                eta: proposal.eta,
+                timestamp: now,
+                schema_version: EVENT_SCHEMA_VERSION,
+            },
+        );
+        return Err(Error::InvalidInput);
+    }
+
     // Record the vote
     proposal.votes.set(guardian.clone(), voted_yes);
     write_proposal(env, proposal_id, &proposal);
@@ -157,7 +184,7 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool) -> Result<
             guardian: guardian.clone(),
             voted_yes,
             guardian_weight,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             schema_version: EVENT_SCHEMA_VERSION,
         },
     );
@@ -271,7 +298,7 @@ pub fn do_cancel_proposal(env: &Env, proposal_id: u64, reason: String) -> Result
 /// Get the current quorum (votes for and against).
 ///
 /// Re-validates guardian status at read time to handle guardian removal.
-fn calculate_quorum(env: &Env, proposal: &Proposal) -> (u32, u32) {
+pub(crate) fn calculate_quorum(env: &Env, proposal: &Proposal) -> (u32, u32) {
     let guardians = read_guardians(env);
     let mut votes_for: u32 = 0;
     let mut votes_against: u32 = 0;
@@ -305,7 +332,8 @@ fn write_guardians(env: &Env, guardians: &Map<Address, u32>) {
     env.storage()
         .persistent()
         .set(&DataKey::Guardians, guardians);
-    env.storage().persistent().extend_ttl(
+    crate::subscription::maybe_extend_ttl(
+        env,
         &DataKey::Guardians,
         30 * 24 * 60 * 60,
         365 * 24 * 60 * 60,
@@ -324,9 +352,7 @@ fn read_proposal(env: &Env, proposal_id: u64) -> Result<Proposal, Error> {
 fn write_proposal(env: &Env, proposal_id: u64, proposal: &Proposal) {
     let key = DataKey::Proposal(proposal_id);
     env.storage().persistent().set(&key, proposal);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, 30 * 24 * 60 * 60, 365 * 24 * 60 * 60);
+    crate::subscription::maybe_extend_ttl(&env, &key, 30 * 24 * 60 * 60, 365 * 24 * 60 * 60);
 }
 
 /// Get next proposal ID and increment counter.

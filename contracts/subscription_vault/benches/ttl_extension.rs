@@ -29,6 +29,7 @@ fn bench_ttl_extension_cost() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
     };
     
     env.storage().persistent().set(&key, &sub);

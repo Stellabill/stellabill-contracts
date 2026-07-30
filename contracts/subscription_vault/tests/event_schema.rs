@@ -73,7 +73,8 @@ fn test_subscription_created_event_emitted() {
         &false,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+);
 
     let events = env.events().all();
     assert!(

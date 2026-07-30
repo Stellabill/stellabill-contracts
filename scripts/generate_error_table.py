@@ -73,6 +73,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "SubscriberBlocklisted":          ("Escalate to admin/support flow; stop retrying.", "BlocklistAddedEvent", False),
     "SelfRotation":                   ("Fix request payload — new_admin must differ from current_admin.", "—", False),
     "NonceAlreadyUsed":               ("Re-fetch nonce via get_admin_nonce / get_operator_nonce, then retry.", "NonceConsumedEvent", False),
+    "BatchTooLarge":                  ("Reduce batch size to ≤ BATCH_MAX_SIZE entries and retry.", "—", False),
     # Not found
     "NotFound":                       ("Verify identifiers before retrying.", "—", False),
     "NotInitialized":                 ("Admin must call init before any other operation.", "—", False),
@@ -84,6 +85,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "MetadataKeyTooLong":             ("Trim key to ≤ MAX_METADATA_KEY_LENGTH bytes and retry.", "—", False),
     "MetadataValueTooLong":           ("Trim value to ≤ MAX_METADATA_VALUE_LENGTH bytes and retry.", "—", False),
     "OraclePriceInvalid":             ("Treat as terminal for this request; investigate oracle data feed.", "OracleConfigUpdatedEvent", False),
+    "InvalidExpiration":              ("Fix expires_at to a future ledger timestamp and retry.", "—", False),
     # State transition
     "InvalidStatusTransition":        ("Refresh subscription state before presenting the next action.", "—", False),
     "NotActive":                      ("Refresh state; do not blindly retry.", "—", False),
@@ -95,6 +97,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "AlreadyInitialized":             ("Do not retry; contract is already set up.", "—", False),
     "MerchantPaused":                 ("Retry only after merchant pause is removed (unpause_merchant).", "MerchantUnpausedEvent", False),
     "Reentrancy":                     ("Treat as a security failure; investigate calling path immediately.", "—", False),
+    "NotInGracePeriod":               ("Refresh state; a grace-period buyout is only legal when status == GracePeriod.", "—", False),
     # Accounting
     "InsufficientBalance":            ("Retry only after subscriber deposits funds via deposit_funds.", "FundsDepositedEvent", False),
     "InsufficientPrepaidBalance":     ("Top up subscription via deposit_funds, then retry.", "FundsDepositedEvent", False),
@@ -112,13 +115,18 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "MetadataKeyLimitReached":        ("Delete or update existing keys (up to MAX_METADATA_KEYS) before retrying.", "MetadataDeletedEvent", False),
     "MaxConcurrentSubscriptionsReached": ("Subscriber already at plan concurrency limit; cancel an existing subscription first.", "SubscriptionCancelledEvent", False),
     "CreditLimitExceeded":            ("Reduce deposit / subscription amount or raise limit via set_subscriber_credit_limit.", "—", False),
+    "SubscriberRateLimited":          ("Retry after the per-subscriber rolling 24-hour subscription-creation window resets; throttle limit is configurable.", "—", False),
+    "UsageLimitsRequired":            ("Configure UsageLimits on the subscription via configure_usage_limits before enabling usage-based charges.", "UsageLimitsConfiguredEvent", False),
     "RateLimitExceeded":              ("Retry after the rate window resets (see configure_usage_limits).", "UsageLimitsConfiguredEvent", False),
     "UsageCapExceeded":               ("Retry only after new billing period begins or cap is raised.", "UsageLimitsConfiguredEvent", False),
     "BurstLimitExceeded":             ("Retry after burst_min_interval_secs elapses.", "UsageLimitsConfiguredEvent", False),
+    "MerchantTagLimitExceeded":       ("Reduce the tag list to at most MAX_MERCHANT_TAGS and retry.", "—", False),
     # Merchant config
     "InvalidFeeBips":                 ("Fix fee_bips to be in range [0, 10000].", "MerchantConfigUpdatedEvent", False),
     "InvalidOperations":              ("Fix allowed_operations bitmap to use only valid OP_* bits.", "MerchantConfigUpdatedEvent", False),
     "MustAllowChargeOperation":       ("Set OP_CHARGE bit in allowed_operations; merchants must accept charges.", "MerchantConfigUpdatedEvent", False),
+    "UnknownMerchantTag":             ("Fix input; call get_tag_allowlist and use only listed tags.", "—", False),
+    "DuplicateMerchantTag":           ("Remove the repeated tag from the request and retry.", "—", False),
     # Token
     "InvalidTokenDecimals":           ("Fix token_decimals; must be in [1, 19].", "—", False),
     "InvalidToken":                   ("Provide an accepted token address from list_accepted_tokens.", "—", False),
@@ -133,6 +141,14 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "DisputeWindowElapsed":           ("Check auto-resolution rules; dispute can now be resolved.", "—", False),
     "DisputeAlreadyOpen":             ("A dispute is already open for this subscription; wait for resolution.", "DisputeOpenedEvent", False),
     "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
+    # Coupon
+    "CouponNotFound":                 ("Verify the coupon code before retrying.", "—", False),
+    "CouponExpired":                  ("Coupon has expired; request a new coupon from the merchant.", "CouponCreatedEvent", False),
+    "CouponRedemptionLimitReached":   ("Coupon has reached its global redemption limit; merchant may create a new coupon.", "CouponCreatedEvent", False),
+    "CouponRevoked":                  ("Coupon was revoked by the merchant; choose a different coupon.", "CouponRevokedEvent", False),
+    "CouponAlreadyExists":            ("Choose a different coupon code and retry.", "CouponCreatedEvent", False),
+    "CouponAlreadyApplied":           ("Subscription already has a coupon bound; only one coupon per subscription.", "CouponAppliedEvent", False),
+    "CouponTokenMismatch":            ("Use a coupon whose token matches the subscription's settlement token.", "—", False),
     # Subscription Transfer
     "TransferIntentNotFound":         ("Verify transfer initiation or expiry before retrying.", "—", False),
     "TransferIntentExpired":          ("Transfer intent has expired; initiate a new transfer.", "—", False),

@@ -10,6 +10,26 @@ crate-type = ["cdylib", "rlib"]
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
+# SECURITY: surface unchecked narrowing/sign-loss casts.
+#
+# The `as` keyword on numeric types silently truncates values outside the
+# destination range and silently flips the sign on negative inputs. In an
+# accounting contract an undetected truncation can permanently
+# mis-account funds.
+#
+# Scope note: enumeration casts (e.g. `Error::Overflow as u32`) and
+# size-of-slice casts are abundant in the existing audited code; the
+# stricter `#![deny(clippy::cast_possible_truncation,
+# clippy::cast_sign_loss)]` lint is therefore applied *module-locally*
+# inside `src/safe_math.rs` itself, the precise location where prorated
+# math is performed. The crate-level lints below are kept at `warn` so
+# future PRs that introduce unexpectedly truncating casts outside
+# `safe_math.rs` are surfaced in CI review without breaking the existing
+# build.
+[lints.clippy]
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
 [features]
 default = ["oracle-pricing"]
 oracle-pricing = []
