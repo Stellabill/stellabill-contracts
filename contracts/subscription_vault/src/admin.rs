@@ -93,11 +93,6 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
     let label_bytes = Bytes::from_array(env, key_label.as_bytes());
-    env.crypto().sha256(&label_bytes)
-    let mut label_bytes = soroban_sdk::Bytes::new(env);
-    for &b in key_label.as_bytes() {
-        label_bytes.push_back(b);
-    }
     env.crypto().sha256(&label_bytes).into()
 }
 
