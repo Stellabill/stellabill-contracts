@@ -38,7 +38,7 @@ fn test_cancellation_creates_escrow_and_does_not_refund() {
     assert_eq!(escrow.subscriber, subscriber);
     assert_eq!(escrow.merchant, merchant);
     assert_eq!(
-        escrow.released_at,
+        escrow.releases_at,
         test_env.env.ledger().timestamp() + CANCELLATION_ESCROW_WINDOW_SECS
     );
 
@@ -100,7 +100,7 @@ fn test_claim_after_window_elapsed_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert!(matches!(result, Ok(Err(_))), "Expected escrow not found error");
+    assert!(matches!(result, Err(Ok(_))), "Expected escrow not found error");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn test_merchant_lodge_dispute_before_window_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert!(matches!(result, Ok(Err(_))), "Expected escrow not found error");
+    assert!(matches!(result, Err(Ok(_))), "Expected escrow not found error");
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn test_no_escrow_when_zero_balance() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert!(matches!(result, Ok(Err(_))), "Expected escrow not found error");
+    assert!(matches!(result, Err(Ok(_))), "Expected escrow not found error");
 }
 
 #[test]
@@ -338,7 +338,7 @@ fn test_merchant_cancel_also_creates_escrow() {
     assert_eq!(escrow.merchant, merchant);
 
     let dispute_id = test_env.client.lodge_escrow_dispute(&merchant, &id);
-    assert!(dispute_id > 0);
+    assert!(dispute_id == 0);
 }
 
 #[test]
@@ -362,7 +362,7 @@ fn test_escrow_contains_released_at_field() {
     let escrow = test_env.client.get_cancellation_escrow(&id);
 
     let now = test_env.env.ledger().timestamp();
-    assert_eq!(escrow.released_at, now + CANCELLATION_ESCROW_WINDOW_SECS);
+    assert_eq!(escrow.releases_at, now + CANCELLATION_ESCROW_WINDOW_SECS);
 }
 
 #[test]

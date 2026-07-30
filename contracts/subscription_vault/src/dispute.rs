@@ -358,6 +358,18 @@ pub fn do_claim_cancellation_escrow(
 ) -> Result<i128, Error> {
     subscriber.require_auth();
 
+    // Reject if a dispute is already active for this subscription —
+    // check BEFORE reading the escrow so that a dispute converted from
+    // the escrow (which removes the escrow record) still returns
+    // DisputeAlreadyOpen rather than EscrowNotFound.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
     let escrow: CancellationEscrow = env
         .storage()
         .persistent()
@@ -369,17 +381,8 @@ pub fn do_claim_cancellation_escrow(
     }
 
     let now = env.ledger().timestamp();
-    if now < escrow.released_at {
+    if now <= escrow.releases_at {
         return Err(Error::EscrowNotReleased);
-    }
-
-    // Reject if a dispute is already active for this subscription.
-    if env
-        .storage()
-        .instance()
-        .has(&DataKey::SubscriptionDispute(subscription_id))
-    {
-        return Err(Error::DisputeAlreadyOpen);
     }
 
     // Effects: remove escrow before external transfer (CEI).
@@ -437,6 +440,18 @@ pub fn do_lodge_escrow_dispute(
 ) -> Result<u64, Error> {
     merchant.require_auth();
 
+    // Reject if a dispute is already active for this subscription —
+    // check BEFORE reading the escrow so that a second dispute call
+    // (after the first already removed the escrow) still returns
+    // DisputeAlreadyOpen rather than EscrowNotFound.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
     let escrow: CancellationEscrow = env
         .storage()
         .persistent()
@@ -448,17 +463,8 @@ pub fn do_lodge_escrow_dispute(
     }
 
     let now = env.ledger().timestamp();
-    if now >= escrow.released_at {
+    if now >= escrow.releases_at {
         return Err(Error::EscrowNotReleased);
-    }
-
-    // Reject if a dispute is already active for this subscription.
-    if env
-        .storage()
-        .instance()
-        .has(&DataKey::SubscriptionDispute(subscription_id))
-    {
-        return Err(Error::DisputeAlreadyOpen);
     }
 
     // Effects: remove cancellation escrow, create dispute.
