@@ -142,11 +142,42 @@ This produces the WASM under `target/` for deployment to Stellar (e.g. testnet/m
 
 ### 6. Install Git hooks
 
-Set up the repository pre-commit hook to enforce code formatting (`cargo fmt`) and linting (`cargo clippy`) on staged files prior to committing:
+Set up the repository pre-commit hook to enforce code formatting and linting
+on staged files before every commit:
 
 ```bash
 ./scripts/install_git_hooks.sh
 ```
+
+The installer is **idempotent** — safe to run repeatedly. It:
+
+1. Sets the executable bit on all scripts under `.githooks/`.
+2. Runs `git config core.hooksPath .githooks` (no global config changes).
+3. Smoke-tests the hook to confirm it exits 0.
+
+After installation, every `git commit` automatically runs:
+
+| Check | Command | Scope |
+|-------|---------|-------|
+| Formatting | `cargo fmt --check` | staged `.rs` files only |
+| Linting | `cargo clippy --all-targets -- -D warnings` | full workspace |
+
+**Bypass options:**
+
+```bash
+git commit --no-verify              # standard Git flag, no logging
+SKIP_PRE_COMMIT=1 git commit        # env-var bypass, prints a warning to stderr
+```
+
+**Verify the installation is correct without modifying anything:**
+
+```bash
+./scripts/install_git_hooks.sh --check
+```
+
+> Note: `cargo clippy` always runs against the full workspace (not only staged files)
+> because clippy operates at crate granularity. A change in one file can surface
+> a lint in a test that imports it, so the broader scope is intentional.
 
 ---
 
@@ -158,6 +189,7 @@ Set up the repository pre-commit hook to enforce code formatting (`cargo fmt`) a
 | Run tests | `cargo test` |
 | Build contract WASM | `soroban contract build` |
 | Install Git hooks | `./scripts/install_git_hooks.sh` |
+| Verify hook installation | `./scripts/install_git_hooks.sh --check` |
 | One-command local deploy | `./scripts/deploy_local.sh` |
 | Run with Soroban CLI (e.g. testnet) | See [Stellar docs](https://developers.stellar.org/docs/tools/soroban-cli) for `soroban contract deploy` and `invoke`. |
 
