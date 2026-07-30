@@ -608,27 +608,27 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
-    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
-    BatchWithdrawResult,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
+    BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
-    BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, BulkSubscriptionResult,
-    CapInfo, Coupon, DisputeEscrowLedger,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FeeConvertedEvent, FeeTokenConfiguredEvent, FullSnapshotPage,
-    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
-    ReferralAttributedEvent,
-    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantPausedEvent, MerchantUnpausedEvent,
-    MerchantTagsUpdatedEvent, TagAllowlistUpdatedEvent,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    BulkSubscriptionResult, CapInfo, ChargeExecutionResult, ContractSnapshot, Coupon,
+    DataKey, DisputeEscrowLedger, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent,
+    FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
+    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
-    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleKind, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
-    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason, ScheduledPayoutEvent,
-    SchemaMigratedEvent, SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleLivenessEvent,
+    OracleConfig, OracleKind, OraclePrice, OperatorRemovedEvent, OperatorSetEvent,
+    PartialRefundEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest, PrepaidQueryResult,
+    ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason,
+    ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SplitChargeEvent, SplitPayees,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
@@ -650,15 +650,15 @@ pub use types::{
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SplitPayees, SplitChargeEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, TokenEarnings, TokenLiabilities,
+    SubscriptionStatus, SubscriptionSummary,
+    TagAllowlistUpdatedEvent, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    CANCELLATION_ESCROW_WINDOW_SECS, DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS, MAX_METADATA_KEYS,
-    MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE,
-    OP_CHARGE, OP_REFUND, OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO,
-    SUB_TTL_THRESHOLD,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS,
+    MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND, OP_WITHDRAW,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -824,6 +824,28 @@ impl SubscriptionVault {
         nonce: u64,
     ) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
+    }
+
+    /// Propose a new admin address. The proposed admin must call `claim_admin_role`
+    /// within 7 days to complete the rotation.
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim a pending admin proposal. Must be called by the proposed address
+    /// before the 7-day window expires.
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal. Admin only.
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Return the active admin proposal, if one exists.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
     }
 
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
@@ -3511,7 +3533,7 @@ mod test_subscription_transfer;
 mod test_merchant_whitelist;
 
 #[cfg(test)]
-mod test_subscription_transfer;
+mod test_split_billing;
 
 #[cfg(test)]
 mod test_split_billing;
