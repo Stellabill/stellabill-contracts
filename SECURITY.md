@@ -29,7 +29,51 @@ If you do not receive an acknowledgement within 24 hours, or if your email bounc
 
 ---
 
-## 2. Response SLAs
+## 2. Automated Security Checks
+
+All pull requests and commits are automatically scanned for security issues through CI workflows.
+
+### cargo audit
+Checks all dependencies against the [RustSec Advisory Database](https://rustsec.org/):
+- **Fails** on any known vulnerability (RUSTSEC advisories)
+- **Fails** on yanked crates (crates removed from crates.io)
+- **Warns** on unmaintained crates
+
+### cargo deny
+Enforces dependency policies defined in `deny.toml`:
+- **Licenses**: Only approved open-source licenses allowed (see `deny.toml` for the allow-list)
+- **Sources**: Only crates from crates.io and explicitly approved git sources (e.g., Soroban SDK repos)
+- **Bans**: Prevents wildcard dependencies; warns on duplicate dependency versions
+- **Advisories**: Respects the same advisory database as cargo audit
+
+Both tools run automatically in the `security-audit` CI job before merging any changes to main.
+
+### Handling Security Advisories
+
+If a new advisory causes CI to fail:
+
+1. **Check the advisory**: Review the RustSec advisory on [rustsec.org](https://rustsec.org/)
+2. **Update the affected dependency** if a fix is available
+3. **If no fix exists**, add an ignore entry to `deny.toml` with a clear justification:
+   ```toml
+   [advisories]
+   ignore = [
+       { id = "RUSTSEC-XXXX-XXXX", reason = "Not applicable because..." }
+   ]
+   ```
+4. **Open a tracking issue** to resolve the advisory once a patch is available
+
+### Adding New Dependencies
+
+When adding a new dependency, ensure:
+1. Its license is in the `allow` list in `deny.toml`
+2. It comes from crates.io (or an explicitly allowed git source in `deny.toml`)
+3. `cargo audit --deny warnings` passes locally
+4. `cargo deny check` passes locally
+
+---
+
+## 3. Response SLAs
 
 We are committed to coordinating with security researchers to address vulnerabilities in a professional and timely manner. We adhere to the following Service Level Agreements (SLAs):
 - **Initial Acknowledgement**: Within 24 hours of receiving the report.
