@@ -789,6 +789,11 @@ pub fn do_deposit_funds(
         return Err(Error::MerchantPaused);
     }
 
+    // Block deposits to subscriptions whose merchant is in vacation mode.
+    if crate::merchant::is_merchant_in_vacation(env, &sub.merchant, env.ledger().timestamp()) {
+        return Err(Error::VacationActive);
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
@@ -1859,6 +1864,15 @@ fn bulk_deposit_one(
         };
     }
 
+    // Block deposits to subscriptions whose merchant is in vacation mode.
+    if crate::merchant::is_merchant_in_vacation(env, &sub.merchant, env.ledger().timestamp()) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: Error::VacationActive.to_code(),
+        };
+    }
+
     crate::blocklist::require_not_blocklisted(env, &sub.merchant).unwrap_or(());
 
     let now = env.ledger().timestamp();
@@ -2053,6 +2067,9 @@ pub fn do_charge_one_off(
             crate::blocklist::require_not_blocklisted(env, &payee)?;
             if crate::merchant::get_merchant_paused(env, payee.clone()) {
                 return Err(Error::MerchantPaused);
+            }
+            if crate::merchant::is_merchant_in_vacation(env, &payee, env.ledger().timestamp()) {
+                return Err(Error::VacationActive);
             }
         }
     }

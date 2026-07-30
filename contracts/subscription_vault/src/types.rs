@@ -254,6 +254,8 @@ pub enum DataKey {
     SplitPayees(u32),
     /// Buyout premium in basis points for grace-period recovery. Discriminant 67.
     BuyoutPremiumBps,
+    /// Merchant vacation window storing (start_ts, end_ts). Discriminant 62.
+    MerchantVacation(Address),
     /// Coupon code bound to a subscription (persistent). Discriminant 68.
     SubCoupon(u32),
     /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
@@ -341,33 +343,34 @@ impl DataKey {
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
             DataKey::PendingTreasuryChange => 54,
-            DataKey::TransferIntent(_) => 55,
-            DataKey::Kyc(_) => 56,
-            DataKey::Coupon(_) => 57,
-            DataKey::CouponRedemptions(_) => 58,
-            DataKey::Credential(_) => 59,
-            DataKey::AdminConfigLastChangedAt(_) => 60,
-            DataKey::SubscriberCreateCap => 61,
-            DataKey::SubscriberCreateWindow(_) => 62,
-            DataKey::MerchantWhitelistMode => 63,
-            DataKey::MerchantApproved(_) => 64,
-            DataKey::ChargeSalt(_) => 65,
-            DataKey::ChargeFailureCounter(_) => 66,
-            DataKey::AutoPauseThreshold => 67,
-            DataKey::BuyoutPremiumBps => 68,
-            DataKey::SubCoupon(_) => 69,
-            DataKey::MerchantMultiSig(_) => 70,
-            DataKey::SubscriberActiveCount(_) => 71,
-            DataKey::SubscriberActiveCapOverride(_) => 72,
-            DataKey::TagAllowlist => 73,
-            DataKey::MerchantTags(_) => 74,
-            DataKey::FeeToken => 75,
-            DataKey::CancellationEscrow(_) => 76,
-            DataKey::MerchantFeeBps(_) => 77,
-            DataKey::OraclePriceHistoryMeta(_) => 78,
-            DataKey::OraclePriceHistoryEntry(_, _) => 79,
-            DataKey::DelegatedPayerGrant(_, _) => 80,
-            DataKey::SplitPayees(_) => 81,
+            DataKey::TransferIntent(_) => 54,
+            DataKey::Kyc(_) => 55,
+            DataKey::Coupon(_) => 56,
+            DataKey::CouponRedemptions(_) => 57,
+            DataKey::Credential(_) => 58,
+            DataKey::SplitPayees(_) => 59,
+            DataKey::BuyoutPremiumBps => 60,
+            DataKey::MerchantVacation(_) => 62,
+            DataKey::AdminConfigLastChangedAt(_) => 59,
+            DataKey::SubscriberCreateCap => 60,
+            DataKey::SubscriberCreateWindow(_) => 61,
+            DataKey::MerchantWhitelistMode => 62,
+            DataKey::MerchantApproved(_) => 63,
+            DataKey::ChargeSalt(_) => 64,
+            DataKey::ChargeFailureCounter(_) => 65,
+            DataKey::AutoPauseThreshold => 66,
+            DataKey::BuyoutPremiumBps => 67,
+            DataKey::SubCoupon(_) => 68,
+            DataKey::MerchantMultiSig(_) => 69,
+            DataKey::SubscriberActiveCount(_) => 70,
+            DataKey::SubscriberActiveCapOverride(_) => 71,
+            DataKey::TagAllowlist => 72,
+            DataKey::MerchantTags(_) => 73,
+            DataKey::FeeToken => 74,
+            DataKey::CancellationEscrow(_) => 75,
+            DataKey::MerchantFeeBps(_) => 76,
+            DataKey::OraclePriceHistoryMeta(_) => 77,
+            DataKey::OraclePriceHistoryEntry(_, _) => 78,
         }
     }
 
@@ -417,24 +420,28 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
-    55, // TransferIntent(u32)
-    61, // SubscriberCreateCap
-    62, // SubscriberCreateWindow(Address)
-    63, // MerchantWhitelistMode
-    64, // MerchantApproved(Address)
-    65, // ChargeSalt(u32)
-    66, // ChargeFailureCounter(u32)
-    67, // AutoPauseThreshold
-    68, // BuyoutPremiumBps
-    70, // MerchantMultiSig(Address)
-    71, // SubscriberActiveCount(Address)
-    72, // SubscriberActiveCapOverride(Address)
-    73, // TagAllowlist
-    74, // MerchantTags(Address)
-    75, // FeeToken
-    77, // MerchantFeeBps(Address)
-    78, // OraclePriceHistoryMeta(Address)
-    79, // OraclePriceHistoryEntry(Address, u32)
+    54, // TransferIntent(u32)
+    59, // BuyoutPremiumBps
+    61, // MerchantMultiSig(Address)
+    62, // MerchantVacation(Address)
+    59, // AdminConfigLastChangedAt(BytesN<32>)
+    60, // SubscriberCreateCap
+    61, // SubscriberCreateWindow(Address)
+    62, // MerchantWhitelistMode
+    63, // MerchantApproved(Address)
+    64, // ChargeSalt(u32)
+    65, // ChargeFailureCounter(u32)
+    66, // AutoPauseThreshold
+    67, // BuyoutPremiumBps
+    69, // MerchantMultiSig(Address)
+    70, // SubscriberActiveCount(Address)
+    71, // SubscriberActiveCapOverride(Address)
+    72, // TagAllowlist
+    73, // MerchantTags(Address)
+    74, // FeeToken
+    76, // MerchantFeeBps(Address)
+    77, // OraclePriceHistoryMeta(Address)
+    78, // OraclePriceHistoryEntry(Address, u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -919,6 +926,8 @@ pub enum Error {
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4013,
     CooldownActive = 4012,
+    /// Merchant vacation mode is active — charges blocked during vacation window.
+    VacationActive = 4014,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -2536,6 +2545,17 @@ pub struct MerchantMultiSigConfig {
     pub threshold: u32,
 }
 
+/// Merchant vacation window: when active (current time within [start_ts, end_ts]),
+/// all charges to this merchant's subscriptions are blocked with `Error::VacationActive`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantVacation {
+    /// Start of the vacation window (ledger timestamp, seconds).
+    pub start_ts: u64,
+    /// End of the vacation window (ledger timestamp, seconds). Must be > start_ts.
+    pub end_ts: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantPausedEvent {
@@ -2547,6 +2567,26 @@ pub struct MerchantPausedEvent {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantUnpausedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant enters vacation mode, auto-pausing all subscriptions.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VacationStartedEvent {
+    pub merchant: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a merchant exits vacation mode before the scheduled end time.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VacationEndedEvent {
     pub merchant: Address,
     pub timestamp: u64,
     pub schema_version: u32,

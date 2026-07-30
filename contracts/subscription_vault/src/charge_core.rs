@@ -184,6 +184,17 @@ pub fn charge_one(
         ));
     }
 
+    // Merchant vacation guard — block charges during vacation window
+    if crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now) {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::VacationActive,
+            0,
+            now,
+        ));
+    }
+
     crate::blocklist::require_not_blocklisted(env, &sub.subscriber)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)
@@ -199,6 +210,15 @@ pub fn charge_one(
                     env,
                     subscription_id,
                     Error::MerchantPaused,
+                    0,
+                    now,
+                ));
+            }
+            if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
+                return Err(charge_fail(
+                    env,
+                    subscription_id,
+                    Error::VacationActive,
                     0,
                     now,
                 ));
@@ -786,6 +806,18 @@ pub fn charge_usage_one(
         ));
     }
 
+    // Merchant vacation guard — block charges during vacation window
+    let now = env.ledger().timestamp();
+    if crate::merchant::is_merchant_in_vacation(env, &merchant, now) {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::VacationActive,
+            0,
+            now,
+        ));
+    }
+
     crate::blocklist::require_not_blocklisted(env, &sub.subscriber)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
     crate::blocklist::require_not_blocklisted(env, &sub.merchant)
@@ -805,10 +837,18 @@ pub fn charge_usage_one(
                     env.ledger().timestamp(),
                 ));
             }
+            if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
+                return Err(charge_fail(
+                    env,
+                    subscription_id,
+                    Error::VacationActive,
+                    0,
+                    now,
+                ));
+            }
         }
     }
 
-    let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
