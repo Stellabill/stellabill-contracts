@@ -5,6 +5,8 @@
 //! change causes cost to exceed the baseline by more than `tolerance_pct`,
 //! acting as a canary for accidental storage churn in the withdrawal path.
 //!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+//!
 //! # Scenarios
 //! 1. **standard** — single-token withdraw of a full balance.
 //! 2. **multi_token** — merchant has earnings in two tokens; withdraw each.

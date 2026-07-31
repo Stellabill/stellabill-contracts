@@ -1,3 +1,7 @@
+//! Storage TTL extension cost benchmark.
+//!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+
 #![cfg(test)]
 
 use soroban_sdk::{testutils::{EnvTestString, Events}, Env, Address, symbol_short, String};

@@ -90,3 +90,8 @@ This convention is enforced through:
 - Integration tests that verify event ordering
 
 When adding new code that emits events, always ensure events are emitted after all state mutations are complete.
+
+## Benchmarking & Performance Guidelines
+
+All gas and storage benchmarks must comply with the repository's performance baselines. For details on how gas/storage metrics are measured, CI hardware assumptions, regression tolerance, and local reproducibility, see [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md).
+

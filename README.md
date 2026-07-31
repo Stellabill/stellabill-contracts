@@ -274,7 +274,9 @@ stellabill-contracts/
 │   ├── batch_charge.md
 │   ├── billing_intervals.md
 │   ├── topup_estimation.md
-│   └── safe_math.md
+│   ├── safe_math.md
+│   └── benchmarks/
+│       └── methodology.md     # Gas & storage benchmark methodology & hardware baseline
 └── contracts/
     └── subscription_vault/    # Prepaid subscription vault contract
         ├── Cargo.toml

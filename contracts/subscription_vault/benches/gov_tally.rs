@@ -7,6 +7,8 @@
 //! each back to the current guardian weight set, yielding O(voters) cost
 //! that is dominated by persistent-storage reads and Soroban Map lookups.
 //!
+//! Canonical methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+//!
 //! # Scenarios
 //! 1. **All-yes** — every guardian votes yes; maximum tally work.
 //! 2. **All-no** — every guardian votes no; exercises the `else` branch.

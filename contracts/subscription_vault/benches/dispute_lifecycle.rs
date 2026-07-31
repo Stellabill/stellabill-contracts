@@ -11,6 +11,7 @@
 //! Provides a stable regression signal on dispute-path performance.
 //!
 //! # Bench Execution & Threshold Enforcement
+//! - Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
 //! - Employs `env.cost_estimate()` to capture CPU instructions and ledger read/write
 //!   entries around each phase.
 //! - Persists baseline budgets in `benches/fixtures/dispute_lifecycle_budget.json`.

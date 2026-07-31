@@ -1,5 +1,7 @@
 //! Ignored 100k-subscription soak tests for query budget guardrails.
 //!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+//!
 //! Run with:
 //! `cargo test --release -p subscription_vault --test soak_100k soak_100k -- --ignored --nocapture`
 

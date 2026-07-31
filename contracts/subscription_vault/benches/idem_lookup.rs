@@ -19,6 +19,8 @@
 //! head / middle / tail is within `TOLERANCE_PCT` percent of the minimum,
 //! confirming the O(1)-in-position property.
 //!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+//!
 //! # Security notes
 //! * Domain-scoping (`DOMAIN_DEPOSIT_FUNDS`) is verified transitively: a key
 //!   inserted via `deposit_funds` is *not* replayable via `charge_subscription`

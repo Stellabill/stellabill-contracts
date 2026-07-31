@@ -1,3 +1,7 @@
+//! Query performance and scan-depth budget tests.
+//!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+
 #![cfg(test)]
 
 use crate::{

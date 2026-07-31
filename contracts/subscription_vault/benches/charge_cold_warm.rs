@@ -8,6 +8,7 @@
 //! Provides a stable regression signal on hot-path performance.
 //!
 //! # Bench Execution & Threshold Enforcement
+//! - Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
 //! - Employs `env.cost_estimate()` to capture CPU instructions and ledger read/write entries around each variant.
 //! - Persists baseline budgets in `benches/fixtures/charge_cold_warm_budget.json`.
 //! - Fails the benchmark if the performance delta or variance exceeds 10%.

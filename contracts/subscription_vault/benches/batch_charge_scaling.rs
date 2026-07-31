@@ -1,3 +1,7 @@
+//! Batch charge execution scaling benchmark.
+//!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+
 #![cfg(test)]
 
 use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, Vec};

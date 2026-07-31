@@ -8,6 +8,8 @@
 //! Run with:
 //!   cargo test -p subscription_vault --test gas_budget -- --nocapture
 //!
+//! Benchmark methodology reference: [docs/benchmarks/methodology.md](../../docs/benchmarks/methodology.md)
+//!
 //! CI prints `[Budget]` lines so the performance-budgets job can graph deltas.
 //!
 //! Security notes
