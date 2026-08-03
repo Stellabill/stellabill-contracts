@@ -2,10 +2,10 @@
 //!
 //! This module groups every entrypoint in [`crate::SubscriptionVault`] that
 //! requires the stored admin address or affects global protocol configuration:
-//! initialisation, rotation, operator management, emergency stop, token
-//! allowlists, protocol fees, billing retention, migration/export, oracle
-//! configuration, governance proposals, the blocklist, and snapshot
-//! restore/export.
+//! initialisation, rotation, two-step admin proposal, operator management,
+//! emergency stop, token allowlists, protocol fees, billing retention,
+//! migration/export, oracle configuration, governance proposals, the blocklist,
+//! and snapshot restore/export.
 //!
 //! # Navigation
 //!
@@ -13,6 +13,12 @@
 //! `#[contractimpl]` block (required by the Soroban SDK). This module re-exports
 //! the *inner delegate functions* they call so that IDE navigation and
 //! `cargo doc` can surface the grouped API in one place.
+//!
+//! # ABI Stability
+//!
+//! No entrypoints are defined here. All `pub fn` symbols on [`crate::SubscriptionVault`]
+//! live in `lib.rs`. Adding or removing an import in this file has **zero effect**
+//! on the compiled ABI; only changes to the `#[contractimpl]` block in `lib.rs` do.
 //!
 //! # Entrypoint Groups
 //!
@@ -26,6 +32,16 @@
 //! | `get_admin_nonce` | [`crate::nonce::get_nonce`] |
 //! | `rotate_admin` | [`crate::admin::do_rotate_admin`] |
 //! | `rotate_merchant_address` | [`crate::merchant::do_rotate_merchant_address`] |
+//! | `set_grace_period` | [`crate::admin::do_set_grace_period`] |
+//! | `get_grace_period` | [`crate::admin::get_grace_period`] |
+//!
+//! ## Two-step Admin Proposal
+//! | Entrypoint | Delegate |
+//! |---|---|
+//! | `propose_admin` | [`crate::admin::do_propose_admin`] |
+//! | `claim_admin_role` | [`crate::admin::do_claim_admin_role`] |
+//! | `cancel_admin_proposal` | [`crate::admin::do_cancel_admin_proposal`] |
+//! | `get_admin_proposal` | [`crate::admin::get_admin_proposal`] |
 //!
 //! ## Operator Management
 //! | Entrypoint | Delegate |
@@ -65,6 +81,19 @@
 //! |---|---|
 //! | `set_protocol_fee` | [`crate::admin::set_protocol_fee`] |
 //! | `get_protocol_fee_bps` | [`crate::admin::get_protocol_fee_bps`] |
+//! | `set_fee_token` | [`crate::admin::set_fee_token`] |
+//! | `get_fee_token` | [`crate::admin::get_fee_token`] |
+//! | `queue_treasury_change` | [`crate::admin::queue_treasury_change`] |
+//! | `execute_treasury_change` | [`crate::admin::execute_treasury_change`] |
+//! | `cancel_treasury_change` | [`crate::admin::cancel_treasury_change`] |
+//!
+//! ## Auto-pause & Subscriber Create Cap
+//! | Entrypoint | Delegate |
+//! |---|---|
+//! | `set_auto_pause_threshold` | [`crate::admin::do_set_auto_pause_threshold`] |
+//! | `get_auto_pause_threshold` | [`crate::admin::get_auto_pause_threshold`] |
+//! | `set_subscriber_create_cap` | [`crate::admin::do_set_subscriber_create_cap`] |
+//! | `get_subscriber_create_cap` | [`crate::admin::get_subscriber_create_cap`] |
 //!
 //! ## Billing Retention
 //! | Entrypoint | Delegate |
@@ -114,23 +143,25 @@
 //! | `get_blocklist_entry` | [`crate::blocklist::get_blocklist_entry`] |
 //! | `is_blocklisted` | [`crate::blocklist::is_blocklisted`] |
 //!
-//! ## Misc Read-only
+//! ## Misc / Version
 //! | Entrypoint | Notes |
 //! |---|---|
 //! | `version` | returns hard-coded `1u32` |
 //! | `get_subscription_count` | reads `DataKey::NextId` |
-//! | `set_subscriber_create_cap` | [`crate::admin::do_set_subscriber_create_cap`] |
-//! | `get_subscriber_create_cap` | [`crate::admin::get_subscriber_create_cap`] |
+//! | `get_schema_version` | [`crate::admin::get_schema_version`] |
 
 // Re-export delegate functions so IDE navigation and `cargo doc` surface them
 // under this feature group. No new ABI symbols are introduced; all public
 // contract entrypoints remain in `lib.rs` under `#[contractimpl]`.
 
 pub use crate::admin::{
-    add_accepted_token, do_batch_charge, do_get_admin, do_init, do_migrate,
-    do_recover_stranded_funds, do_rotate_admin, do_set_min_topup, do_set_subscriber_create_cap,
-    get_fee_token, get_min_topup, get_protocol_fee_bps, get_subscriber_create_cap,
-    list_accepted_tokens, migrate_config_to_persistent, remove_accepted_token, set_fee_token,
+    add_accepted_token, cancel_treasury_change, do_batch_charge, do_cancel_admin_proposal,
+    do_claim_admin_role, do_get_admin, do_init, do_migrate, do_propose_admin,
+    do_recover_stranded_funds, do_rotate_admin, do_set_auto_pause_threshold, do_set_grace_period,
+    do_set_min_topup, do_set_subscriber_create_cap, execute_treasury_change, get_admin_proposal,
+    get_auto_pause_threshold, get_fee_token, get_grace_period, get_min_topup,
+    get_protocol_fee_bps, get_schema_version, get_subscriber_create_cap, list_accepted_tokens,
+    migrate_config_to_persistent, queue_treasury_change, remove_accepted_token, set_fee_token,
     set_protocol_fee,
 };
 pub use crate::blocklist::{

@@ -93,11 +93,6 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
     let label_bytes = Bytes::from_array(env, key_label.as_bytes());
-    env.crypto().sha256(&label_bytes)
-    let mut label_bytes = soroban_sdk::Bytes::new(env);
-    for &b in key_label.as_bytes() {
-        label_bytes.push_back(b);
-    }
     env.crypto().sha256(&label_bytes).into()
 }
 
@@ -762,7 +757,11 @@ fn proposal_key(env: &Env) -> Symbol {
 }
 
 pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-    require_admin_auth(env, &current_admin)?;
+    current_admin.require_auth();
+    let stored = require_admin(env)?;
+    if current_admin != stored {
+        return Err(Error::Unauthorized);
+    }
 
     if new_admin == env.current_contract_address() {
         return Err(Error::InvalidNewAdmin);
@@ -814,7 +813,7 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
     let old_admin: Address = require_admin(env)?;
 
     storage.remove(&proposal_key(env));
-    storage.set(&Symbol::new(env, "admin"), &claimant);
+    write_config(env, &DataKey::Admin, &claimant);
 
     env.events().publish(
         (Symbol::new(env, "admin_proposal_claimed"),),
@@ -828,7 +827,11 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
 }
 
 pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> {
-    require_admin_auth(env, &admin)?;
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(Error::Unauthorized);
+    }
 
     let storage = env.storage().instance();
     if !storage.has(&proposal_key(env)) {

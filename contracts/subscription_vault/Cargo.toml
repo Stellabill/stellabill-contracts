@@ -59,6 +59,10 @@ name = "nonce_verification"
 path = "verification/nonce_verification.rs"
 
 [[test]]
+name = "cancel_refund"
+path = "kani/cancel_refund.rs"
+
+[[test]]
 name = "channel_account_auth"
 path = "tests/channel_account_auth.rs"
 
@@ -81,4 +85,8 @@ path = "benches/withdraw_fixed_cost.rs"
 [[test]]
 name = "gov_tally"
 path = "benches/gov_tally.rs"
+
+[[test]]
+name = "abi_hash_regression"
+path = "tests/abi_hash_regression.rs"
 

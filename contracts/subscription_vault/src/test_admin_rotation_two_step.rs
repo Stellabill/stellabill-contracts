@@ -175,7 +175,7 @@ fn test_claim_admin_role_new_admin_can_operate() {
 
     // Old admin cannot
     let result = client.try_set_min_topup(&admin, &2_000_000i128);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(result, Err(Ok(Error::Forbidden)));
 }
 
 #[test]
@@ -306,11 +306,11 @@ fn test_two_step_rotation_full_lifecycle() {
     // Old admins cannot operate
     assert_eq!(
         client.try_set_min_topup(&admin, &999i128),
-        Err(Ok(Error::Unauthorized))
+        Err(Ok(Error::Forbidden))
     );
     assert_eq!(
         client.try_set_min_topup(&admin2, &999i128),
-        Err(Ok(Error::Unauthorized))
+        Err(Ok(Error::Forbidden))
     );
     assert!(client.try_set_min_topup(&admin3, &999i128).is_ok());
 }

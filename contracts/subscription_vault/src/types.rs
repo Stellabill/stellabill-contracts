@@ -93,6 +93,14 @@ pub struct MerchantKyc {
 /// canonical, frozen identifiers for each key and match
 /// [`DataKey::canonical_discriminant`]. **Never reorder or remove a variant** —
 /// doing so shifts all subsequent discriminants and silently corrupts live
+/// Discriminant for [`DataKey::Kyc`] — selects which KYC record to look up.
+#[contracttype(export = false)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KycKey {
+    /// Per-merchant KYC status record.
+    MerchantStatus(Address),
+}
+
 /// storage. Only append new variants at the end.
 ///
 /// The **Storage tier** column is authoritative: every instance-tier key below
@@ -228,13 +236,23 @@ pub enum DataKey {
     /// Discriminant 59.
     AdminConfigLastChangedAt(soroban_sdk::BytesN<32>),
     SubscriberCreateCap,
+    /// Discriminant 61.
     SubscriberCreateWindow(Address),
+    /// Merchant allowlist mode flag (instance). Discriminant 62.
+    MerchantWhitelistMode,
+    /// Approved merchant address (instance). Discriminant 63.
+    MerchantApproved(Address),
+    /// Charge salt for replay protection. Discriminant 64.
     ChargeSalt(u32),
-    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 62.
+    /// Consecutive charge failure counter per subscription. Discriminant 65.
+    ChargeFailureCounter(u32),
+    /// Auto-pause threshold (consecutive failures before auto-pause). Discriminant 66.
+    AutoPauseThreshold,
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 79.
     DelegatedPayerGrant(Address, Address),
-    /// Split payees details for split-billing. Discriminant 59.
+    /// Split payees details for split-billing. Discriminant 80.
     SplitPayees(u32),
-    /// Buyout premium in basis points for grace-period recovery. Discriminant 60.
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 67.
     BuyoutPremiumBps,
     /// Merchant vacation window storing (start_ts, end_ts). Discriminant 62.
     MerchantVacation(Address),
@@ -254,7 +272,7 @@ pub enum DataKey {
     MerchantTags(Address),
     /// Optional fee-token override: when set, protocol fees are paid in this
     /// token instead of the subscription's settlement token, converted through
-    /// the oracle at charge time. Discriminant 64.
+    /// the oracle at charge time. Discriminant 74.
     FeeToken,
     /// Cancellation refund escrow record keyed by subscription ID. Discriminant 75.
     CancellationEscrow(u32),

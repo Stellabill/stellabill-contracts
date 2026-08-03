@@ -1113,6 +1113,16 @@ pub fn do_cancel_subscription(
 ///
 /// `authorizer` is recorded verbatim in the emitted event (the admin/operator on
 /// the bulk path, or the subscriber/merchant on the single path).
+/// Returns the token amount to place into cancellation escrow for a subscription
+/// with the given `prepaid_balance`.
+///
+/// The refund is exactly the full prepaid balance — no fee, no deduction. Extracted
+/// as a pure function so the kani harness can prove the bound without Soroban host
+/// dependencies.
+pub fn compute_cancel_refund(prepaid_balance: i128) -> i128 {
+    prepaid_balance
+}
+
 fn apply_cancellation(
     env: &Env,
     subscription_id: u32,
@@ -1128,7 +1138,7 @@ fn apply_cancellation(
     if was_active {
         decrement_subscriber_active_count(env, &sub.subscriber);
     }
-    let refund_amount = sub.prepaid_balance;
+    let refund_amount = compute_cancel_refund(sub.prepaid_balance);
 
     // EFFECTS: zero balance before escrow (CEI pattern).
     sub.prepaid_balance = 0;
