@@ -190,20 +190,60 @@ or testing.
 
 ## Cross-Token Fee Routing & Fee-Token Override
 
-The current contract routes all fees in the **same token** as the charge — the
-subscription's settlement token.  If a subscription charges in USDC, the
-protocol fee is also credited in USDC.
-
-There is **no fee-token override** mechanism in the current version.  A future
-upgrade may add a per-merchant `fee_token` address that allows the treasury to
-receive fees in a different token from the settlement token.  In that design:
+By default every fee is routed in the **same token** as the charge — the
+subscription's settlement token.  The admin may, however, configure a global
+**fee-token override** (`set_fee_token`) so the treasury receives the protocol
+fee in a different token from the settlement token.
 
 ```
 gross (settlement token)      →  merchant receives gross − fee
-fee   (converted at oracle)   →  treasury receives fee value in fee_token
+fee (converted at oracle)     →  treasury receives fee value in fee_token
 ```
 
-Until that feature lands, all routing uses a single settlement denomination.
+### When the override applies
+
+Conversion is attempted **only** when all of the following hold:
+
+1. A fee-token override is configured **and** differs from the settlement token.
+2. The oracle is enabled and has an address configured.
+3. The oracle price query for `settlement_token → fee_token` succeeds.
+4. The converted amount is **greater than zero** (precision-loss guard).
+
+Otherwise — no override, override equal to the settlement token, oracle
+unavailable, or a failed/zero-rounding price query — the fee is credited in the
+original settlement token and no conversion event is emitted.
+
+### Conversion math
+
+```
+converted_fee = floor( fee_amount × price / PRICE_SCALE )
+```
+
+`price` is the oracle quote in **quote-per-base** scaled by `10^7`
+(`PRICE_SCALE`).  The treasury is credited `converted_fee` of `fee_token`.
+
+### Example 8: Cross-token conversion (fee-token override)
+
+**Setup:** subscription charges **100 USDC** (6 decimals) with `fee_bps = 250`;
+`set_fee_token(XLM)`; oracle price `1 USDC = 3.50 XLM` (`price = 35_000_000`
+at `PRICE_SCALE = 10^7`).
+
+| Step | Calculation | Result |
+|------|-------------|--------|
+| Gross (USDC raw) | | `100_000_000` |
+| Fee (USDC raw) | `100_000_000 × 250 / 10_000` | `2_500_000` |
+| Merchant net (USDC) | `100_000_000 − 2_500_000` | `97_500_000` |
+| Converted fee (XLM raw) | `2_500_000 × 35_000_000 / 10_000_000` | `8_750_000` |
+| Treasury credit | in fee token (XLM) | `8_750_000` |
+
+The merchant net is **always** credited in the settlement token; only the
+treasury's fee leg may be re-denominated.
+
+### Example 9: Override disabled or oracle down
+
+Same `100 USDC` / `fee_bps = 250` but with no fee-token override (or an
+unavailable oracle).  The fee `2_500_000` is credited to the treasury in USDC
+and **no** `FeeConvertedEvent` is emitted.
 
 ---
 
@@ -223,16 +263,46 @@ on-chain amounts so indexers can reconstruct the split.
 | `treasury`       | `Address` | Treasury address receiving the fee   |
 | `timestamp`      | `u64`     | Ledger timestamp                     |
 
+### `FeeConvertedEvent`
+
+Emitted on every charge where a cross-token fee-token override was applied,
+recording the exact on-chain conversion.
+
+| Field                    | Type      | Description                                  |
+|--------------------------|-----------|----------------------------------------------|
+| `subscription_id`        | `u32`     | Subscription that was charged                |
+| `source_token`           | `Address` | Settlement token the fee was withheld in     |
+| `target_token`           | `Address` | Fee token the treasury was credited with     |
+| `original_fee_amount`    | `i128`    | Fee amount in the settlement token           |
+| `converted_fee_amount`   | `i128`    | Fee amount credited in the fee token         |
+| `rate`                   | `u128`    | Oracle quote-per-base price scaled by `10^7` |
+| `timestamp`              | `u64`     | Ledger timestamp                             |
+
 ### `ProtocolFeeConfiguredEvent`
 
 Emitted when the admin calls `set_protocol_fee`.
 
-| Field       | Type      | Description              |
-|-------------|-----------|--------------------------|
-| `admin`     | `Address` | Admin who changed the fee |
-| `treasury`  | `Address` | Fee recipient address    |
-| `fee_bps`   | `u32`     | Fee in basis points      |
-| `timestamp` | `u64`     | Ledger timestamp         |
+| Field       | Type          | Description              |
+|-------------|---------------|--------------------------|
+| `admin`     | `Address`     | Admin who changed the fee |
+| `treasury`  | `Address`     | Fee recipient address    |
+| `fee_bps`   | `u32`         | Fee in basis points      |
+| `timestamp` | `u64`         | Ledger timestamp         |
+
+### `MerchantFeeOverrideSetEvent`
+
+Emitted when an admin calls `set_merchant_fee_override` or `clear_merchant_fee_override`,
+per-merchant basis-point precedence over the global rate.
+
+| Field       | Type      | Description                             |
+|-------------|-----------|-----------------------------------------|
+| `merchant`  | `Address` | Merchant whose rate was overridden      |
+| `admin`     | `Address` | Admin who authorized the change         |
+| `fee_bps`   | `u32`     | New per-merchant fee (`None` on clear)  |
+| `timestamp` | `u64`     | Ledger timestamp                        |
+
+The fee-token override is configured via `set_fee_token` (emitting on-chain
+`fee_token_configured`) and read back with `get_fee_token`.
 
 ---
 
@@ -250,7 +320,13 @@ Emitted when the admin calls `set_protocol_fee`.
    not the gross pre-discount amount.  See
    [`docs/protocol_fees.md`](protocol_fees.md) for details.
 
-4. **No treasury → no fee:** If `fee_bps > 0` but no treasury address is
+4. **Conservation holds in the settlement token:** `gross == net +
+   fee_amount` is always true in the settlement token.  When a fee-token
+   override is applied the treasury is credited in the fee token, but the
+   computation that reconciles with `gross` always uses the original
+   settlement-token fee amount.
+
+5. **No treasury → no fee:** If `fee_bps > 0` but no treasury address is
    configured, the full gross is credited to the merchant.  This prevents
    silent fund loss.
 
@@ -265,6 +341,11 @@ Emitted when the admin calls `set_protocol_fee`.
 - `fee_bps > 10_000` is rejected at configuration time (`InvalidInput`).
 - The fee is computed from the **gross** charge amount, not from the
   merchant's net — preventing fee-on-fee compounding.
+- Cross-token conversion rounds toward zero and **falls back to the
+  settlement token** (crediting the trusted amount) whenever the oracle is
+  down, the price query fails, or the converted value would be zero — the
+  treasury is never credited a fabricated amount, and conversion never rounds
+  a positive fee down to nothing.
 
 ---
 
@@ -275,5 +356,6 @@ Emitted when the admin calls `set_protocol_fee`.
 - [`docs/governance/authoring.md`](governance/authoring.md) — Governance proposals for changing fee parameters
 - `contracts/subscription_vault/src/charge_core.rs` — Interval and usage charge fee logic
 - `contracts/subscription_vault/src/subscription.rs` — One-off charge fee logic
-- `contracts/subscription_vault/src/admin.rs` — Fee configuration (`set_protocol_fee`)
+- `contracts/subscription_vault/src/admin.rs` — Fee configuration (`set_protocol_fee`, `set_fee_token`)
+- `contracts/subscription_vault/src/merchant.rs` — Per-merchant fee override (`set_merchant_fee_override`)
 - `contracts/subscription_vault/src/types.rs` — Event structs, `MAX_FEE_BIPS`
