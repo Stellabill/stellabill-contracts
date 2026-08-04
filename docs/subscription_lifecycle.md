@@ -115,21 +115,53 @@ Implementation: `validate_status_transition` in `contracts/subscription_vault/sr
 
 ### State diagram
 
+The diagram below covers every documented `SubscriptionStatus` transition from `get_allowed_transitions` in `contracts/subscription_vault/src/state_machine.rs`. Transitions labeled `(auto)` are applied by the billing engine or time-based checks without a caller action; all others are manual entrypoints. Wave 5 additions (auto-pause, buyout, vacation) are called out inline.
+
 ```mermaid
-flowchart LR
-  subgraph creation [Creation]
-    Start[Start]
-  end
-  Start -->|create_subscription| Active
-  Active -->|pause_subscription| Paused
-  Active -->|cancel_subscription| Cancelled
-  Active -->|"charge fails"| InsufficientBalance
-  Paused -->|resume_subscription| Active
-  Paused -->|cancel_subscription| Cancelled
-  InsufficientBalance -->|resume_subscription| Active
-  InsufficientBalance -->|cancel_subscription| Cancelled
-  Cancelled --> Terminal[Terminal]
+stateDiagram-v2
+    direction LR
+
+    [*] --> Active : create_subscription
+
+    Active --> Paused : pause_subscription
+    Active --> Cancelled : cancel_subscription
+    Active --> GracePeriod : charge fails, grace active (auto)
+    Active --> InsufficientBalance : charge fails, grace elapsed (auto)
+    Active --> Expired : expires_at / ledger bound (auto)
+
+    Paused --> Active : resume_subscription
+    Paused --> Cancelled : cancel_subscription
+    Paused --> Expired : expires_at (auto)
+
+    GracePeriod --> Active : successful charge / resume_subscription / grace_buyout
+    GracePeriod --> InsufficientBalance : charge fails after grace expiry (auto)
+    GracePeriod --> Cancelled : cancel_subscription
+    GracePeriod --> Expired : expires_at (auto)
+
+    InsufficientBalance --> Active : resume_subscription
+    InsufficientBalance --> Paused : auto-pause after N failures (auto)
+    InsufficientBalance --> Cancelled : cancel_subscription
+    InsufficientBalance --> Expired : expires_at (auto)
+
+    Cancelled --> Archived : cleanup_subscription
+    Expired --> Archived : cleanup_subscription
+    Archived --> [*]
+
+    note right of GracePeriod
+        Wave 5 — buyout: grace_buyout deposits the missed charge plus the
+        buyout premium and returns to Active in one atomic call.
+    end note
+    note right of InsufficientBalance
+        Wave 5 — auto-pause: after auto_pause_threshold consecutive
+        InsufficientBalance failures, charge_one auto-transitions to Paused.
+    end note
+    note right of Active
+        Wave 5 — vacation: while a merchant is in a vacation window, charges
+        to its subscriptions are blocked with Error VacationActive (no status change).
+    end note
 ```
+
+**Legend:** `(auto)` = triggered by `charge_one` or time-based expiry checks (no caller action). Manual transitions are invoked via their entrypoint (`pause_subscription`, `resume_subscription`, `cancel_subscription`, `grace_buyout`, `cleanup_subscription`). Same-status (idempotent) transitions are always allowed. `Cancelled` and `Archived` are terminal: no transitions leave them.
 
 ---
 
