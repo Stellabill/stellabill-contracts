@@ -60,7 +60,7 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -630,24 +630,7 @@ pub use types::{
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SplitChargeEvent, SplitPayees,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
-    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
-    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
-    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
-    BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
-    BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
-    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
-    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
-    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
-    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
+    MerchantVacation, SubAccountCreatedEvent, SubAccountWithdrawEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -725,6 +708,35 @@ impl SubscriptionVault {
     /// Get the current minimum top-up threshold (in token base units).
     pub fn get_min_topup(env: Env) -> Result<i128, Error> {
         admin::get_min_topup(&env)
+    }
+
+    /// Update the default merchant withdrawal cap. Admin only.
+    pub fn set_default_merchant_cap(
+        env: Env,
+        admin: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        admin::do_set_default_merchant_cap(&env, admin, cap)
+    }
+
+    /// Get the default merchant withdrawal cap.
+    pub fn get_default_merchant_cap(env: Env) -> Option<i128> {
+        admin::get_default_merchant_cap(&env)
+    }
+
+    /// Update a specific merchant's withdrawal cap. Admin only.
+    pub fn set_merchant_withdraw_cap(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        admin::do_set_merchant_withdraw_cap(&env, admin, merchant, cap)
+    }
+
+    /// Get a specific merchant's withdrawal cap (falls back to default if unset).
+    pub fn get_merchant_withdraw_cap(env: Env, merchant: Address) -> Option<i128> {
+        admin::get_merchant_withdraw_cap(&env, merchant)
     }
 
     /// Get the current admin address.
@@ -1351,6 +1363,9 @@ impl SubscriptionVault {
                     grace_start_timestamp: None,
                     cancel_at: None,
                     expires_at_ledger: s.expires_at_ledger,
+                    sub_account_label: None,
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1481,6 +1496,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            None,
+            None,
         )?;
 
         let split = SplitPayees {
@@ -1501,6 +1518,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
+                expires_at_ledger: None,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1914,8 +1932,7 @@ impl SubscriptionVault {
     /// Emits [`ExpirationLedgerSetEvent`] on every successful call (including
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_subscription_expiration_ledger(
+    pub fn set_sub_expiration_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -2439,6 +2456,31 @@ impl SubscriptionVault {
     /// Check if merchant is paused.
     pub fn get_merchant_paused(env: Env, merchant: Address) -> bool {
         merchant::get_merchant_paused(&env, merchant)
+    }
+
+    /// Get the current merchant whitelist mode.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Set the merchant whitelist mode. Admin only.
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Check if a merchant is approved.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Approve a merchant. Admin only.
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke approval for a merchant. Admin only.
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
     }
 
     /// Blanket pause merchant.
@@ -3536,7 +3578,7 @@ mod test_merchant_whitelist;
 mod test_split_billing;
 
 #[cfg(test)]
-mod test_split_billing;
+mod test_merchant_withdraw_cap;
 
 #[cfg(test)]
 mod test_merchant_vacation;

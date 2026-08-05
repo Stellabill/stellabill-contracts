@@ -105,6 +105,12 @@ fn test_datakey_discriminants_snapshot() {
         (79, DataKey::OraclePriceHistoryEntry(addr.clone(), 0)),
         (80, DataKey::DelegatedPayerGrant(addr.clone(), addr2.clone())),
         (81, DataKey::SplitPayees(0)),
+        (82, DataKey::DefaultMerchantWithdrawCap),
+        (83, DataKey::MerchantWithdrawCap(addr.clone())),
+        (84, DataKey::MerchantWithdrawalWindow(addr.clone())),
+        (85, DataKey::EmergencyWithdrawIntent(0)),
+        (86, DataKey::MerchantSubAccount(addr.clone(), soroban_sdk::Symbol::new(&env, "a"))),
+        (87, DataKey::MerchantSubAccountList(addr.clone())),
     ];
 
     for (expected, key) in cases {
@@ -208,6 +214,12 @@ fn test_datakey_no_duplicate_discriminants() {
         DataKey::OraclePriceHistoryEntry(addr.clone(), 0),
         DataKey::DelegatedPayerGrant(addr.clone(), addr2.clone()),
         DataKey::SplitPayees(0),
+        DataKey::DefaultMerchantWithdrawCap,
+        DataKey::MerchantWithdrawCap(addr.clone()),
+        DataKey::MerchantWithdrawalWindow(addr.clone()),
+        DataKey::EmergencyWithdrawIntent(0),
+        DataKey::MerchantSubAccount(addr.clone(), soroban_sdk::Symbol::new(&env, "a")),
+        DataKey::MerchantSubAccountList(addr.clone()),
     ];
 
     let mut seen = std::collections::HashSet::new();

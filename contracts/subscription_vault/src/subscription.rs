@@ -75,6 +75,8 @@ use crate::types::{
     SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
     TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
     BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    GraceBuyoutEvent, CancellationEscrow, CancellationEscrowOpenedEvent, SubscriptionPausedEvent,
+    RateLimitTrippedEvent, SubscriberCreateWindow, ReferralAttributedEvent, CANCELLATION_ESCROW_WINDOW_SECS,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -653,6 +655,8 @@ pub fn do_create_subscription_with_token(
         cancel_at: None,
         expires_at_ledger,
         sub_account_label,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -1244,6 +1248,71 @@ fn apply_cancellation(
             );
         }
     }
+
+    Ok(())
+}
+
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    let now = env.ledger().timestamp();
+
+    // Reject on terminal states.
+    if sub.status == SubscriptionStatus::Cancelled {
+        return Err(Error::InvalidStatusTransition);
+    }
+    if sub.is_expired(now, env.ledger().sequence()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    // Only the subscriber or merchant may change the flag.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // When re-enabling after a disable, enforce the renewal window.
+    if enabled {
+        if !sub.auto_renew {
+            // If the renewal window has closed, the subscription cannot be
+            // silently re-activated — it must be cancelled and re-created.
+            if !sub.is_in_renewal_window(now) {
+                return Err(Error::RenewalWindowClosed);
+            }
+            // Clear the disabled timestamp on successful re-enable.
+            sub.auto_renew_disabled_at = None;
+        }
+        // If already enabled, this is a no-op (idempotent).
+    } else {
+        // Disabling for the first time (or after a previous re-enable).
+        if sub.auto_renew {
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        // If already disabled, the disable timestamp is preserved — the
+        // window continues to count from the *first* disable.
+    }
+
+    sub.auto_renew = enabled;
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        crate::types::AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            enabled,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
 
     Ok(())
 }
@@ -1887,7 +1956,7 @@ fn bulk_deposit_one(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         return crate::types::BulkDepositResult {
             subscription_id,
             success: false,
@@ -2647,7 +2716,7 @@ pub fn do_deposit_funds_on_behalf(
     }
 
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -3148,6 +3217,8 @@ pub fn do_create_subscription_from_plan(
         cancel_at: None,
         expires_at_ledger: None,
         sub_account_label,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     write_subscription(env, id, &sub);
@@ -3190,6 +3261,7 @@ pub fn do_create_subscription_from_plan(
             interval_seconds: plan.interval_seconds,
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
+            expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },

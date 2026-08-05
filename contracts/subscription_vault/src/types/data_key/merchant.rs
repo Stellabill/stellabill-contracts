@@ -31,6 +31,8 @@ pub enum DataKeyMerchant {
     TagAllowlist,
     FeeToken,
     MerchantFeeBps(Address),
+    MerchantWithdrawCap(Address),
+    MerchantWithdrawalWindow(Address),
     // ... add other merchant‑specific keys as needed.
 }
 
@@ -57,6 +59,8 @@ impl DataKeyMerchant {
             DataKeyMerchant::TagAllowlist => 72,
             DataKeyMerchant::FeeToken => 64,
             DataKeyMerchant::MerchantFeeBps(_) => 76,
+            DataKeyMerchant::MerchantWithdrawCap(_) => 83,
+            DataKeyMerchant::MerchantWithdrawalWindow(_) => 84,
         }
     }
 }
@@ -84,6 +88,8 @@ impl From<DataKeyMerchant> for super::DataKey {
             DataKeyMerchant::TagAllowlist => super::DataKey::TagAllowlist,
             DataKeyMerchant::FeeToken => super::DataKey::FeeToken,
             DataKeyMerchant::MerchantFeeBps(v) => super::DataKey::MerchantFeeBps(v),
+            DataKeyMerchant::MerchantWithdrawCap(v) => super::DataKey::MerchantWithdrawCap(v),
+            DataKeyMerchant::MerchantWithdrawalWindow(v) => super::DataKey::MerchantWithdrawalWindow(v),
         }
     }
 }

@@ -125,7 +125,7 @@ fn view_get_subscription_succeeds_while_stopped() {
     client.enable_emergency_stop(&admin);
     assert!(client.get_emergency_stop_status());
 
-    let sub = client.get_subscription(&sub_id).expect("get_subscription failed under stop");
+    let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.subscriber, subscriber);
     assert_eq!(sub.merchant, merchant);
     assert_eq!(sub.amount, AMOUNT);
@@ -140,8 +140,7 @@ fn view_estimate_topup_succeeds_while_stopped() {
 
     // subscription is fully funded for many intervals; topup should be 0
     let topup = client
-        .estimate_topup_for_intervals(&sub_id, &1)
-        .expect("estimate_topup failed under stop");
+        .estimate_topup_for_intervals(&sub_id, &1);
     assert_eq!(topup, 0i128);
 }
 
@@ -152,8 +151,7 @@ fn view_get_next_charge_info_succeeds_while_stopped() {
     client.enable_emergency_stop(&admin);
 
     let info = client
-        .get_next_charge_info(&sub_id)
-        .expect("get_next_charge_info failed under stop");
+        .get_next_charge_info(&sub_id);
     // Subscription is Active, so a charge IS expected
     assert!(info.is_charge_expected);
     assert_eq!(info.amount, AMOUNT);
@@ -166,8 +164,7 @@ fn view_get_cap_info_succeeds_while_stopped() {
     client.enable_emergency_stop(&admin);
 
     let cap = client
-        .get_cap_info(&sub_id)
-        .expect("get_cap_info failed under stop");
+        .get_cap_info(&sub_id);
     assert!(!cap.cap_reached);
     assert_eq!(cap.lifetime_cap, None);
 }
@@ -199,8 +196,7 @@ fn view_get_subscriptions_by_merchant_while_stopped() {
     client.enable_emergency_stop(&admin);
 
     let page = client
-        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32)
-        .expect("get_subscriptions_by_merchant failed");
+        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32);
     assert_eq!(page.len(), 1u32);
     assert_eq!(page.get(0).unwrap().amount, AMOUNT);
     let _ = sub_id; // used via the page check
@@ -213,8 +209,7 @@ fn view_get_subscriptions_by_token_while_stopped() {
     client.enable_emergency_stop(&admin);
 
     let page = client
-        .get_subscriptions_by_token(&token, &0u32, &10u32)
-        .expect("get_subscriptions_by_token failed");
+        .get_subscriptions_by_token(&token, &0u32, &10u32);
     assert_eq!(page.len(), 1u32);
 }
 
@@ -225,8 +220,7 @@ fn view_list_subscriptions_by_subscriber_while_stopped() {
     client.enable_emergency_stop(&admin);
 
     let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("list_subscriptions_by_subscriber failed");
+        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 1u32);
     assert_eq!(page.subscription_ids.get(0).unwrap(), sub_id);
 }
@@ -257,8 +251,8 @@ fn view_config_views_while_stopped() {
     let (_env, client, _token, admin, _subscriber, _merchant, _sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    assert_eq!(client.get_admin().unwrap(), admin);
-    assert!(client.get_min_topup().is_ok());
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_min_topup(), 1_000_000i128);
     assert!(client.get_emergency_stop_status());
 }
 
@@ -329,8 +323,7 @@ fn view_get_subscriptions_by_merchant_empty_state() {
     let (env, client, _token, _admin) = setup_empty();
     let merchant = Address::generate(&env);
     let page = client
-        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32)
-        .expect("should return Ok with empty list");
+        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32);
     assert_eq!(page.len(), 0u32);
 }
 
@@ -340,8 +333,7 @@ fn view_get_subscriptions_by_token_empty_state() {
     let (env, client, token, _admin) = setup_empty();
     let _ = env;
     let page = client
-        .get_subscriptions_by_token(&token, &0u32, &10u32)
-        .expect("should return Ok with empty list");
+        .get_subscriptions_by_token(&token, &0u32, &10u32);
     assert_eq!(page.len(), 0u32);
 }
 
@@ -351,8 +343,7 @@ fn view_list_subscriptions_by_subscriber_empty_state() {
     let (env, client, _token, _admin) = setup_empty();
     let subscriber = Address::generate(&env);
     let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("should return Ok with empty page");
+        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 0u32);
     assert_eq!(page.next_start_id, None);
 }
@@ -454,8 +445,7 @@ fn view_list_by_subscriber_pre_init_returns_empty() {
     let (env, client) = setup_pre_init();
     let subscriber = Address::generate(&env);
     let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("pre-init list should return Ok empty");
+        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 0u32);
 }
 
@@ -480,7 +470,7 @@ fn view_get_admin_while_stopped_does_not_aid_bypass() {
     client.enable_emergency_stop(&admin);
 
     // Fetch admin address via the view
-    let reported_admin = client.get_admin().expect("get_admin failed");
+    let reported_admin = client.get_admin();
     assert_eq!(reported_admin, admin);
 
     // Knowing the admin address is NOT sufficient to bypass the stop:

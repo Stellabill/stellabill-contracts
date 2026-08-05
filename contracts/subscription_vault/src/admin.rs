@@ -92,7 +92,7 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
-    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
+    let label_bytes = Bytes::from_slice(env, key_label.as_bytes());
     env.crypto().sha256(&label_bytes).into()
 }
 
@@ -198,6 +198,11 @@ pub fn do_init(
     write_config(env, &DataKey::MinTopup, &min_topup);
     instance.set(&DataKey::GracePeriod, &grace_period);
 
+    let default_cap_amount = 10_000i128
+        .checked_mul(10i128.pow(token_decimals))
+        .ok_or(Error::Overflow)?;
+    write_config(env, &DataKey::DefaultMerchantWithdrawCap, &Some(default_cap_amount));
+
     env.events().publish(
         (Symbol::new(env, "initialized"),),
         (token, admin, min_topup, grace_period),
@@ -295,6 +300,57 @@ pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Resu
 
 pub fn get_subscriber_create_cap(env: &Env) -> u32 {
     read_config(env, &DataKey::SubscriberCreateCap).unwrap_or(50u32)
+}
+
+pub fn do_set_default_merchant_cap(
+    env: &Env,
+    admin: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    if let Some(c) = cap {
+        if c < 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+    write_config(env, &DataKey::DefaultMerchantWithdrawCap, &cap);
+    env.events().publish(
+        (Symbol::new(env, "default_merchant_cap_updated"),),
+        cap.unwrap_or(0),
+    );
+    Ok(())
+}
+
+pub fn get_default_merchant_cap(env: &Env) -> Option<i128> {
+    read_config(env, &DataKey::DefaultMerchantWithdrawCap).unwrap_or(None)
+}
+
+pub fn do_set_merchant_withdraw_cap(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    if let Some(c) = cap {
+        if c < 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+    write_config(env, &DataKey::MerchantWithdrawCap(merchant.clone()), &cap);
+    env.events().publish(
+        (Symbol::new(env, "merchant_cap_updated"), merchant),
+        cap.unwrap_or(0),
+    );
+    Ok(())
+}
+
+pub fn get_merchant_withdraw_cap(env: &Env, merchant: Address) -> Option<i128> {
+    if let Some(cap_opt) = read_config::<Option<i128>>(env, &DataKey::MerchantWithdrawCap(merchant.clone())) {
+        cap_opt
+    } else {
+        get_default_merchant_cap(env)
+    }
 }
 
 pub fn get_token(env: &Env) -> Result<Address, Error> {

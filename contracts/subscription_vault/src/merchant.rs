@@ -23,16 +23,13 @@
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
+    WithdrawalWindow,
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
     MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
     MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -837,6 +834,43 @@ pub fn set_merchant_multisig(
     Ok(())
 }
 
+pub fn enforce_and_update_merchant_withdraw_cap(
+    env: &Env,
+    merchant: &Address,
+    amount: i128,
+) -> Result<(), Error> {
+    if let Some(cap) = crate::admin::get_merchant_withdraw_cap(env, merchant.clone()) {
+        let now = env.ledger().timestamp();
+        let window_key = DataKey::MerchantWithdrawalWindow(merchant.clone());
+        let mut window: WithdrawalWindow = env
+            .storage()
+            .instance()
+            .get(&window_key)
+            .unwrap_or(WithdrawalWindow {
+                window_start_ts: now,
+                withdrawn_in_window: 0,
+            });
+
+        if now > window.window_start_ts.checked_add(86_400).ok_or(Error::Overflow)? {
+            window.window_start_ts = now;
+            window.withdrawn_in_window = 0;
+        }
+
+        let new_withdrawn = window
+            .withdrawn_in_window
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+
+        if new_withdrawn > cap {
+            return Err(Error::WithdrawCapExceeded);
+        }
+
+        window.withdrawn_in_window = new_withdrawn;
+        env.storage().instance().set(&window_key, &window);
+    }
+    Ok(())
+}
+
 pub fn withdraw_merchant_funds(env: &Env, merchant: Address, amount: i128) -> Result<(), Error> {
     let token_addr = crate::admin::get_token(env)?;
     withdraw_merchant_funds_for_token(env, merchant, token_addr, amount)
@@ -874,6 +908,11 @@ pub fn withdraw_merchant_funds_for_token(
 
     // Ensure merchant config exists
     let _config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
+
+    let primary_token = crate::admin::get_token(env)?;
+    if token_addr == primary_token {
+        enforce_and_update_merchant_withdraw_cap(env, &merchant, amount)?;
+    }
 
     let current = get_merchant_balance_by_token(env, &merchant, &token_addr);
 
@@ -1094,6 +1133,11 @@ fn flush_merchant_token(
 
     let config = get_merchant_config(env, merchant.clone()).ok_or(Error::NotFound)?;
     let payout_address = config.payout_address;
+
+    let primary_token = crate::admin::get_token(env)?;
+    if token == &primary_token {
+        enforce_and_update_merchant_withdraw_cap(env, merchant, balance)?;
+    }
 
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
@@ -1739,7 +1783,7 @@ pub fn register_sub_account(
     merchant.require_auth();
 
     // Reject empty labels
-    let label_str = label.to_str(env);
+    let label_str = label.to_string();
     if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }
@@ -1851,6 +1895,11 @@ pub fn withdraw_sub_account_funds(
     }
     if amount > current {
         return Err(Error::InsufficientBalance);
+    }
+
+    let primary_token = crate::admin::get_token(env)?;
+    if token_addr == primary_token {
+        enforce_and_update_merchant_withdraw_cap(env, &merchant, amount)?;
     }
 
     // Vault balance check (external call, after storage checks per CEI)
