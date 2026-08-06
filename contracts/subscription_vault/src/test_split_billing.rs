@@ -321,3 +321,55 @@ fn test_split_payees_removal_mid_billing() {
     assert_eq!(payee0_earnings.accruals.interval, 0);
     assert_eq!(payee1_earnings.accruals.interval, 0);
 }
+
+#[test]
+fn test_single_payee_split() {
+    let (env, _, client, token_admin, _) = setup();
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    use soroban_sdk::String;
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(&env, "https://example.com"),
+    );
+
+    let payee0 = Address::generate(&env);
+
+    client.initialize_merchant_config(
+        &payee0,
+        &payee0,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(&env, "https://example.com"),
+    );
+
+    let mut entries = Vec::new(&env);
+    entries.push_back((payee0.clone(), 10_000u32));
+
+    let sub_id = client.create_subscription_with_split(
+        &subscriber,
+        &merchant,
+        &100i128,
+        &3600u64,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &entries,
+    );
+
+    token_admin.mint(&subscriber, &10_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &1_000i128, &None);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 3601);
+    client.charge_subscription(&sub_id, &None);
+
+    let earnings0 = client.get_merchant_token_earnings(&payee0, &client.get_subscription(&sub_id).token);
+    assert_eq!(earnings0.accruals.interval, 100);
+}
