@@ -578,7 +578,7 @@ pub mod operator {
             env,
             subscription_id,
             usage_amount,
-            String::from_str(env, ""),
+            crate::types::UsageReference::Static(crate::types::STR_EMPTY),
         )
     }
 
@@ -590,7 +590,7 @@ pub mod operator {
         reference: String,
     ) -> Result<UsageChargeResult, Error> {
         require_operator_auth(env, &op)?;
-        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, reference)
+        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, crate::types::UsageReference::Owned(reference))
     }
 }
 
@@ -2339,7 +2339,7 @@ impl SubscriptionVault {
             &env,
             subscription_id,
             usage_amount,
-            String::from_str(&env, "usage"),
+            crate::types::UsageReference::Static(crate::types::STR_USAGE),
         )
     }
 
@@ -2352,7 +2352,7 @@ impl SubscriptionVault {
     ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage_with_reference")?;
-        charge_core::charge_usage_one(&env, subscription_id, usage_amount, reference)
+        charge_core::charge_usage_one(&env, subscription_id, usage_amount, crate::types::UsageReference::Owned(reference))
     }
 
     /// Configure usage limits.

@@ -807,7 +807,7 @@ pub fn charge_usage_one(
     env: &Env,
     subscription_id: u32,
     usage_amount: i128,
-    reference: String,
+    reference: crate::types::UsageReference,
 ) -> Result<UsageChargeResult, Error> {
     let mut sub = get_subscription(env, subscription_id)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, env.ledger().timestamp()))?;
@@ -958,10 +958,11 @@ pub fn charge_usage_one(
     // -- Replay protection (Reference-based) ----------------------------------
     // We use the reference as a unique idempotency key for usage charges.
     // If the reference has been seen before for this subscription, we return Replay.
+    let reference_str = reference.to_string(env);
     let ref_key = (
         Symbol::new(env, "usage_ref"),
         subscription_id,
-        reference.clone(),
+        reference_str.clone(),
     );
 
     if env.storage().instance().has(&ref_key) {
@@ -973,7 +974,7 @@ pub fn charge_usage_one(
                 token: sub.token.clone(),
                 usage_amount,
                 timestamp: now,
-                reference,
+                reference: reference_str,
                 result: UsageChargeResult::Replay,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1012,7 +1013,7 @@ pub fn charge_usage_one(
                         token: sub.token.clone(),
                         usage_amount,
                         timestamp: now,
-                        reference,
+                        reference: reference_str.clone(),
                         result: UsageChargeResult::BurstLimitExceeded,
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
@@ -1040,7 +1041,7 @@ pub fn charge_usage_one(
                         token: sub.token.clone(),
                         usage_amount,
                         timestamp: now,
-                        reference,
+                        reference: reference_str.clone(),
                         result: UsageChargeResult::RateLimitExceeded,
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
@@ -1069,7 +1070,7 @@ pub fn charge_usage_one(
                         token: sub.token.clone(),
                         usage_amount,
                         timestamp: now,
-                        reference,
+                        reference: reference_str.clone(),
                         result: UsageChargeResult::UsageCapExceeded,
                         schema_version: crate::types::EVENT_SCHEMA_VERSION,
                     },
@@ -1268,7 +1269,7 @@ pub fn charge_usage_one(
                     usage_amount,
                     token: sub.token.clone(),
                     timestamp: now,
-                    reference,
+                    reference: reference_str,
                     schema_version: crate::types::EVENT_SCHEMA_VERSION,
                 },
             );

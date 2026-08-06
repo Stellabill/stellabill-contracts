@@ -58,6 +58,25 @@ pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
 /// Replay protection domain for charge_one_off.
 pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
 
+pub const STR_USAGE: &str = "usage";
+pub const STR_EMPTY: &str = "";
+
+/// Helper enum for passing references to reduce allocations.
+#[derive(Clone)]
+pub enum UsageReference {
+    Static(&'static str),
+    Owned(soroban_sdk::String),
+}
+
+impl UsageReference {
+    pub fn to_string(&self, env: &soroban_sdk::Env) -> soroban_sdk::String {
+        match self {
+            UsageReference::Static(s) => soroban_sdk::String::from_str(env, s),
+            UsageReference::Owned(s) => s.clone(),
+        }
+    }
+}
+
 /// Number of idempotent hashes to store per subscription.
 pub const IDEM_HISTORY: u32 = 32;
 
