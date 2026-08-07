@@ -8,8 +8,8 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
-    SUB_TTL_THRESHOLD,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    TOPIC_RECOVERY,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -92,7 +92,7 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
-    let label_bytes = Bytes::from_array(env, key_label.as_bytes());
+    let label_bytes = Bytes::from_slice(env, key_label.as_bytes());
     env.crypto().sha256(&label_bytes).into()
 }
 
@@ -286,10 +286,8 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
 pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
     write_config(env, &DataKey::SubscriberCreateCap, &cap);
-    env.events().publish(
-        (Symbol::new(env, "subscriber_create_cap_updated"),),
-        cap,
-    );
+    env.events()
+        .publish((Symbol::new(env, "subscriber_create_cap_updated"),), cap);
     Ok(())
 }
 
@@ -575,10 +573,8 @@ pub fn do_recover_stranded_funds(
         schema_version: crate::types::EVENT_SCHEMA_VERSION,
     };
 
-    env.events().publish(
-        (TOPIC_RECOVERY, admin.clone()),
-        recovery_event,
-    );
+    env.events()
+        .publish((TOPIC_RECOVERY, admin.clone()), recovery_event);
 
     // Actual token transfer logic
     token_client.transfer(&env.current_contract_address(), &recipient, &amount);
@@ -603,20 +599,31 @@ pub fn queue_treasury_change(
     if fee_bps > 10_000 {
         return Err(Error::InvalidInput);
     }
-    if env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+    if env
+        .storage()
+        .persistent()
+        .has(&DataKey::PendingTreasuryChange)
+    {
         return Err(Error::InvalidInput);
     }
 
-    let effective_at = env.ledger().timestamp().saturating_add(TREASURY_CHANGE_DELAY_SECS);
+    let effective_at = env
+        .ledger()
+        .timestamp()
+        .saturating_add(TREASURY_CHANGE_DELAY_SECS);
     let pending = PendingTreasuryChange {
         new_treasury: treasury.clone(),
         new_fee_bps: fee_bps,
         effective_at,
     };
-    env.storage().persistent().set(&DataKey::PendingTreasuryChange, &pending);
     env.storage()
         .persistent()
-        .extend_ttl(&DataKey::PendingTreasuryChange, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        .set(&DataKey::PendingTreasuryChange, &pending);
+    env.storage().persistent().extend_ttl(
+        &DataKey::PendingTreasuryChange,
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
+    );
 
     enforce_config_cooldown(env, "ProtocolFee")?;
     write_config(env, &DataKey::FeeBps, &fee_bps);
@@ -650,7 +657,9 @@ pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
 
     write_config(env, &DataKey::FeeBps, &pending.new_fee_bps);
     write_config(env, &DataKey::Treasury, &pending.new_treasury);
-    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingTreasuryChange);
 
     env.events().publish(
         (Symbol::new(env, "treasury_change_executed"),),
@@ -668,10 +677,16 @@ pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
 
 pub fn cancel_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
-    if !env.storage().persistent().has(&DataKey::PendingTreasuryChange) {
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::PendingTreasuryChange)
+    {
         return Err(Error::NotFound);
     }
-    env.storage().persistent().remove(&DataKey::PendingTreasuryChange);
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingTreasuryChange);
     Ok(())
 }
 
@@ -756,7 +771,11 @@ fn proposal_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin_proposal")
 }
 
-pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+pub fn do_propose_admin(
+    env: &Env,
+    current_admin: Address,
+    new_admin: Address,
+) -> Result<(), Error> {
     current_admin.require_auth();
     let stored = require_admin(env)?;
     if current_admin != stored {
@@ -875,11 +894,9 @@ pub fn rewrite_subscriptions_for_ledger_expiration(env: &Env) -> u32 {
             .get::<_, crate::types::Subscription>(&key)
         {
             env.storage().persistent().set(&key, &sub);
-            env.storage().persistent().extend_ttl(
-                &key,
-                SUB_TTL_THRESHOLD,
-                SUB_TTL_EXTEND_TO,
-            );
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
             touched = touched.saturating_add(1);
         }
     }
@@ -904,11 +921,9 @@ pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
             // Round-trip: deserialise populates `sub_account_label: None`,
             // then write back so XDR encoding includes the new field.
             env.storage().persistent().set(&key, &sub);
-            env.storage().persistent().extend_ttl(
-                &key,
-                SUB_TTL_THRESHOLD,
-                SUB_TTL_EXTEND_TO,
-            );
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
             touched = touched.saturating_add(1);
         }
     }
@@ -923,7 +938,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Token) {
         let val: Address = instance.get(&DataKey::Token).unwrap();
         persistent.set(&DataKey::Token, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::Token, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::Token,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::Token);
     }
 
@@ -931,7 +951,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Admin) {
         let val: Address = instance.get(&DataKey::Admin).unwrap();
         persistent.set(&DataKey::Admin, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::Admin, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::Admin,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::Admin);
     }
 
@@ -939,7 +964,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::MinTopup) {
         let val: i128 = instance.get(&DataKey::MinTopup).unwrap();
         persistent.set(&DataKey::MinTopup, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::MinTopup, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::MinTopup,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::MinTopup);
     }
 
@@ -947,7 +977,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::NextId) {
         let val: u32 = instance.get(&DataKey::NextId).unwrap_or(0);
         persistent.set(&DataKey::NextId, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::NextId, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::NextId,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::NextId);
     }
 
@@ -968,7 +1003,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Treasury) {
         let val: Address = instance.get(&DataKey::Treasury).unwrap();
         persistent.set(&DataKey::Treasury, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::Treasury, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::Treasury,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::Treasury);
     }
 
@@ -976,7 +1016,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::FeeBps) {
         let val: u32 = instance.get(&DataKey::FeeBps).unwrap_or(0);
         persistent.set(&DataKey::FeeBps, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::FeeBps, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::FeeBps,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::FeeBps);
     }
 
@@ -984,7 +1029,12 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
     if instance.has(&DataKey::Operator) {
         let val: Address = instance.get(&DataKey::Operator).unwrap();
         persistent.set(&DataKey::Operator, &val);
-        crate::subscription::maybe_extend_ttl(env, &DataKey::Operator, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::Operator,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
         instance.remove(&DataKey::Operator);
     }
 
@@ -1116,5 +1166,73 @@ pub fn do_migrate(
         },
     );
 
+    Ok(())
+}
+
+// ── Emergency Stop ──────────────────────────────────────────────────────────────
+
+/// Enable emergency stop - blocks all mutating operations
+/// Only callable by admin. When enabled, all write operations return Error::EmergencyStopActive.
+pub fn do_enable_emergency_stop(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+
+    // Check if already enabled
+    if get_emergency_stop_status(env) {
+        return Err(Error::EmergencyStopAlreadyActive);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::EmergencyStop, &true);
+    env.storage().persistent().extend_ttl(
+        &DataKey::EmergencyStop,
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
+    );
+
+    env.events().publish(
+        (Symbol::new(env, "emergency_stop_enabled"),),
+        (admin, env.ledger().timestamp()),
+    );
+    Ok(())
+}
+
+/// Disable emergency stop - restores all mutating operations
+/// Only callable by admin. When disabled, all write operations function normally.
+pub fn do_disable_emergency_stop(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+
+    // Check if already disabled
+    if !get_emergency_stop_status(env) {
+        return Err(Error::EmergencyStopAlreadyDisabled);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::EmergencyStop, &false);
+    env.storage().persistent().extend_ttl(
+        &DataKey::EmergencyStop,
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
+    );
+
+    env.events().publish(
+        (Symbol::new(env, "emergency_stop_disabled"),),
+        (admin, env.ledger().timestamp()),
+    );
+    Ok(())
+}
+
+/// Check if emergency stop is currently active
+pub fn get_emergency_stop_status(env: &Env) -> bool {
+    read_config(env, &DataKey::EmergencyStop).unwrap_or(false)
+}
+
+/// Check emergency stop and return error if active
+/// Used by all mutating entrypoints to block operations when emergency stop is enabled
+pub fn check_emergency_stop(env: &Env) -> Result<(), Error> {
+    if get_emergency_stop_status(env) {
+        return Err(Error::EmergencyStopActive);
+    }
     Ok(())
 }
