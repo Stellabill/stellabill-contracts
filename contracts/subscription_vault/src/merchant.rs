@@ -22,18 +22,14 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
-    MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
-    PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
-    TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
+    is_valid_allowed_operations, AccruedTotals, BillingChargeKind, CancellationEscrowOpenedEvent,
+    DataKey, Error, MerchantApprovedEvent, MerchantBalanceSnapshotEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
+    MerchantMultiSigConfig, MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent,
+    MerchantVacation, MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule,
+    PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
+    TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS, OP_CHARGE,
+    TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -182,7 +178,11 @@ pub fn clear_merchant_vacation(env: &Env, merchant: Address) -> Result<(), Error
     merchant.require_auth();
 
     let key = DataKey::MerchantVacation(merchant.clone());
-    let existed = env.storage().instance().get::<_, MerchantVacation>(&key).is_some();
+    let existed = env
+        .storage()
+        .instance()
+        .get::<_, MerchantVacation>(&key)
+        .is_some();
     env.storage().instance().remove(&key);
 
     if existed {
@@ -620,7 +620,10 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-pub fn get_merchant_multisig_config(env: &Env, merchant: Address) -> Option<MerchantMultiSigConfig> {
+pub fn get_merchant_multisig_config(
+    env: &Env,
+    merchant: Address,
+) -> Option<MerchantMultiSigConfig> {
     let key = DataKey::MerchantMultiSig(merchant);
     env.storage().instance().get(&key)
 }
@@ -913,11 +916,7 @@ pub fn withdraw_merchant_funds_for_token(
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
 
     env.events().publish(
-        (
-            TOPIC_WITHDRAWN,
-            merchant.clone(),
-            token_addr.clone(),
-        ),
+        (TOPIC_WITHDRAWN, merchant.clone(), token_addr.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
@@ -1107,11 +1106,7 @@ fn flush_merchant_token(
     crate::accounting::sub_total_accounted(env, token, balance)?;
 
     env.events().publish(
-        (
-            TOPIC_WITHDRAWN,
-            merchant.clone(),
-            token.clone(),
-        ),
+        (TOPIC_WITHDRAWN, merchant.clone(), token.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token.clone(),
@@ -1437,7 +1432,11 @@ pub fn do_emit_merchant_balance_snapshot(
     let timestamp = env.ledger().timestamp();
 
     env.events().publish(
-        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        (
+            Symbol::new(env, "merchant_balance_snapshot"),
+            merchant.clone(),
+            token.clone(),
+        ),
         crate::types::MerchantBalanceSnapshotEvent {
             merchant,
             token,
@@ -1508,7 +1507,11 @@ pub fn do_emit_all_balances_snapshot(
                 };
 
                 env.events().publish(
-                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    (
+                        Symbol::new(env, "merchant_balance_snapshot"),
+                        pair.0.clone(),
+                        pair.1.clone(),
+                    ),
                     ev.clone(),
                 );
                 out.push_back(ev);
@@ -1638,11 +1641,7 @@ pub fn do_register_plan(
 ///   cannot deprecate another merchant's plan even with admin credentials.
 /// - Uses the canonical `DataKey::Plan(plan_id)` storage key (not a raw tuple)
 ///   so that `get_plan_template` immediately reflects the deprecated state.
-pub fn do_deprecate_plan(
-    env: &Env,
-    merchant: Address,
-    plan_id: u32,
-) -> Result<(), Error> {
+pub fn do_deprecate_plan(env: &Env, merchant: Address, plan_id: u32) -> Result<(), Error> {
     // ── Auth ──
     merchant.require_auth();
 
@@ -1698,7 +1697,11 @@ pub fn do_deprecate_plan(
 // 4. Withdrawals follow CEI (Checks-Effects-Interactions).
 
 /// Return `Ok(())` if `label` is a registered sub-account for `merchant`.
-pub fn require_sub_account_exists(env: &Env, merchant: &Address, label: &Symbol) -> Result<(), Error> {
+pub fn require_sub_account_exists(
+    env: &Env,
+    merchant: &Address,
+    label: &Symbol,
+) -> Result<(), Error> {
     let key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
     if !env.storage().instance().has(&key) {
         return Err(Error::NotFound);
@@ -1731,15 +1734,11 @@ pub fn get_sub_account_list(env: &Env, merchant: &Address) -> Vec<Symbol> {
 ///
 /// # Events
 /// Emits [`SubAccountCreatedEvent`] with topics `("sub_account_created", merchant, label)`.
-pub fn register_sub_account(
-    env: &Env,
-    merchant: Address,
-    label: Symbol,
-) -> Result<(), Error> {
+pub fn register_sub_account(env: &Env, merchant: Address, label: Symbol) -> Result<(), Error> {
     merchant.require_auth();
 
     // Reject empty labels
-    let label_str = label.to_str(env);
+    let label_str = label.to_string();
     if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }
@@ -1749,7 +1748,11 @@ pub fn register_sub_account(
 
     // Reject duplicate
     let list_key = DataKey::MerchantSubAccountList(merchant.clone());
-    let mut labels: Vec<Symbol> = env.storage().instance().get(&list_key).unwrap_or(Vec::new(env));
+    let mut labels: Vec<Symbol> = env
+        .storage()
+        .instance()
+        .get(&list_key)
+        .unwrap_or(Vec::new(env));
     if labels.contains(&label) {
         return Err(Error::InvalidInput);
     }
