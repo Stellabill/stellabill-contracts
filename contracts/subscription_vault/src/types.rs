@@ -4,7 +4,7 @@
 //! or contract entrypoints.
 
 use soroban_sdk::{
-    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+     contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 /// Current schema version for contract events.
@@ -282,6 +282,10 @@ pub enum DataKey {
     OraclePriceHistoryMeta(Address),
     /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
     OraclePriceHistoryEntry(Address, u32),
+    EmergencyWithdrawIntent(u32),
+    MerchantSubAccount(Address, Symbol),
+     MerchantSubAccountList(Address),
+    
 }
 
 impl DataKey {
@@ -343,34 +347,38 @@ impl DataKey {
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
             DataKey::PendingTreasuryChange => 54,
-            DataKey::TransferIntent(_) => 54,
-            DataKey::Kyc(_) => 55,
-            DataKey::Coupon(_) => 56,
-            DataKey::CouponRedemptions(_) => 57,
-            DataKey::Credential(_) => 58,
-            DataKey::SplitPayees(_) => 59,
-            DataKey::BuyoutPremiumBps => 60,
-            DataKey::MerchantVacation(_) => 62,
-            DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 60,
-            DataKey::SubscriberCreateWindow(_) => 61,
-            DataKey::MerchantWhitelistMode => 62,
-            DataKey::MerchantApproved(_) => 63,
-            DataKey::ChargeSalt(_) => 64,
-            DataKey::ChargeFailureCounter(_) => 65,
-            DataKey::AutoPauseThreshold => 66,
-            DataKey::BuyoutPremiumBps => 67,
-            DataKey::SubCoupon(_) => 68,
-            DataKey::MerchantMultiSig(_) => 69,
-            DataKey::SubscriberActiveCount(_) => 70,
-            DataKey::SubscriberActiveCapOverride(_) => 71,
-            DataKey::TagAllowlist => 72,
-            DataKey::MerchantTags(_) => 73,
-            DataKey::FeeToken => 74,
-            DataKey::CancellationEscrow(_) => 75,
-            DataKey::MerchantFeeBps(_) => 76,
-            DataKey::OraclePriceHistoryMeta(_) => 77,
-            DataKey::OraclePriceHistoryEntry(_, _) => 78,
+             DataKey::PendingTreasuryChange => 54,
+        DataKey::TransferIntent(_) => 55,  // Changed from 54
+        DataKey::Kyc(_) => 56,             // Changed from 55
+        DataKey::Coupon(_) => 57,          // Changed from 56
+        DataKey::CouponRedemptions(_) => 58, // Changed from 57
+        DataKey::Credential(_) => 59,      // Changed from 58
+        DataKey::AdminConfigLastChangedAt(_) => 60, // Changed from 59
+        DataKey::SubscriberCreateCap => 61, // Changed from 60
+        DataKey::SubscriberCreateWindow(_) => 62, // Changed from 61
+        DataKey::MerchantWhitelistMode => 63, // Changed from 62
+        DataKey::MerchantApproved(_) => 64, // Changed from 63
+        DataKey::ChargeSalt(_) => 65,      // Changed from 64
+        DataKey::ChargeFailureCounter(_) => 66, // Changed from 65
+        DataKey::AutoPauseThreshold => 67, // Changed from 66
+        DataKey::BuyoutPremiumBps => 68,   // Changed from 67 (remove the duplicate at 60)
+        DataKey::SubCoupon(_) => 69,       // Changed from 68
+        DataKey::MerchantMultiSig(_) => 70, // Changed from 69
+        DataKey::SubscriberActiveCount(_) => 71, // Changed from 70
+        DataKey::SubscriberActiveCapOverride(_) => 72, // Changed from 71
+        DataKey::TagAllowlist => 73,       // Changed from 72
+        DataKey::MerchantTags(_) => 74,    // Changed from 73
+        DataKey::FeeToken => 75,           // Changed from 74
+        DataKey::CancellationEscrow(_) => 76, // Changed from 75
+        DataKey::MerchantFeeBps(_) => 77,  // Changed from 76
+        DataKey::OraclePriceHistoryMeta(_) => 78, // Changed from 77
+        DataKey::OraclePriceHistoryEntry(_, _) => 79, // Changed from 78
+        DataKey::DelegatedPayerGrant(_, _) => 80, // Changed from 79
+        DataKey::SplitPayees(_) => 81,     // Changed from 80
+        DataKey::MerchantSubAccount(_, _) => 82, // Changed from 81
+        DataKey::MerchantSubAccountList(_) => 83, // Changed from 82
+        DataKey::MerchantVacation(_) => 84,
+        DataKey::EmergencyWithdrawIntent(_) => 85, // Changed from 83
         }
     }
 
@@ -420,28 +428,38 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
-    54, // TransferIntent(u32)
-    59, // BuyoutPremiumBps
-    61, // MerchantMultiSig(Address)
-    62, // MerchantVacation(Address)
-    59, // AdminConfigLastChangedAt(BytesN<32>)
-    60, // SubscriberCreateCap
-    61, // SubscriberCreateWindow(Address)
-    62, // MerchantWhitelistMode
-    63, // MerchantApproved(Address)
-    64, // ChargeSalt(u32)
-    65, // ChargeFailureCounter(u32)
-    66, // AutoPauseThreshold
-    67, // BuyoutPremiumBps
-    69, // MerchantMultiSig(Address)
-    70, // SubscriberActiveCount(Address)
-    71, // SubscriberActiveCapOverride(Address)
-    72, // TagAllowlist
-    73, // MerchantTags(Address)
-    74, // FeeToken
-    76, // MerchantFeeBps(Address)
-    77, // OraclePriceHistoryMeta(Address)
-    78, // OraclePriceHistoryEntry(Address, u32)
+    54, // PendingTreasuryChange
+    55, // TransferIntent(u32)
+    56, // Kyc(KycKey)
+    57, // Coupon(Symbol)
+    58, // CouponRedemptions(Symbol)
+    59, // Credential(u32)
+    60, // AdminConfigLastChangedAt(BytesN<32>)
+    61, // SubscriberCreateCap
+    62, // SubscriberCreateWindow(Address)
+    63, // MerchantWhitelistMode
+    64, // MerchantApproved(Address)
+    65, // ChargeSalt(u32)
+    66, // ChargeFailureCounter(u32)
+    67, // AutoPauseThreshold
+    68, // BuyoutPremiumBps
+    69, // SubCoupon(u32)
+    70, // MerchantMultiSig(Address)
+    71, // SubscriberActiveCount(Address)
+    72, // SubscriberActiveCapOverride(Address)
+    73, // TagAllowlist
+    74, // MerchantTags(Address)
+    75, // FeeToken
+    76, // CancellationEscrow(u32)
+    77, // MerchantFeeBps(Address)
+    78, // OraclePriceHistoryMeta(Address)
+    79, // OraclePriceHistoryEntry(Address, u32)
+    80, // DelegatedPayerGrant(Address, Address)
+    81, // SplitPayees(u32)
+    82, // MerchantSubAccount(Address, Symbol)
+    83, // MerchantSubAccountList(Address)
+    84, // MerchantVacation(Address)  // ADD THIS
+    85, // EmergencyWithdrawIntent(u32)  // ADD THIS
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -493,7 +511,7 @@ pub enum SubscriptionStatus {
 
 /// Stores subscription details and current state.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub subscriber: Address,
     pub merchant: Address,
@@ -531,6 +549,8 @@ pub struct Subscription {
     /// Optional sub-account label for routing charges to an isolated merchant
     /// sub-account ledger (#575). `None` routes to the parent merchant balance.
     pub sub_account_label: Option<Symbol>,
+    pub auto_renew: bool,  
+    pub auto_renew_disabled_at: Option<u64>, 
 }
 
 impl Subscription {
@@ -788,7 +808,7 @@ pub struct Proposal {
     /// Required approval quorum, in basis points of total guardian weight.
     pub quorum_bps: u32,
     /// Per-guardian vote: `true` = yes, `false` = no.
-    pub votes: Map<Address, bool>,
+    pub votes: soroban_sdk::Map<Address, bool>,
     /// Ledger timestamp at/after which this proposal may execute.
     pub eta: u64,
     pub submitted_at: u64,
@@ -873,6 +893,8 @@ pub enum Error {
     NonceAlreadyUsed = 1005,
     /// Batch size exceeds maximum allowed size.
     BatchTooLarge = 1006,
+    /// Self-referral is not allowed - inviter cannot be the same as subscriber.
+SelfReferralNotAllowed = 1007, 
 
     // --- Not Found (2000-2099) ---
     /// The requested resource was not found in storage.
@@ -929,6 +951,9 @@ pub enum Error {
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
 
+    EmergencyStopAlreadyActive = 4100,
+    EmergencyStopAlreadyDisabled = 4101,
+
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
     InsufficientBalance = 5001,
@@ -982,6 +1007,10 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
+    /// Usage limits must be configured before creating a usage-enabled subscription.
+    UsageLimitsRequired = 6018,
+    /// Subscriber has exceeded the rate limit for creating subscriptions.
+    SubscriberRateLimited = 6019,  
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -996,6 +1025,8 @@ pub enum Error {
     UnknownMerchantTag = 7005,
     /// The same tag appears more than once in a single `set_merchant_tags` call.
     DuplicateMerchantTag = 7006,
+    /// Merchant has exceeded the maximum number of allowed tags.
+    MerchantTagLimitExceeded = 7007,  
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -1037,9 +1068,15 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
-    // --- Admin Config Cooldown (12000-12099) ---
-    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
-    CooldownActive = 12001,
+    // --- Emergency Withdraw (11000-11099) ---
+    /// Emergency withdraw not requested for this subscription.
+    EmergencyWithdrawNotRequested = 11004,
+    /// Emergency withdraw invalid state.
+    EmergencyWithdrawInvalidState = 11005,
+    /// Emergency withdraw cooldown active.
+    EmergencyWithdrawCooldownActive = 11006,
+    /// Emergency withdraw state changed.
+    EmergencyWithdrawStateChanged = 11007,
 
     // --- Delegated Payer (13000-13099) ---
     /// The delegated payer grant was not found.
@@ -1067,9 +1104,9 @@ pub enum Error {
 
     // --- Cancellation Escrow (13000-13099) ---
     /// No cancellation escrow found for this subscription.
-    EscrowNotFound = 13001,
+    EscrowNotFound = 13004,
     /// The cancellation escrow release window has not elapsed yet.
-    EscrowNotReleased = 13002,
+    EscrowNotReleased = 13005,
 }
 
 impl Error {
@@ -1587,7 +1624,6 @@ pub struct OraclePrice {
     pub price: i128,
     pub timestamp: u64,
 }
-
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2760,54 +2796,56 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
-
 #[cfg(test)]
 mod event_topic_tests {
     use super::{
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
-    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
+    use soroban_sdk::{Env, FromVal, Symbol};
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::testutils::Events;
 
     /// The emitted wire representation is part of the indexer-facing contract.
     /// Publish every cached short topic in one transaction and compare each
     /// emitted topic to the `Symbol::new` representation used before caching.
-    #[test]
-    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
-        let env = Env::default();
-        let topics = [
-            ("recovery", TOPIC_RECOVERY),
-            ("created", TOPIC_CREATED),
-            ("deposited", TOPIC_DEPOSITED),
-            ("charged", TOPIC_CHARGED),
-            ("withdrawn", TOPIC_WITHDRAWN),
-            ("cap_reach", TOPIC_CAP_REACH),
-            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
-        ];
+   #[test]
+fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
+    let env = Env::default();
+    let topics = [
+        ("recovery", TOPIC_RECOVERY),
+        ("created", TOPIC_CREATED),
+        ("deposited", TOPIC_DEPOSITED),
+        ("charged", TOPIC_CHARGED),
+        ("withdrawn", TOPIC_WITHDRAWN),
+        ("cap_reach", TOPIC_CAP_REACH),
+        ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
+    ];
 
-        for (_, topic) in topics.iter() {
-            env.events().publish((topic,), ());
-        }
-
-        let emitted_events = env.events().all();
-        assert_eq!(emitted_events.len(), topics.len() as u32);
-        for (index, (name, expected_topic)) in topics.iter().enumerate() {
-            let emitted = emitted_events.get(index as u32).unwrap();
-            let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
-            let legacy_topic = Symbol::new(&env, name);
-
-            assert_eq!(
-                emitted_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
-                "event topic {name} changed its wire representation"
-            );
-            assert_eq!(
-                expected_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
-                "cached topic {name} differs from Symbol::new"
-            );
-        }
+    for (_, topic) in topics.iter() {
+        env.events().publish((topic,), ());
     }
+
+    let emitted_events = env.events().all();
+    assert_eq!(emitted_events.len(), topics.len() as u32);
+    
+    for (index, (name, expected_topic)) in topics.iter().enumerate() {
+        let emitted = emitted_events.get(index as u32).unwrap();
+        let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
+        let legacy_topic = Symbol::new(&env, name);
+
+        assert_eq!(
+            emitted_topic.clone().to_xdr(&env),  // <-- Add clone()
+            legacy_topic.clone().to_xdr(&env),   // <-- Add clone()
+            "event topic {name} changed its wire representation"
+        );
+        assert_eq!(
+            expected_topic.clone().to_xdr(&env),  // <-- Add clone()
+            legacy_topic.to_xdr(&env),            // <-- This consumes legacy_topic, so only use it once
+            "cached topic {name} differs from Symbol::new"
+        );
+    }
+}
 
     /// `symbol_short!` supports at most nine characters. Longer event topics
     /// are deliberately constructed with `Symbol::new` at their emit sites.
@@ -2817,9 +2855,196 @@ mod event_topic_tests {
         let long_topic = Symbol::new(&env, "subscription_created");
 
         assert_eq!(
-            long_topic.to_xdr(&env),
+            long_topic.clone().to_xdr(&env),  
             Symbol::new(&env, "subscription_created").to_xdr(&env)
         );
-        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
+        assert_ne!(
+            long_topic.clone().to_xdr(&env), 
+            TOPIC_CREATED.clone().to_xdr(&env)
+        );
     }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceHistoryMeta {
+    pub count: u32,
+    pub capacity: u32,
+    pub head: u32,
+}
+
+/// Transfer intent for subscription ownership transfer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a transfer intent is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a transfer is vetoed by the merchant.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a transfer is completed successfully.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Cancellation escrow record for the 24-hour hold window.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrow {
+    pub subscription_id: u32,
+    pub amount: i128,
+    pub token: Address,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub released_at: u64,
+}
+
+/// Event emitted when a cancellation escrow is opened.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub released_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is disputed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
+    pub dispute_id: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is released.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a sub-account is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountCreatedEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when funds are withdrawn from a sub-account.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountWithdrawEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub token: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals = crate::admin::get_token_decimals(env, token)?;
+    let scale = 10_i128.pow(decimals as u32);
+    Ok(amount / scale)
+}
+
+/// Represents an accepted token with its decimals.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedToken {
+    pub token: Address,
+    pub decimals: u32,
+}
+
+/// Event emitted when the fee token is configured.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent {
+    pub admin: Address,
+    pub fee_token: Option<Address>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+ 
+/// Event emitted when a fee is converted from one token to another.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConvertedEvent {
+    pub subscription_id: u32,
+    pub source_token: Address,
+    pub target_token: Address,
+    pub original_fee_amount: i128,
+    pub converted_fee_amount: i128,
+    pub rate: u128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+/// Event emitted when a subscription is automatically paused due to charge failure.
+ 
+/// Event emitted when a subscription is automatically paused due to charge failure.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent {
+    pub subscription_id: u32,
+    pub consecutive_failures: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
