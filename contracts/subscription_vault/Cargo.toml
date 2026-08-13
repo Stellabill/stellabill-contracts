@@ -90,3 +90,6 @@ path = "benches/gov_tally.rs"
 name = "abi_hash_regression"
 path = "tests/abi_hash_regression.rs"
 
+[[test]]
+name = "metadata_write"
+path = "benches/metadata_write.rs"
