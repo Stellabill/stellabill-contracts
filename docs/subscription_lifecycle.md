@@ -116,19 +116,41 @@ Implementation: `validate_status_transition` in `contracts/subscription_vault/sr
 ### State diagram
 
 ```mermaid
-flowchart LR
-  subgraph creation [Creation]
-    Start[Start]
-  end
-  Start -->|create_subscription| Active
-  Active -->|pause_subscription| Paused
-  Active -->|cancel_subscription| Cancelled
-  Active -->|"charge fails"| InsufficientBalance
-  Paused -->|resume_subscription| Active
-  Paused -->|cancel_subscription| Cancelled
-  InsufficientBalance -->|resume_subscription| Active
-  InsufficientBalance -->|cancel_subscription| Cancelled
-  Cancelled --> Terminal[Terminal]
+stateDiagram-v2
+    [*] --> Active: create_subscription
+
+    %% Active transitions
+    Active --> Paused: pause_subscription
+    Active --> Cancelled: cancel_subscription
+    Active --> GracePeriod: charge_failed (within grace window)
+    Active --> InsufficientBalance: charge_failed (grace expired / no grace)
+
+    %% GracePeriod transitions
+    GracePeriod --> GracePeriod: repeated_charge_fail (still within grace)
+    GracePeriod --> InsufficientBalance: charge_failed (grace expired)
+    GracePeriod --> Active: resume_subscription / successful_charge / grace_buyout
+    GracePeriod --> Cancelled: cancel_subscription
+
+    %% InsufficientBalance transitions
+    InsufficientBalance --> Active: resume_subscription (prepaid >= amount)
+    InsufficientBalance --> Paused: auto_pause (auto-pause threshold reached)
+    InsufficientBalance --> Cancelled: cancel_subscription
+
+    %% Paused transitions
+    Paused --> Active: resume_subscription
+    Paused --> Cancelled: cancel_subscription
+
+    %% Terminal
+    Cancelled --> [*]
+
+    %% Cross-cutting guards
+    note right of Active: Charges are only attempted when
+      status == Active or status == GracePeriod
+
+    %% Legend: manual vs automatic
+    note left of InsufficientBalance
+      Legend:\n- Manual transitions: `pause_subscription`, `resume_subscription`, `cancel_subscription`\n- Automatic transitions: charge-driven `GracePeriod`/`InsufficientBalance`, `auto_pause`, `grace_buyout` (user-initiated while in GracePeriod)\n- Vacation and MerchantPause block charges (see `is_merchant_in_vacation`, `get_merchant_paused`)
+    end note
 ```
 
 ---
@@ -272,6 +294,9 @@ These expectations are intended to make reviews fast: if a future change alters 
 | Area | File | Description |
 |------|------|-------------|
 | Entrypoints | `contracts/subscription_vault/src/lib.rs` | Public API: create, deposit, charge, cancel, pause, resume, batch_charge, queries. |
+| Grace-buyout | `contracts/subscription_vault/src/subscription.rs` | `do_grace_buyout` entrypoint (buyout from `GracePeriod`). |
+| Auto-pause | `contracts/subscription_vault/src/charge_core.rs` | Auto-pause logic increments failure counter and may transition to `Paused`. |
+| Vacation guard | `contracts/subscription_vault/src/merchant.rs` | `is_merchant_in_vacation`/`set_merchant_vacation` — prevents charges while active. |
 | Lifecycle (create, cancel, pause, resume) | `contracts/subscription_vault/src/subscription.rs` | `do_create_subscription`, `do_deposit_funds`, `do_cancel_subscription`, `do_pause_subscription`, `do_resume_subscription`. |
 | Single charge and Active → InsufficientBalance | `contracts/subscription_vault/src/charge_core.rs` | `charge_one`: only runs when Active; on balance failure sets status to InsufficientBalance. |
 | Transition rules | `contracts/subscription_vault/src/state_machine.rs` | `validate_status_transition`, `get_allowed_transitions`, `can_transition`. |
