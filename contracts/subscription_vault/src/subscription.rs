@@ -1077,6 +1077,81 @@ pub fn do_grace_buyout(
     Ok((charge_amount, premium))
 }
 
+/// Change a subscription's recurring `amount` mid-interval with prorated
+/// credit or immediate charge for the delta.
+///
+/// # Authorization
+/// Only the subscription's `subscriber` or `merchant` may call this.
+///
+/// # Behavior
+/// - `pro_credit = old_amount * remaining_seconds / interval_seconds`.
+/// - `immediate_delta = new_amount - pro_credit`.
+///   - If `immediate_delta > 0` the subscriber is charged immediately (prepaid decreased).
+///   - If `immediate_delta < 0` the subscriber is refunded (prepaid increased).
+/// - `new_amount` must be > 0.
+pub fn do_change_subscription_amount(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    new_amount: i128,
+) -> Result<(i128, i128), Error> {
+    authorizer.require_auth();
+
+    if new_amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if sub.is_expired(env.ledger().timestamp(), env.ledger().sequence()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    // Compute remaining seconds in current interval
+    let now = env.ledger().timestamp();
+    let elapsed = now.saturating_sub(sub.last_payment_timestamp);
+    let remaining = if elapsed >= sub.interval_seconds {
+        0u64
+    } else {
+        sub.interval_seconds.saturating_sub(elapsed)
+    };
+
+    // prorated credit based on old amount for the remainder of the interval
+    let pro_credit = if remaining == 0 {
+        0i128
+    } else {
+        // old_amount * remaining / interval_seconds
+        sub.amount.saturating_mul(remaining as i128) / (sub.interval_seconds as i128)
+    };
+
+    // immediate delta: positive -> charge subscriber; negative -> refund
+    let immediate_delta = new_amount.saturating_sub(pro_credit);
+
+    // If charging immediately, ensure sufficient prepaid balance
+    if immediate_delta > 0 {
+        if sub.prepaid_balance < immediate_delta {
+            return Err(Error::InsufficientPrepaidBalance);
+        }
+        sub.prepaid_balance = sub.prepaid_balance.saturating_sub(immediate_delta);
+        // account the immediate charge towards lifetime_charged
+        sub.lifetime_charged = sub.lifetime_charged.saturating_add(immediate_delta);
+    } else if immediate_delta < 0 {
+        // refund to prepaid balance
+        sub.prepaid_balance = sub.prepaid_balance.saturating_add(immediate_delta.abs());
+    }
+
+    let previous_amount = sub.amount;
+    sub.amount = new_amount;
+
+    write_subscription(env, subscription_id, &sub);
+
+    Ok((previous_amount, immediate_delta))
+}
+
 pub fn do_cancel_subscription(
     env: &Env,
     subscription_id: u32,

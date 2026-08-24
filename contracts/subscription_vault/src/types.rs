@@ -1857,6 +1857,9 @@ pub struct FundsDepositedEvent {
 /// Short topic for [`SubscriptionChargedEvent`].
 pub const TOPIC_CHARGED: Symbol = symbol_short!("charged");
 
+/// Short topic for [`AmountChangedEvent`].
+pub const TOPIC_AMOUNT_CHANGED: Symbol = symbol_short!("amount_changed");
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SubscriptionChargedEvent {
@@ -1870,6 +1873,21 @@ pub struct SubscriptionChargedEvent {
     pub period_start: u64,
     pub period_end: u64,
     pub salt: soroban_sdk::BytesN<32>,
+    pub schema_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AmountChangedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub old_amount: i128,
+    pub new_amount: i128,
+    /// Positive when the subscriber was charged immediately, negative when refunded.
+    pub immediate_delta: i128,
+    pub new_prepaid_balance: i128,
+    pub timestamp: u64,
     pub schema_version: u32,
 }
 

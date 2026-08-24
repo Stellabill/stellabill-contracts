@@ -2000,6 +2000,37 @@ impl SubscriptionVault {
         Ok(())
     }
 
+    /// Change a subscription's recurring amount mid-interval with proration.
+    pub fn change_subscription_amount(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        new_amount: i128,
+    ) -> Result<(), Error> {
+        // Reentrancy guard for a mutating operation that may touch balances.
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "change_subscription_amount")?;
+        let (previous_amount, immediate_delta) =
+            subscription::do_change_subscription_amount(&env, subscription_id, authorizer.clone(), new_amount)?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        env.events().publish(
+            (Symbol::new(&env, "amount_changed"), subscription_id),
+            crate::types::AmountChangedEvent {
+                subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
+                old_amount: previous_amount,
+                new_amount: new_amount,
+                immediate_delta,
+                new_prepaid_balance: sub.prepaid_balance,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+
+        Ok(())
+    }
+
     /// Request a subscriber emergency withdrawal after a 72-hour cooldown.
     pub fn request_emergency_withdraw(
         env: Env,
