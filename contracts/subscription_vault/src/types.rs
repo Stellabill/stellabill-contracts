@@ -36,13 +36,13 @@ pub const SUB_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 /// Target TTL for persistent subscription records when extended.
 pub const SUB_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
-/// Threshold below which a persistent billing statement secondary index TTL
-/// is extended.
-#[allow(dead_code)]
+/// Threshold below which a persistent billing statement TTL is extended.
+/// Applied to `DataKey::BillingStatement(sub_id, seq)`,
+/// `DataKey::BillingStatementsBySubscription(sub_id)`, and
+/// `DataKey::BillingStatementSequence(sub_id)` on every read and write.
 pub const BILLING_STATEMENT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
-/// Target TTL for billing statement secondary index entries when extended.
-#[allow(dead_code)]
+/// Target TTL for billing statement entries when extended.
 pub const BILLING_STATEMENT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing period snapshot TTL is extended.
