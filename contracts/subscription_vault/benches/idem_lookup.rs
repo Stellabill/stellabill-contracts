@@ -9,7 +9,7 @@
 //! | `head`   | First slot (index 0)             |
 //! | `middle` | Mid-point slot (index RING/2)    |
 //! | `tail`   | Last slot (index RING-1)         |
-//! | `absent` | Key not present – full scan      |
+//! | `absent` | Key not present â€“ full scan      |
 //!
 //! # Constant-time claim
 //! The implementation iterates over every slot in the ring regardless of
@@ -36,7 +36,7 @@ use soroban_sdk::{
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Number of idempotency slots in the ring (must match types::IDEM_HISTORY = 32).
 const RING_SIZE: usize = 32;
@@ -44,7 +44,7 @@ const RING_SIZE: usize = 32;
 /// Allowed spread between the cheapest and most-expensive hit position,
 /// expressed as a percentage of the cheapest cost.  We allow 20 % to
 /// absorb noise from SHA-256 and SDK overhead while still catching any
-/// O(n) regression that would cause tail to cost ~3× head.
+/// O(n) regression that would cause tail to cost ~3Ã— head.
 const TOLERANCE_PCT: u64 = 20;
 
 /// Charge amount per subscription (1 USDC in base units).
@@ -56,7 +56,7 @@ const DEPOSIT: i128 = 100_000_000;
 /// Minimum top-up threshold passed to `init`.
 const MIN_TOPUP: i128 = 500_000;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Build a deterministic 32-byte key from a single-byte seed.
 fn make_key(env: &Env, seed: u8) -> BytesN<32> {
@@ -115,7 +115,8 @@ fn create_and_fund(
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     let token_admin = token::StellarAssetClient::new(env, token);
     token_admin.mint(subscriber, &(DEPOSIT * 4));
@@ -168,7 +169,7 @@ fn measure_replay_cost(
     env.budget().cpu_instruction_cost()
 }
 
-// ── Benchmark tests ───────────────────────────────────────────────────────────
+// â”€â”€ Benchmark tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// **Main benchmark**: constant-time ring-position check.
 ///
@@ -176,7 +177,7 @@ fn measure_replay_cost(
 /// of four positions (head, middle, tail) and one absent key.  Asserts:
 ///
 /// 1. Hit costs (head / middle / tail) are within `TOLERANCE_PCT` of each
-///    other — confirming that lookup cost does not grow with ring position.
+///    other â€” confirming that lookup cost does not grow with ring position.
 /// 2. Absent cost (full scan with no match) may be higher than any hit cost,
 ///    but the spread among hit positions alone must stay tight.
 /// 3. All replay calls return without panicking (idempotency: the balance
@@ -188,18 +189,18 @@ fn bench_ring_position_cost() {
     let merchant = Address::generate(&env);
     let sub_id = create_and_fund(&env, &client, &subscriber, &merchant, &token);
 
-    // ── Step 1: fill the ring with RING_SIZE distinct keys (seeds 0..RING_SIZE).
+    // â”€â”€ Step 1: fill the ring with RING_SIZE distinct keys (seeds 0..RING_SIZE).
     seed_ring(&env, &client, &subscriber, &token, sub_id, RING_SIZE);
 
-    // ── Step 2: measure replay cost at head (seed 0), middle (seed RING_SIZE/2),
+    // â”€â”€ Step 2: measure replay cost at head (seed 0), middle (seed RING_SIZE/2),
     //           and tail (seed RING_SIZE-1).
     //
-    //  The ring was inserted in order 0, 1, …, RING_SIZE-1.  After exactly
+    //  The ring was inserted in order 0, 1, â€¦, RING_SIZE-1.  After exactly
     //  RING_SIZE inserts the cursor wraps back to 0; no eviction has occurred.
     //  The linear scan in check_key visits entries in insertion order, so:
-    //    - head  → match at iteration 0
-    //    - mid   → match at iteration RING_SIZE/2
-    //    - tail  → match at iteration RING_SIZE-1
+    //    - head  â†’ match at iteration 0
+    //    - mid   â†’ match at iteration RING_SIZE/2
+    //    - tail  â†’ match at iteration RING_SIZE-1
     //
     //  If the implementation is truly constant-time-in-position, all three
     //  costs must be within TOLERANCE_PCT of each other.
@@ -220,7 +221,7 @@ fn bench_ring_position_cost() {
         cost_head, cost_mid, cost_tail, cost_absent
     );
 
-    // ── Step 3: assert constant-time property across hit positions.
+    // â”€â”€ Step 3: assert constant-time property across hit positions.
     let hit_min = cost_head.min(cost_mid).min(cost_tail);
     let hit_max = cost_head.max(cost_mid).max(cost_tail);
     // Avoid divide-by-zero on extremely cheap operations.
@@ -229,7 +230,7 @@ fn bench_ring_position_cost() {
         assert!(
             spread_pct <= TOLERANCE_PCT,
             "Ring-position cost spread {}% exceeds {}% tolerance. \
-             head={} mid={} tail={} — the implementation may have \
+             head={} mid={} tail={} â€” the implementation may have \
              introduced an early-exit O(n) regression.",
             spread_pct,
             TOLERANCE_PCT,
@@ -239,16 +240,16 @@ fn bench_ring_position_cost() {
         );
     }
 
-    // ── Step 4: absent key must cost at least as much as the minimum hit cost
+    // â”€â”€ Step 4: absent key must cost at least as much as the minimum hit cost
     //           (it scans the full ring without finding a match).
     assert!(
         cost_absent >= hit_min,
-        "Absent-key cost {} is less than hit_min {} — unexpected.",
+        "Absent-key cost {} is less than hit_min {} â€” unexpected.",
         cost_absent,
         hit_min
     );
 
-    // ── Step 5: verify balance is unchanged after all replay calls.
+    // â”€â”€ Step 5: verify balance is unchanged after all replay calls.
     //           The ring was seeded with MIN_TOPUP per key; the replay calls
     //           above should not alter the balance.
     let balance_before = client.get_subscription(&sub_id).prepaid_balance;
@@ -263,7 +264,7 @@ fn bench_ring_position_cost() {
     );
 }
 
-/// **Edge case**: empty ring — no keys have been inserted yet.
+/// **Edge case**: empty ring â€” no keys have been inserted yet.
 ///
 /// `check_key` must return `false` immediately (zero iterations).  This test
 /// confirms that the absent-key path on an empty ring does not panic and
@@ -273,7 +274,7 @@ fn bench_empty_ring() {
     let (env, client, token, _contract_id) = setup();
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
-    // Create a subscription but do NOT call seed_ring — ring is empty.
+    // Create a subscription but do NOT call seed_ring â€” ring is empty.
     let sub_id = create_and_fund(&env, &client, &subscriber, &merchant, &token);
 
     let key = make_key(&env, 0xAB);
@@ -319,7 +320,7 @@ fn bench_empty_ring() {
 /// **Edge case**: ring of size 1.
 ///
 /// After exactly one insert the ring holds one entry.  A replay of that entry
-/// must be rejected and the cost must be comparable to — or cheaper than — the
+/// must be rejected and the cost must be comparable to â€” or cheaper than â€” the
 /// ring-full case, because the scan terminates after a single comparison.
 #[test]
 fn bench_ring_size_one() {
@@ -350,7 +351,7 @@ fn bench_ring_size_one() {
     assert!(cost_replay_1 > 0, "CPU cost must be non-zero.");
 }
 
-/// **Edge case**: duplicate hash query — same raw key submitted twice in a row.
+/// **Edge case**: duplicate hash query â€” same raw key submitted twice in a row.
 ///
 /// Verifies that submitting the identical 32-byte key value twice in a row
 /// produces an idempotent no-op on the second call regardless of ring fill
@@ -419,7 +420,7 @@ fn bench_duplicate_hash_query() {
     }
 }
 
-/// **Edge case**: domain isolation — the same raw key in two different domains
+/// **Edge case**: domain isolation â€” the same raw key in two different domains
 /// must not collide in the ring.
 ///
 /// Security property: a key used with `deposit_funds` must never be treated as

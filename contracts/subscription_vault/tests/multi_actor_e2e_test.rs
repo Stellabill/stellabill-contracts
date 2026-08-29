@@ -71,7 +71,8 @@ fn test_multi_actor_e2e_flow() {
         &usage_enabled,
         &None,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let sub_state = vault.get_subscription(&sub_id);
@@ -121,7 +122,7 @@ fn test_multi_actor_e2e_flow() {
     );
     assert_eq!(token.balance(&vault_id), deposit_amount - partial_withdraw);
 
-    // Step 5: `cancel_subscription` — automatically refunds remaining prepaid balance
+    // Step 5: `cancel_subscription` Ã¢â‚¬â€ automatically refunds remaining prepaid balance
     let subscriber_balance_before_cancel = token.balance(&subscriber);
     let vault_balance_before_cancel = token.balance(&vault_id);
     let sub_before_cancel = vault.get_subscription(&sub_id);

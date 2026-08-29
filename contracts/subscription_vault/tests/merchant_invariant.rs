@@ -133,8 +133,7 @@ fn setup_env<'a>() -> (
             &interval,
             &usage_enabled,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         sub_ids.push(sub_id);
 

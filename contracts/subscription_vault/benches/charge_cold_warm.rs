@@ -35,7 +35,7 @@ use subscription_vault::{
     SubscriptionVault, SubscriptionVaultClient,
 };
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const AMOUNT: i128 = 1_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -43,7 +43,7 @@ const DEPOSIT: i128 = 50_000_000;
 const MIN_TOPUP: i128 = 500_000;
 const MAX_DELTA_TOLERANCE_PCT: f64 = 10.0;
 
-// ── Fixture Helper ─────────────────────────────────────────────────────────────
+// â”€â”€ Fixture Helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 struct ScenarioBudget {
     cold_cpu: u64,
@@ -99,7 +99,7 @@ fn get_scenario_budget(scenario_name: &str) -> ScenarioBudget {
     }
 }
 
-// ── Setup Helpers ──────────────────────────────────────────────────────────────
+// â”€â”€ Setup Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
@@ -151,7 +151,8 @@ fn create_and_fund_sub(
         &usage_enabled,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let token_admin = token::StellarAssetClient::new(env, token);
@@ -170,7 +171,7 @@ struct ChargeMetrics {
     write_entries: u64,
 }
 
-// ── Measurement Logic ─────────────────────────────────────────────────────────
+// â”€â”€ Measurement Logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Measures cold path cost: Subscription and related keys are read from persistent storage.
 fn measure_cold_charge(
@@ -273,7 +274,7 @@ fn assert_cold_warm_metrics(
     }
 }
 
-// ── Bench Tests ───────────────────────────────────────────────────────────────
+// â”€â”€ Bench Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// **Variant 1**: Standard active subscription baseline.
 #[test]
@@ -457,7 +458,8 @@ fn bench_charge_cold_vs_warm_grace_period() {
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // First charge attempt with 0 balance -> moves to GracePeriod
@@ -495,7 +497,8 @@ fn bench_charge_cold_vs_warm_grace_period() {
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     env_warm

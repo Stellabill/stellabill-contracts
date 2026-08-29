@@ -25,7 +25,8 @@ fn test_usage_limits_required() {
         &true,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     assert_eq!(res.err().unwrap().unwrap(), Error::UsageLimitsRequired);
@@ -46,7 +47,8 @@ fn test_usage_limits_required() {
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(id, 0);
 
@@ -77,7 +79,8 @@ fn test_usage_limits_required() {
         &true,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(new_sub_id, 1);
 

@@ -56,7 +56,8 @@ fn create_funded_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
-        &None::<Address>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     if prepaid > 0 {
         token_admin.mint(&subscriber, &prepaid);
