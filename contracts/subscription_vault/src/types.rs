@@ -36,13 +36,13 @@ pub const SUB_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 /// Target TTL for persistent subscription records when extended.
 pub const SUB_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
-/// Threshold below which a persistent billing statement secondary index TTL
-/// is extended.
-#[allow(dead_code)]
+/// Threshold below which a persistent billing statement TTL is extended.
+/// Applied to `DataKey::BillingStatement(sub_id, seq)`,
+/// `DataKey::BillingStatementsBySubscription(sub_id)`, and
+/// `DataKey::BillingStatementSequence(sub_id)` on every read and write.
 pub const BILLING_STATEMENT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 days
 
-/// Target TTL for billing statement secondary index entries when extended.
-#[allow(dead_code)]
+/// Target TTL for billing statement entries when extended.
 pub const BILLING_STATEMENT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
 /// Threshold below which a persistent billing period snapshot TTL is extended.
@@ -491,6 +491,182 @@ pub enum SubscriptionStatus {
     Archived = 6,
 }
 
+/// Allowed subscription status transitions, mirroring the state machine
+/// documented in `docs/subscription_state_machine.md`.
+///
+/// `Cancelled` and `Archived` are terminal states and intentionally have no
+/// outgoing entries. `InsufficientBalance -> Active` is reserved for
+/// deposit-funded recovery; callers must also verify that a deposit occurred
+/// before invoking this transition.
+pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
+    (
+        SubscriptionStatus::Active,
+        &[
+            SubscriptionStatus::Paused,
+            SubscriptionStatus::InsufficientBalance,
+            SubscriptionStatus::GracePeriod,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Paused,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::InsufficientBalance,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::GracePeriod,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Expired,
+        &[
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::Archived,
+        ],
+    ),
+];
+
+impl SubscriptionStatus {
+    /// Returns `true` when the transition `self -> next` is in the documented
+    /// transition matrix.
+    pub fn can_transition_to(self, next: SubscriptionStatus) -> bool {
+        ALLOWED_STATUS_TRANSITIONS
+            .iter()
+            .find(|(from, _)| *from == self)
+            .map(|(_, allowed)| allowed.contains(&next))
+            .unwrap_or(false)
+    }
+
+    /// Alias matching the `state_machine` module's `can_transition` API.
+    pub fn can_transition(self, next: SubscriptionStatus) -> bool {
+        self.can_transition_to(next)
+    }
+
+    /// Validates a status transition, returning
+    /// [`Error::InvalidStatusTransition`] when the matrix does not permit it.
+    pub fn validate_status_transition(self, next: SubscriptionStatus) -> Result<(), Error> {
+        if self.can_transition_to(next) {
+            Ok(())
+        } else {
+            Err(Error::InvalidStatusTransition)
+        }
+    }
+}
+
+/// Validates a status transition using the documented matrix.
+pub fn validate_status_transition(
+    from: SubscriptionStatus,
+    to: SubscriptionStatus,
+) -> Result<(), Error> {
+    from.validate_status_transition(to)
+}
+
+/// Returns `true` when the `from -> to` transition is in the documented matrix,
+/// including same-state no-ops for idempotent callers.
+pub fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
+    from == to || from.can_transition_to(to)
+}
+
+/// Applies a transition only when the matrix permits it. Same-state calls are
+/// accepted as idempotent no-ops.
+pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+    if *current == next {
+        return Ok(());
+    }
+    validate_status_transition(*current, next)?;
+    *current = next;
+    Ok(())
+}
+
+#[cfg(test)]
+mod status_transition_tests {
+    use super::{can_transition, transition_to, Error, SubscriptionStatus};
+
+    #[test]
+    fn documented_happy_paths_are_allowed() {
+        use SubscriptionStatus::*;
+        assert!(Active.can_transition_to(Paused));
+        assert!(Active.can_transition_to(InsufficientBalance));
+        assert!(Active.can_transition_to(GracePeriod));
+        assert!(Active.can_transition_to(Expired));
+        assert!(Active.can_transition_to(Cancelled));
+        assert!(Paused.can_transition_to(Active));
+        assert!(Paused.can_transition_to(Expired));
+        assert!(Paused.can_transition_to(Cancelled));
+        assert!(InsufficientBalance.can_transition_to(Active));
+        assert!(InsufficientBalance.can_transition_to(Expired));
+        assert!(InsufficientBalance.can_transition_to(Cancelled));
+        assert!(GracePeriod.can_transition_to(Active));
+        assert!(GracePeriod.can_transition_to(Expired));
+        assert!(GracePeriod.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Archived));
+    }
+
+    #[test]
+    fn terminal_states_are_enforced() {
+        use SubscriptionStatus::*;
+        for next in [
+            Active,
+            Paused,
+            Cancelled,
+            InsufficientBalance,
+            GracePeriod,
+            Expired,
+            Archived,
+        ] {
+            assert!(!Cancelled.can_transition_to(next));
+            assert!(!Archived.can_transition_to(next));
+        }
+    }
+
+    #[test]
+    fn invalid_transitions_return_error() {
+        use SubscriptionStatus::*;
+        assert_eq!(
+            Active.validate_status_transition(Archived),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Cancelled.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Expired.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+    }
+
+    #[test]
+    fn same_state_noop_is_allowed() {
+        use SubscriptionStatus::*;
+        assert!(can_transition(Active, Active));
+        let mut status = Active;
+        assert!(transition_to(&mut status, Active).is_ok());
+        assert_eq!(status, Active);
+        status = Cancelled;
+        assert!(transition_to(&mut status, Cancelled).is_ok());
+        assert_eq!(status, Cancelled);
+        assert!(transition_to(&mut status, Active).is_err());
+    }
+}
+
 /// Stores subscription details and current state.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -531,6 +707,14 @@ pub struct Subscription {
     /// Optional sub-account label for routing charges to an isolated merchant
     /// sub-account ledger (#575). `None` routes to the parent merchant balance.
     pub sub_account_label: Option<Symbol>,
+    /// When `true`, the billing engine charges each interval automatically.
+    /// When `false`, the subscription skips charges once the current interval
+    /// elapses. Defaults to `true` on creation.
+    pub auto_renew: bool,
+    /// Ledger timestamp of the first `set_auto_renew(false)` call. Used to
+    /// enforce the one-interval renewal window. `None` when auto-renewal is
+    /// enabled or has never been disabled.
+    pub auto_renew_disabled_at: Option<u64>,
 }
 
 impl Subscription {
@@ -925,6 +1109,7 @@ pub enum Error {
     TimelockNotElapsed = 4011,
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4013,
+    /// An admin-config mutation was attempted within the per-key cooldown window.
     CooldownActive = 4012,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
@@ -982,6 +1167,12 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
+    /// Per-subscriber rolling subscription-creation rate limit exceeded.
+    SubscriberRateLimited = 6019,
+    /// Usage limits are required for subscriptions with usage enabled.
+    UsageLimitsRequired = 6020,
+    /// The merchant's tag list has reached the maximum allowed size.
+    MerchantTagLimitExceeded = 6021,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -1037,9 +1228,7 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
-    // --- Admin Config Cooldown (12000-12099) ---
-    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
-    CooldownActive = 12001,
+    // --- Admin Config Cooldown (is part of 4000 range, see CooldownActive = 4012 above) ---
 
     // --- Delegated Payer (13000-13099) ---
     /// The delegated payer grant was not found.
@@ -1048,10 +1237,11 @@ pub enum Error {
     DelegatedPayerGrantExpired = 13002,
     /// The deposit amount exceeds the grant's max_amount.
     DelegatedPayerAmountExceeded = 13003,
-    // --- Auto-Renewal (12000-12099) ---
+
+    // --- Auto-Renewal (14100-14199) ---
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
-    RenewalWindowClosed = 12001,
+    RenewalWindowClosed = 14101,
 
     // --- Admin Proposal (14000-14099) ---
     /// No admin proposal exists for claiming.
@@ -1065,11 +1255,11 @@ pub enum Error {
     /// No active proposal to cancel.
     NoActiveProposal = 14005,
 
-    // --- Cancellation Escrow (13000-13099) ---
+    // --- Cancellation Escrow (15000-15099) ---
     /// No cancellation escrow found for this subscription.
-    EscrowNotFound = 13001,
+    EscrowNotFound = 15001,
     /// The cancellation escrow release window has not elapsed yet.
-    EscrowNotReleased = 13002,
+    EscrowNotReleased = 15002,
 }
 
 impl Error {
