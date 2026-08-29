@@ -11,7 +11,8 @@ index 02c67a4..7180817 100644
 +/// (not a separate code path later): the split helper short-circuits to
 +/// `(gross, 0)` and no `ProtocolFeeChargedEvent` is emitted.
  #[inline(always)]
-pub(crate) fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
+-fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
++pub(crate) fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
      if let Some(override_bps) = crate::merchant::get_merchant_fee_override_bps(env, merchant) {
          return override_bps;
      }
