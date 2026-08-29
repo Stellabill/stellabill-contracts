@@ -1,0 +1,7 @@
+topic: ("charged",)
+data:
+  subscription_id: <u32>
+  merchant: <Address>
+  amount: <i128>
+  lifetime_charged: <i128>
+  schema_version: 2
