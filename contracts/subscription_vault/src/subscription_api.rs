@@ -142,6 +142,17 @@
 // under this feature group. No new ABI symbols are introduced; all public
 // contract entrypoints remain in `lib.rs` under `#[contractimpl]`.
 
+//! # Subscription State Machine
+//!
+//! The canonical `SubscriptionStatus` transition matrix is defined in
+//! `docs/subscription_state_machine.md`. `transition_to` is the only allowed
+//! status mutator and rejects invalid transitions with
+//! `Error::InvalidStatusTransition`, keeping `Cancelled` terminal.
+
+pub use crate::state_machine::{
+    can_transition, transition_to, validate_status_transition,
+};
+
 pub use crate::charge_core::{charge_one, charge_usage_one};
 pub use crate::coupon::{apply_coupon, create_coupon, get_coupon, revoke_coupon};
 pub use crate::dispute::{
