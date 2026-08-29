@@ -1759,14 +1759,8 @@ impl SubscriptionVault {
     /// Returns total subscription count.
     pub fn get_subscription_count(env: Env) -> u32 { env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32) }
 
-    /// Internal ID allocator.
-    fn _next_id(env: &Env) -> Result<u32, Error> {
-        let current: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32);
-        if current == MAX_SUBSCRIPTION_ID { return Err(Error::SubscriptionLimitReached); }
-        env.storage().instance().set(&DataKey::NextId, &(current + 1));
-        Ok(current)
-    }
 }
+
 
 #[cfg(test)]
 mod test_utils;
