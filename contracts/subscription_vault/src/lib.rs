@@ -46,8 +46,8 @@ mod metadata;
 mod nonce;
 pub mod queries;
 mod safe_math;
-mod subscription;
-mod types;
+pub mod subscription;
+pub mod types;
 mod reentrancy;
 mod oracle_adapter;
 mod validation;
@@ -309,10 +309,10 @@ pub mod statements {
     /// offset to resume from (`None` starts at the beginning).
     pub fn get_statements_by_subscription_cursor(
         env: &Env,
-        subscription_id: u32,
-        cursor: Option<u32>,
-        limit: u32,
-        newest_first: bool,
+        _subscription_id: u32,
+        _cursor: Option<u32>,
+        _limit: u32,
+        _newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage {
             statements: soroban_sdk::Vec::new(&env),
@@ -327,7 +327,7 @@ pub mod statements {
 pub mod accounting {
     #![allow(unused_variables, dead_code)]
     use crate::types::Error;
-    use soroban_sdk::{Address, Env, Symbol};
+    use soroban_sdk::{Address, Env};
 
     pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
         Ok(())
@@ -349,8 +349,9 @@ pub mod oracle {
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
     ///
-    /// When oracle pricing is disabled or the subscription has no cross-currency amount,
-    /// the subscription's own `amount` is returned directly (existing behaviour).
+    /// When oracle pricing is disabled, the subscription's own `amount` is returned directly.
+    /// When enabled, the adapter dispatch routes to Spot, TWAP, or FixedRate and
+    /// converts the subscription's quote-denominated amount to token base units.
     pub fn resolve_charge_amount(
         env: &Env,
         _subscription_id: u32,
@@ -360,10 +361,35 @@ pub mod oracle {
         if !config.enabled {
             return Ok(sub.amount);
         }
-        // When oracle is enabled but we have no cross-currency token pair yet, fall back.
-        // A full integration would extract base/quote addresses from the subscription.
-        // For now this preserves the existing default while the dispatch plumbing is ready.
-        Ok(sub.amount)
+
+        // Use the oracle adapter to dispatch to the correct pricing strategy.
+        // For cross-currency pricing, `sub.token` serves as both base and quote
+        // in the single-token case; the adapter contract returns a price that
+        // is then used to convert the subscription amount.
+        let price = crate::oracle_adapter::dispatch_price(
+            env,
+            &config,
+            &sub.token,
+            &sub.token,
+        )?;
+
+        if price == 0 {
+            return Err(Error::OraclePriceInvalid);
+        }
+
+        // Convert quote amount to token base units:
+        // token_amount = ceil(amount * 10^decimals / price)
+        let token_decimals = crate::admin::get_token_decimals(env, &sub.token).unwrap_or(6);
+        let scale: i128 = 10i128.pow(token_decimals);
+        let numerator = sub.amount.checked_mul(scale).ok_or(Error::Overflow)?;
+        let ceil_adjust = (price as i128).checked_sub(1).ok_or(Error::OraclePriceInvalid)?;
+        let token_amount = (numerator + ceil_adjust) / (price as i128);
+
+        if token_amount <= 0 {
+            return Err(Error::OraclePriceInvalid);
+        }
+
+        Ok(token_amount)
     }
 
     /// Persist oracle configuration. Admin only (caller must have verified auth).
@@ -630,35 +656,19 @@ pub use types::{
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SplitChargeEvent, SplitPayees,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
-    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
-    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
-    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
-    BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
-    BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
-    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
-    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
-    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
-    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
+    SubAccountCreatedEvent, SubAccountWithdrawEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary,
     TagAllowlistUpdatedEvent, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, MAX_MERCHANT_TAGS,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND, OP_WITHDRAW,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    MerchantVacation,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -1351,6 +1361,9 @@ impl SubscriptionVault {
                     grace_start_timestamp: None,
                     cancel_at: None,
                     expires_at_ledger: s.expires_at_ledger,
+                    sub_account_label: None,
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -1481,6 +1494,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            None,
+            None,
         )?;
 
         let split = SplitPayees {
@@ -1501,6 +1516,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
+                expires_at_ledger: None,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1915,7 +1931,7 @@ impl SubscriptionVault {
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_subscription_expiration_ledger(
+    pub fn set_sub_expiration_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -2105,7 +2121,7 @@ impl SubscriptionVault {
         subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
         let timestamp = env.ledger().timestamp();
 
-        let sub = queries::get_subscription(&env, subscription_id)?;
+        let _sub = queries::get_subscription(&env, subscription_id)?;
         env.events().publish(
             (Symbol::new(&env, "sub_paused"), subscription_id),
             SubscriptionPausedEvent {

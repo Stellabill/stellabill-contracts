@@ -29,10 +29,6 @@ use crate::types::{
     MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -1359,7 +1355,7 @@ pub fn do_rotate_merchant_address(
 
     // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
     let subs_key_old = DataKey::MerchantSubs(old_merchant.clone());
-    let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
+    let _subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
     let sub_ids: soroban_sdk::Vec<u32> = storage
         .get(&subs_key_old)
         .unwrap_or(soroban_sdk::Vec::new(env));
@@ -1738,9 +1734,8 @@ pub fn register_sub_account(
 ) -> Result<(), Error> {
     merchant.require_auth();
 
-    // Reject empty labels
-    let label_str = label.to_str(env);
-    if label_str.len() == 0 {
+    // Reject empty labels - use Symbol length check
+    if label.to_string() == "" {
         return Err(Error::InvalidInput);
     }
 
