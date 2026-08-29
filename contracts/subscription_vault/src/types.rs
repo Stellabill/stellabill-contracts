@@ -1491,6 +1491,43 @@ pub struct Coupon {
     pub revoked: bool,
 }
 
+impl Coupon {
+    /// Returns the absolute discount (in token base units) for a gross charge.
+    ///
+    /// Applies `percent_off_bps` first, then `fixed_off`, and clamps the total
+    /// discount to the gross amount so the payable amount never goes negative.
+    pub fn discount_amount(&self, gross: i128) -> i128 {
+        if gross <= 0 {
+            return 0;
+        }
+        let percent_discount = gross
+            .saturating_mul(self.percent_off_bps as i128)
+            .saturating_div(10000_i128);
+        let combined = percent_discount.saturating_add(self.fixed_off);
+        if combined <= 0 {
+            return 0;
+        }
+        if combined >= gross {
+            gross
+        } else {
+            combined
+        }
+    }
+
+    /// Returns `true` if the coupon is not revoked and has not expired.
+    ///
+    /// `expires_at == 0` means the coupon never expires.
+    pub fn is_active(&self, now: u64) -> bool {
+        !self.revoked && (self.expires_at == 0 || now < self.expires_at)
+    }
+
+    /// Returns `true` if the coupon can still be redeemed at `now`.
+    pub fn can_redeem(&self, now: u64, current_redemptions: u32) -> bool {
+        self.is_active(now)
+            && (self.max_redemptions == 0 || current_redemptions < self.max_redemptions)
+    }
+}
+
 /// Event emitted when a merchant creates a new coupon.
 #[contracttype]
 #[derive(Clone, Debug)]
