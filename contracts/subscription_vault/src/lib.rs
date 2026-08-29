@@ -3543,3 +3543,5 @@ mod test_merchant_vacation;
 
 #[cfg(test)]
 mod test_emergency_stop_view_surface;
+#[cfg(test)]
+mod test_protocol_fee_routing;
