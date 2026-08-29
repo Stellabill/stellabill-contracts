@@ -1387,6 +1387,9 @@ impl SubscriptionVault {
                     grace_start_timestamp: None,
                     cancel_at: None,
                     expires_at_ledger: s.expires_at_ledger,
+                    sub_account_label: None,
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()

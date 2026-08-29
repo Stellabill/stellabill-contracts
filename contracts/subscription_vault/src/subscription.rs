@@ -66,15 +66,16 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error, FundsDepositedEvent,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
-    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate,
-    PlanTemplateUpdatedEvent, SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
-    SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
-    TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
-    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    AutoRenewToggledEvent, BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent,
+    LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
+    PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent,
+    ReferralAttributedEvent, SubscriberCreateWindow, SubscriberEmergencyWithdrawEvent,
+    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
+    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
+    UsageLimitsConfiguredEvent, TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED,
+    TOPIC_ONE_OFF_CHARGED, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -653,9 +654,9 @@ pub fn do_create_subscription_with_token(
         cancel_at: None,
         expires_at_ledger,
         sub_account_label,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
-
-    // Allocate ID with overflow / limit guard.
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
     if usage_enabled {
@@ -3140,6 +3141,8 @@ pub fn do_create_subscription_from_plan(
         cancel_at: None,
         expires_at_ledger: None,
         sub_account_label,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
 
     write_subscription(env, id, &sub);
@@ -3715,4 +3718,82 @@ pub fn write_split_payees(env: &Env, subscription_id: u32, split: &crate::types:
     env.storage()
         .persistent()
         .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
+}
+
+/// Toggle auto-renewal for a subscription.
+///
+/// - Only the subscriber or merchant may call this.
+/// - Disabling sets `auto_renew_disabled_at` to the current timestamp (first
+///   disable only — subsequent disables preserve the original timestamp).
+/// - Re-enabling clears `auto_renew_disabled_at`.
+/// - Re-enabling after the renewal window (`disabled_at + interval_seconds`)
+///   has elapsed returns `Error::RenewalWindowClosed`.
+/// - Toggling on a non-Active subscription (Cancelled, Expired, etc.) returns
+///   `Error::InvalidStatusTransition`.
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    authorizer.require_auth();
+
+    let mut sub = crate::queries::get_subscription(env, subscription_id)?;
+
+    // Only subscriber or merchant may toggle auto-renewal.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
+    let now = env.ledger().timestamp();
+
+    // Toggling on expired subscriptions is rejected.
+    if sub.is_expired(now, env.ledger().sequence()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    // Toggling on terminal / non-Active states is rejected.
+    match sub.status {
+        SubscriptionStatus::Active | SubscriptionStatus::Paused => {}
+        _ => return Err(Error::InvalidStatusTransition),
+    }
+
+    if enabled {
+        // Re-enable: check renewal window.
+        if !sub.auto_renew {
+            if let Some(disabled_at) = sub.auto_renew_disabled_at {
+                let window_end = disabled_at.saturating_add(sub.interval_seconds);
+                if now >= window_end {
+                    return Err(Error::RenewalWindowClosed);
+                }
+            }
+            sub.auto_renew = true;
+            sub.auto_renew_disabled_at = None;
+        }
+        // Already enabled — no-op, but still emit event and save.
+    } else {
+        // Disable: preserve original disable timestamp on repeated calls.
+        if sub.auto_renew {
+            sub.auto_renew = false;
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        // Already disabled — no-op (preserve original timestamp).
+    }
+
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            enabled,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
 }

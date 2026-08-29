@@ -531,6 +531,14 @@ pub struct Subscription {
     /// Optional sub-account label for routing charges to an isolated merchant
     /// sub-account ledger (#575). `None` routes to the parent merchant balance.
     pub sub_account_label: Option<Symbol>,
+    /// When `true`, the billing engine charges each interval automatically.
+    /// When `false`, the subscription skips charges once the current interval
+    /// elapses. Defaults to `true` on creation.
+    pub auto_renew: bool,
+    /// Ledger timestamp of the first `set_auto_renew(false)` call. Used to
+    /// enforce the one-interval renewal window. `None` when auto-renewal is
+    /// enabled or has never been disabled.
+    pub auto_renew_disabled_at: Option<u64>,
 }
 
 impl Subscription {
@@ -925,6 +933,7 @@ pub enum Error {
     TimelockNotElapsed = 4011,
     /// Subscription is not in GracePeriod for a buyout operation.
     NotInGracePeriod = 4013,
+    /// An admin-config mutation was attempted within the per-key cooldown window.
     CooldownActive = 4012,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
@@ -982,6 +991,12 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
+    /// Per-subscriber rolling subscription-creation rate limit exceeded.
+    SubscriberRateLimited = 6019,
+    /// Usage limits are required for subscriptions with usage enabled.
+    UsageLimitsRequired = 6020,
+    /// The merchant's tag list has reached the maximum allowed size.
+    MerchantTagLimitExceeded = 6021,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.
@@ -1037,9 +1052,7 @@ pub enum Error {
     /// The transfer target is invalid.
     InvalidTransferTarget = 11003,
 
-    // --- Admin Config Cooldown (12000-12099) ---
-    /// A protocol-wide config mutation was attempted within the per-key cooldown window.
-    CooldownActive = 12001,
+    // --- Admin Config Cooldown (is part of 4000 range, see CooldownActive = 4012 above) ---
 
     // --- Delegated Payer (13000-13099) ---
     /// The delegated payer grant was not found.
@@ -1048,10 +1061,11 @@ pub enum Error {
     DelegatedPayerGrantExpired = 13002,
     /// The deposit amount exceeds the grant's max_amount.
     DelegatedPayerAmountExceeded = 13003,
-    // --- Auto-Renewal (12000-12099) ---
+
+    // --- Auto-Renewal (14100-14199) ---
     /// The renewal window (one billing interval after auto_renew was disabled)
     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
-    RenewalWindowClosed = 12001,
+    RenewalWindowClosed = 14101,
 
     // --- Admin Proposal (14000-14099) ---
     /// No admin proposal exists for claiming.
@@ -1065,11 +1079,11 @@ pub enum Error {
     /// No active proposal to cancel.
     NoActiveProposal = 14005,
 
-    // --- Cancellation Escrow (13000-13099) ---
+    // --- Cancellation Escrow (15000-15099) ---
     /// No cancellation escrow found for this subscription.
-    EscrowNotFound = 13001,
+    EscrowNotFound = 15001,
     /// The cancellation escrow release window has not elapsed yet.
-    EscrowNotReleased = 13002,
+    EscrowNotReleased = 15002,
 }
 
 impl Error {

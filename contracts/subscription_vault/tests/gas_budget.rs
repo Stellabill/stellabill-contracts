@@ -15,8 +15,8 @@
 //! - `charge_subscription` is O(1) per call (no global scan); tested at high IDs.
 //! - `deposit_funds` acquires a reentrancy guard; budget accommodates the guard overhead.
 //! - `withdraw_merchant_funds` is O(1) over merchant-balance key regardless of earnings depth.
-//! - All budgets are 2× conservative baselines. Tighten only with benchmark evidence
-//!   and a PR comment citing the measurement (see docs/query_performance.md §Re-benchmarking).
+//! - All budgets are 2Ã— conservative baselines. Tighten only with benchmark evidence
+//!   and a PR comment citing the measurement (see docs/query_performance.md Â§Re-benchmarking).
 
 #![cfg(test)]
 
@@ -29,10 +29,10 @@ use soroban_sdk::{
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
-// ── Budget constants (sourced from docs/query_performance.md) ────────────────
-// Mutating entrypoints: conservative 2× headroom over measured baselines.
+// â”€â”€ Budget constants (sourced from docs/query_performance.md) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Mutating entrypoints: conservative 2Ã— headroom over measured baselines.
 // To tighten: run the test with --nocapture, record [Budget] cpu/reads/writes,
-// set the new constant to measured_max × 2, open a PR with the evidence.
+// set the new constant to measured_max Ã— 2, open a PR with the evidence.
 
 /// `create_subscription`: counter read/write + subscription write + index updates.
 const BUDGET_CREATE_CPU: u64 = 1_000_000;
@@ -59,7 +59,7 @@ const BUDGET_WITHDRAW_WRITES: u64 = 20;
 /// fraction of the hard limit. Does not fail the test on its own.
 const WARN_THRESHOLD: f64 = 0.80;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn make_env() -> (
     Env,
@@ -107,7 +107,7 @@ fn assert_budget(
 ) {
     println!(
         "[Budget] {label}: cpu={cpu} reads={reads} writes={writes} \
-         (limits cpu≤{cpu_limit} reads≤{read_limit} writes≤{write_limit})"
+         (limits cpuâ‰¤{cpu_limit} readsâ‰¤{read_limit} writesâ‰¤{write_limit})"
     );
     if cpu as f64 / cpu_limit as f64 > WARN_THRESHOLD {
         println!(
@@ -147,7 +147,7 @@ fn setup_merchant(env: &Env, vault: &SubscriptionVaultClient, merchant: &Address
     );
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// `create_subscription` stays within gas budget on first call (ID 0).
 #[test]
@@ -165,8 +165,7 @@ fn budget_create_subscription() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None,
-        &None::<Address>,
+        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
 
     let resources = env.cost_estimate().resources();
@@ -199,8 +198,7 @@ fn budget_deposit_funds() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None,
-        &None::<Address>,
+        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
 
     env.cost_estimate().budget().reset_unlimited();
@@ -242,8 +240,7 @@ fn budget_charge_subscription() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None,
-        &None::<Address>,
+        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -283,8 +280,7 @@ fn budget_withdraw_merchant_funds() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None,
-        &None::<Address>,
+        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -312,7 +308,7 @@ fn budget_withdraw_merchant_funds() {
 /// `charge_subscription` at a high subscription ID stays O(1).
 ///
 /// Creates 50 subscriptions to push the ID counter high, then measures charge
-/// on the last one. Cost must not grow with ID magnitude — a regression to a
+/// on the last one. Cost must not grow with ID magnitude â€” a regression to a
 /// scan-based implementation would fail here but pass budget_charge_subscription.
 #[test]
 fn budget_charge_subscription_high_id() {
@@ -342,8 +338,7 @@ fn budget_charge_subscription_high_id() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&last_id, &subscriber, &50_000i128, &None);
     }
@@ -390,8 +385,7 @@ fn budget_withdraw_dense_merchant_earnings() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }

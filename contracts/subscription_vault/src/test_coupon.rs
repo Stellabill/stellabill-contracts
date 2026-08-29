@@ -104,7 +104,7 @@ fn test_apply_coupon_subscriber_auth() {
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&wrong_subscriber, &sub_id, &code);
     assert_eq!(
@@ -128,7 +128,7 @@ fn test_apply_coupon_expired() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Advance time past expiry
     env.ledger().set_timestamp(now + 200);
@@ -154,7 +154,7 @@ fn test_apply_coupon_revoked() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(
@@ -178,10 +178,10 @@ fn test_apply_coupon_limit_reached() {
 
     let sub_id1 = client
         .mock_all_auths()
-        .create_subscription(&subscriber1, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber1, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
     let sub_id2 = client
         .mock_all_auths()
-        .create_subscription(&subscriber2, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber2, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // First one works
     client
@@ -212,7 +212,7 @@ fn test_apply_coupon_already_applied() {
         .create_coupon(&merchant, &code2, &token, &0, &0, &0, &0);
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     client
         .mock_all_auths()
@@ -246,7 +246,8 @@ fn test_apply_same_coupon_twice_fails() {
             &false,
             &None::<i128>,
             &None::<u64>,
-            &None::<Address>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
 
     // First application succeeds.
@@ -282,7 +283,7 @@ fn test_apply_coupon_token_mismatch() {
     // Subscription is for token
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(
@@ -352,7 +353,7 @@ fn test_charge_with_discount() {
     // Subscription is for 1000 units
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
     client
         .mock_all_auths()
         .apply_coupon(&subscriber, &sub_id, &code);
@@ -370,15 +371,15 @@ fn test_charge_with_discount() {
     // I should use the `test_charge_invariants.rs` pattern for charging tests.
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Coupon expiry boundary tests
 //
 // Verify coupon redemption behaviour at expiry boundaries.
 // The contract uses `now >= expires_at` to check expiry, so:
-// - timestamp < expires_at → redemption succeeds
-// - timestamp == expires_at → redemption fails (CouponExpired)
-// - timestamp > expires_at → redemption fails (CouponExpired)
-// ═════════════════════════════════════════════════════════════════════════════
+// - timestamp < expires_at â†’ redemption succeeds
+// - timestamp == expires_at â†’ redemption fails (CouponExpired)
+// - timestamp > expires_at â†’ redemption fails (CouponExpired)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 #[test]
 fn coupon_redemption_succeeds_before_expiry() {
@@ -403,7 +404,7 @@ fn coupon_redemption_succeeds_before_expiry() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Redemption succeeds when timestamp < expires_at
     let result = client.try_apply_coupon(&subscriber, &sub_id, &code);
@@ -430,7 +431,7 @@ fn coupon_redemption_fails_at_exact_expiry_time() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Redemption fails when timestamp == expires_at (contract uses >= check)
     let result = client.try_apply_coupon(&subscriber, &sub_id, &code);
@@ -457,7 +458,7 @@ fn coupon_redemption_fails_one_second_after_expiry() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Advance time to exactly expiry time
     env.ledger().set_timestamp(expires_at);
@@ -494,7 +495,7 @@ fn coupon_never_expires_when_expires_at_is_zero() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Advance time far into the future
     let far_future = env.ledger().timestamp() + 1_000_000;
@@ -560,7 +561,7 @@ fn multiple_redemption_attempts_in_same_block() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // First redemption succeeds
     let result1 = client.try_apply_coupon(&subscriber, &sub_id, &code);
@@ -590,7 +591,7 @@ fn expired_coupon_cannot_be_redeemed_after_repeated_attempts() {
 
     let sub_id = client
         .mock_all_auths()
-        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Advance past expiry
     env.ledger().set_timestamp(expires_at + 1);
@@ -620,3 +621,4 @@ fn expired_coupon_cannot_be_redeemed_after_repeated_attempts() {
     let coupon = client.get_coupon(&code).unwrap();
     assert_eq!(coupon.expires_at, expires_at);
 }
+
