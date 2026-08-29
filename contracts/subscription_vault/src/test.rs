@@ -4799,7 +4799,226 @@ fn test_metadata_delete_on_cancelled_subscription_allowed() {
 }
 
 #[test]
-fn test_billing_statements_offset_pagination_newest_first() {
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn test_metadata_whitespace_value_rejected() {
+    // A value consisting entirely of whitespace is rejected at the ABI guard
+    // (Error::InvalidInput / code 3002) before reaching storage.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "tag");
+    let value = String::from_str(&test_env.env, "   "); // whitespace-only
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+#[test]
+fn test_metadata_set_emits_event() {
+    // At least one event is emitted after a successful set_metadata call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "invoice_id");
+    let value = String::from_str(&test_env.env, "INV-9999");
+    let before_count = test_env.env.events().all().len();
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    let after_count = test_env.env.events().all().len();
+    // At least one new event (MetadataSetEvent) was appended
+    assert!(after_count > before_count);
+}
+
+#[test]
+fn test_metadata_delete_emits_event() {
+    // MetadataDeletedEvent is emitted on a successful delete_metadata call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "tag");
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key,
+        &String::from_str(&test_env.env, "v"),
+    );
+    let before_count = test_env.env.events().all().len();
+    test_env.client.delete_metadata(&id, &subscriber, &key);
+    let after_count = test_env.env.events().all().len();
+    // At least one new event was emitted
+    assert!(after_count > before_count);
+}
+
+#[test]
+fn test_metadata_32_byte_key_accepted_33_rejected() {
+    // Boundary test: key of exactly MAX_METADATA_KEY_LENGTH (32 bytes) is
+    // accepted; key of 33 bytes is rejected with MetadataKeyTooLong.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Exactly 32 bytes — accepted
+    let key32 = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(key32.len(), 32);
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key32,
+        &String::from_str(&test_env.env, "ok"),
+    );
+    assert_eq!(
+        test_env.client.get_metadata(&id, &key32),
+        String::from_str(&test_env.env, "ok")
+    );
+
+    // 33 bytes — rejected
+    let key33 = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(key33.len(), 33);
+    let res = test_env.client.try_set_metadata(
+        &id,
+        &subscriber,
+        &key33,
+        &String::from_str(&test_env.env, "bad"),
+    );
+    assert_eq!(res, Err(Ok(Error::MetadataKeyTooLong)));
+}
+
+#[test]
+fn test_metadata_256_byte_value_accepted_257_rejected() {
+    // Boundary test: value of exactly MAX_METADATA_VALUE_LENGTH (256 bytes) is
+    // accepted; value of 257 bytes is rejected with MetadataValueTooLong.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "val_boundary");
+
+    // Exactly 256 bytes — accepted
+    let v256_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 256]).unwrap();
+    let v256 = String::from_str(&test_env.env, &v256_str);
+    assert_eq!(v256.len(), 256);
+    test_env.client.set_metadata(&id, &subscriber, &key, &v256);
+    assert_eq!(test_env.client.get_metadata(&id, &key), v256);
+
+    // 257 bytes — rejected
+    let v257_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 257]).unwrap();
+    let v257 = String::from_str(&test_env.env, &v257_str);
+    assert_eq!(v257.len(), 257);
+    let res = test_env
+        .client
+        .try_set_metadata(&id, &subscriber, &key, &v257);
+    assert_eq!(res, Err(Ok(Error::MetadataValueTooLong)));
+}
+
+#[test]
+fn test_metadata_delete_not_found_idempotency() {
+    // Deleting the same key twice returns NotFound on the second call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "once");
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key,
+        &String::from_str(&test_env.env, "v"),
+    );
+    // First delete: success
+    test_env.client.delete_metadata(&id, &subscriber, &key);
+    // Second delete: NotFound
+    let res = test_env.client.try_delete_metadata(&id, &subscriber, &key);
+    assert_eq!(res, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_metadata_key_limit_delete_then_readd_cycles() {
+    // After filling to the cap, a delete-then-add cycle succeeds repeatedly.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Fill to cap
+    for i in 0..10u32 {
+        let key = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env.client.set_metadata(
+            &id,
+            &subscriber,
+            &key,
+            &String::from_str(&test_env.env, "v"),
+        );
+    }
+    assert_eq!(test_env.client.list_metadata_keys(&id).len(), 10);
+
+    // Cycle: delete key_0, add new_key, repeat twice
+    for cycle in 0u32..2 {
+        let old_key = String::from_str(&test_env.env, &format!("k{cycle}"));
+        test_env.client.delete_metadata(&id, &subscriber, &old_key);
+        let new_key = String::from_str(&test_env.env, &format!("new{cycle}"));
+        test_env.client.set_metadata(
+            &id,
+            &subscriber,
+            &new_key,
+            &String::from_str(&test_env.env, "v2"),
+        );
+        assert_eq!(test_env.client.list_metadata_keys(&id).len(), 10);
+    }
+}
+
+#[test]
+fn test_metadata_set_multiple_subscriptions_independent_caps() {
+    // Each subscription has its own independent key cap; filling one does not
+    // affect another.
+    let test_env = TestEnv::default();
+    let (id1, sub1, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let (id2, sub2, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Fill id1 to cap
+    for i in 0..10u32 {
+        let k = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env
+            .client
+            .set_metadata(&id1, &sub1, &k, &String::from_str(&test_env.env, "v"));
+    }
+    // id2 should still accept keys
+    for i in 0..10u32 {
+        let k = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env
+            .client
+            .set_metadata(&id2, &sub2, &k, &String::from_str(&test_env.env, "v"));
+    }
+    assert_eq!(test_env.client.list_metadata_keys(&id1).len(), 10);
+    assert_eq!(test_env.client.list_metadata_keys(&id2).len(), 10);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4002)")]
+fn test_metadata_set_on_paused_subscription_allowed_cancelled_blocked() {
+    // Paused is allowed; Cancelled is blocked (NotActive / code 4002).
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Pause — should succeed
+    test_env.client.pause_subscription(&id, &subscriber);
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &String::from_str(&test_env.env, "note"),
+        &String::from_str(&test_env.env, "paused"),
+    );
+
+    // Resume then cancel
+    test_env.client.resume_subscription(&id, &subscriber);
+    test_env.client.cancel_subscription(&id, &subscriber);
+
+    // Now set should panic with NotActive
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &String::from_str(&test_env.env, "after_cancel"),
+        &String::from_str(&test_env.env, "blocked"),
+    );
+}
+
+
     let test_env = TestEnv::default();
     test_env.env.ledger().set_timestamp(T0);
 
