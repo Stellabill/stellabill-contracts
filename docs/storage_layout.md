@@ -77,6 +77,22 @@ pub enum SubscriptionStatus {
 
 **TTL behavior:** Subscription entries are kept alive on every read and write. Billing statement secondary index entries and billing period snapshots also carry their own TTL thresholds (`BILLING_STATEMENT_TTL_THRESHOLD`, `BILLING_STATEMENT_TTL_EXTEND_TO`, `BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD`, `BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO`) and are extended when the corresponding storage operations execute.
 
+### Billing Statement TTL thresholds and extension policy
+
+All three persistent keys used for billing statements are extended on every write (`append_statement`) and on every read (`get_statements_by_subscription_offset`):
+
+| Storage key | Extended on | Threshold constant | Extend-to constant |
+|---|---|---|---|
+| `DataKey::BillingStatementSequence(sub_id)` | write (`append_statement`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+| `DataKey::BillingStatement(sub_id, seq)` | write (`append_statement`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+| `DataKey::BillingStatementsBySubscription(sub_id)` | write (`append_statement`), read (`get_statements_by_subscription_offset`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+
+**Extension semantics**: `env.storage().persistent().extend_ttl(key, threshold, extend_to)` is a conditional call — the host only extends when the entry's remaining TTL is strictly below `threshold`. When the remaining TTL is already at or above the threshold, the call is a no-op with no ledger fee. The helper `extend_statement_ttl` (in `lib.rs::statements`) encapsulates this call.
+
+**Absent-key safety**: If the key does not exist (e.g., a subscription that has not yet been charged), the `extend_ttl` call is a silent no-op. The host does not error for absent keys.
+
+**Rationale**: Billing statement entries accumulate over a subscription's lifetime. Without TTL extension on writes, a statement written during an early charge would expire after Soroban's default persistent TTL (~120 days) and become unreadable by later queries. Extending to 365 days on every append keeps all retained statements reachable as long as the subscription is actively used. The read-path extension (`get_statements_by_subscription_offset`) further refreshes statement bodies on each pagination query, matching the same "touched entries stay alive" contract that subscription records use.
+
 #### TTL exhaustion semantics
 
 A `DataKey::Sub(id)` entry is readable while `live_until_ledger >= current_ledger`. The contract refreshes this window on every `get_subscription`/`write_subscription` via `extend_ttl(SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO)`, so an entry that is touched at least once per `SUB_TTL_EXTEND_TO` window (365 days) never expires.
