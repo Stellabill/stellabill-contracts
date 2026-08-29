@@ -2174,18 +2174,10 @@ pub fn do_charge_one_off(
 
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
-    let fee_bps = crate::admin::get_protocol_fee_bps(env);
+    let fee_bps = crate::charge_core::route_fee_bps(env, &sub.merchant);
     let treasury_opt = crate::admin::get_treasury(env);
-    let (merchant_amount, fee_amount) = if fee_bps > 0 {
-        if let Some(ref _t) = treasury_opt {
-            let fee = amount * fee_bps as i128 / 10_000i128;
-            (amount - fee, fee)
-        } else {
-            (amount, 0i128)
-        }
-    } else {
-        (amount, 0i128)
-    };
+    let (merchant_amount, fee_amount) =
+        crate::charge_core::split_protocol_fee(amount, fee_bps, treasury_opt.is_some());
     crate::charge_core::credit_charge_payees(
         env,
         subscription_id,
