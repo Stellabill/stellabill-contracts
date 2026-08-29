@@ -66,7 +66,89 @@ pub use types::{
 // ── Stub modules for features not yet extracted to separate files ─────────────
 
 /// State machine: validates and applies subscription status transitions.
-pub mod state_machine;
+pub mod state_machine {
+    use crate::types::{Error, SubscriptionStatus};
+
+    /// Documented transition matrix from `docs/subscription_state_machine.md`.
+    ///
+    /// `Cancelled` and `Archived` are terminal states. `InsufficientBalance`
+    /// may return to `Active` only after a successful deposit, and
+    /// `GracePeriod` may return to `Active` via deposit/buyout.
+    static ALLOWED_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
+        (
+            SubscriptionStatus::Active,
+            &[
+                SubscriptionStatus::Paused,
+                SubscriptionStatus::InsufficientBalance,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::Paused,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::InsufficientBalance,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::GracePeriod,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::GracePeriod,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (SubscriptionStatus::Expired, &[SubscriptionStatus::Cancelled]),
+        (SubscriptionStatus::Cancelled, &[] as &[SubscriptionStatus]),
+        (SubscriptionStatus::Archived, &[] as &[SubscriptionStatus]),
+    ];
+
+    /// Returns the documented next states for `status`.
+    pub fn get_allowed_transitions(status: SubscriptionStatus) -> &'static [SubscriptionStatus] {
+        ALLOWED_TRANSITIONS
+            .iter()
+            .find(|(current, _)| *current == status)
+            .map_or(&[], |(_, allowed)| *allowed)
+    }
+
+    /// Returns `true` when the pair is present in the documented transition matrix.
+    pub fn can_transition(current: SubscriptionStatus, next: SubscriptionStatus) -> bool {
+        get_allowed_transitions(current).contains(&next)
+    }
+
+    /// Returns `InvalidStatusTransition` when `current -> next` is not documented.
+    pub fn validate_status_transition(
+        current: SubscriptionStatus,
+        next: SubscriptionStatus,
+    ) -> Result<(), Error> {
+        if can_transition(current, next) {
+            Ok(())
+        } else {
+            Err(Error::InvalidStatusTransition)
+        }
+    }
+
+    /// Applies `next` only if the transition is documented.
+    pub fn transition_to(
+        current: &mut SubscriptionStatus,
+        next: SubscriptionStatus,
+    ) -> Result<(), Error> {
+        validate_status_transition(current.clone(), next.clone())?;
+        *current = next;
+        Ok(())
+    }
+}
 
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;
@@ -95,11 +177,30 @@ pub mod statements {
     use crate::types::{
         AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
         BillingStatement, BillingStatementAggregate, BillingStatementsPage, DataKey, Error,
+        BILLING_STATEMENT_TTL_EXTEND_TO, BILLING_STATEMENT_TTL_THRESHOLD,
     };
     use soroban_sdk::{Address, Env, Vec};
 
+    /// Extends the TTL of a persistent billing-statement storage entry.
+    ///
+    /// Only extends when the remaining TTL is below `BILLING_STATEMENT_TTL_THRESHOLD`.
+    /// This is a no-op when the key does not exist (the host ignores the call
+    /// for absent keys). Callers must not treat a missing return as an error.
+    pub(crate) fn extend_statement_ttl(env: &Env, key: &DataKey) {
+        env.storage().persistent().extend_ttl(
+            key,
+            BILLING_STATEMENT_TTL_THRESHOLD,
+            BILLING_STATEMENT_TTL_EXTEND_TO,
+        );
+    }
+
     /// Appends a new, immutable statement to the subscription's ledger under a
     /// fresh, monotonically-increasing sequence number.
+    ///
+    /// TTL is extended on every write for:
+    /// - `DataKey::BillingStatementSequence(subscription_id)` — the sequence counter.
+    /// - `DataKey::BillingStatement(subscription_id, seq)` — the statement body.
+    /// - `DataKey::BillingStatementsBySubscription(subscription_id)` — the secondary index.
     pub fn append_statement(
         env: &Env,
         subscription_id: u32,
@@ -113,6 +214,8 @@ pub mod statements {
         let seq: u32 = env.storage().persistent().get(&seq_key).unwrap_or(0);
         let next_seq = seq.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().persistent().set(&seq_key, &next_seq);
+        // Extend TTL on the sequence counter so it survives between charges.
+        extend_statement_ttl(env, &seq_key);
 
         let stmt = BillingStatement {
             subscription_id,
@@ -124,14 +227,17 @@ pub mod statements {
             merchant,
             kind,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::BillingStatement(subscription_id, next_seq), &stmt);
+        let stmt_key = DataKey::BillingStatement(subscription_id, next_seq);
+        env.storage().persistent().set(&stmt_key, &stmt);
+        // Extend TTL on the statement body itself.
+        extend_statement_ttl(env, &stmt_key);
 
         let idx_key = DataKey::BillingStatementsBySubscription(subscription_id);
         let mut ids: Vec<u32> = env.storage().persistent().get(&idx_key).unwrap_or(Vec::new(env));
         ids.push_back(next_seq);
         env.storage().persistent().set(&idx_key, &ids);
+        // Extend TTL on the secondary index so queries remain available.
+        extend_statement_ttl(env, &idx_key);
 
         Ok(())
     }
@@ -259,6 +365,10 @@ pub mod statements {
     /// subscription's retained (non-pruned) statement list, ordered
     /// newest-first or oldest-first. `next_cursor` (the next `offset` to
     /// request) is `Some` iff more statements remain after this page.
+    ///
+    /// TTL is extended on every read for the secondary index and each
+    /// statement body that is fetched, keeping them alive as long as the
+    /// contract is actively queried.
     pub fn get_statements_by_subscription_offset(
         env: &Env,
         subscription_id: u32,
@@ -272,6 +382,10 @@ pub mod statements {
 
         let idx_key = DataKey::BillingStatementsBySubscription(subscription_id);
         let ids: Vec<u32> = env.storage().persistent().get(&idx_key).unwrap_or(Vec::new(env));
+        // Extend TTL on the secondary index entry whenever it is read.
+        if !ids.is_empty() {
+            extend_statement_ttl(env, &idx_key);
+        }
         let total = ids.len();
 
         let mut ordered: Vec<u32> = Vec::new(env);
@@ -290,11 +404,14 @@ pub mod statements {
         let mut i = offset;
         while i < end {
             let seq = ordered.get(i).unwrap();
+            let stmt_key = DataKey::BillingStatement(subscription_id, seq);
             if let Some(stmt) = env
                 .storage()
                 .persistent()
-                .get::<_, BillingStatement>(&DataKey::BillingStatement(subscription_id, seq))
+                .get::<_, BillingStatement>(&stmt_key)
             {
+                // Extend TTL on each fetched statement body.
+                extend_statement_ttl(env, &stmt_key);
                 statements.push_back(stmt);
             }
             i += 1;
@@ -659,6 +776,7 @@ pub use types::{
     OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND, OP_WITHDRAW,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BILLING_STATEMENT_TTL_THRESHOLD, BILLING_STATEMENT_TTL_EXTEND_TO,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -1351,6 +1469,9 @@ impl SubscriptionVault {
                     grace_start_timestamp: None,
                     cancel_at: None,
                     expires_at_ledger: s.expires_at_ledger,
+                    sub_account_label: None,
+                    auto_renew: true,
+                    auto_renew_disabled_at: None,
                 };
                 env.storage()
                     .persistent()
@@ -3471,6 +3592,7 @@ impl SubscriptionVault {
     }
 }
 
+
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
@@ -3490,6 +3612,9 @@ mod test_scheduled_cancel;
 mod test_subscriber_active_cap;
 #[cfg(test)]
 mod test_statement_compaction;
+
+#[cfg(test)]
+mod test_ttl_billing_statements;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
@@ -3543,3 +3668,5 @@ mod test_merchant_vacation;
 
 #[cfg(test)]
 mod test_emergency_stop_view_surface;
+#[cfg(test)]
+mod test_protocol_fee_routing;
