@@ -50,11 +50,23 @@ If `fee_bps > 0` but no treasury address is stored (e.g. `set_protocol_fee` was 
 
 ## Charge types covered
 
-| Charge type | Function              | Fee routing |
-|-------------|-----------------------|-------------|
-| Interval    | `charge_one`          | ✓           |
-| Usage       | `charge_usage_one`    | ✓           |
-| One-off     | `do_charge_one_off`   | ✓           |
+Every successful charge path reads `DataKey::FeeBps` (via `route_fee_bps`, which
+also honours a per-merchant override) and `DataKey::Treasury`, then applies
+
+```
+fee = amount * fee_bps / 10_000
+```
+
+before crediting the merchant. Batch charges cache only the treasury address;
+the effective bps is still resolved per subscription so a merchant override
+cannot be skipped.
+
+| Charge type | Function              | Fee routing | Effective bps source      |
+|-------------|-----------------------|-------------|---------------------------|
+| Interval    | `charge_one`          | ✓           | `route_fee_bps`           |
+| Usage       | `charge_usage_one`    | ✓           | `route_fee_bps`           |
+| One-off     | `do_charge_one_off`   | ✓           | `route_fee_bps`           |
+| Batch       | `execute_batch_charge`| ✓           | `route_fee_bps` per id    |
 
 ## Security notes
 
