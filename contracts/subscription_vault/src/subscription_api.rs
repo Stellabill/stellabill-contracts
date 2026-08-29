@@ -74,6 +74,11 @@
 //! | `revoke_coupon` | [`crate::coupon::revoke_coupon`] |
 //! | `apply_coupon` | [`crate::coupon::apply_coupon`] |
 //! | `get_coupon` | [`crate::coupon::get_coupon`] |
+//! Coupons are token-bound discount codes with optional `percent_off_bps` and/or
+//! `fixed_off`, a global `max_redemptions` cap, an `expires_at` deadline, and
+//! per-subscription redemption tracking. Discounts are applied before protocol
+//! fees so that `gross == discount + merchant_net + treasury_fee` remains
+//! balanced.
 //!
 //! ## Charging
 //! | Entrypoint | Delegate |
