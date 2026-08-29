@@ -1,0 +1,29 @@
+--- a/contracts/subscription_vault/src/types.rs
++++ b/contracts/subscription_vault/src/types.rs
+@@ -925,7 +925,6 @@ pub enum Error {
+     TimelockNotElapsed = 4011,
+     /// Subscription is not in GracePeriod for a buyout operation.
+     NotInGracePeriod = 4013,
+-    CooldownActive = 4012,
+     /// Merchant vacation mode is active — charges blocked during vacation window.
+     VacationActive = 4014,
+ 
+@@ -1051,7 +1050,7 @@ pub enum Error {
+     // --- Auto-Renewal (12000-12099) ---
+     /// The renewal window (one billing interval after auto_renew was disabled)
+     /// has elapsed; the subscription must be cancelled and recreated to resume billing.
+-    RenewalWindowClosed = 12001,
++    RenewalWindowClosed = 12002,
+ 
+     // --- Admin Proposal (14000-14099) ---
+     /// No admin proposal exists for claiming.
+@@ -1067,9 +1066,9 @@ pub enum Error {
+ 
+     // --- Cancellation Escrow (13000-13099) ---
+     /// No cancellation escrow found for this subscription.
+-    EscrowNotFound = 13001,
++    EscrowNotFound = 13004,
+     /// The cancellation escrow release window has not elapsed yet.
+-    EscrowNotReleased = 13002,
++    EscrowNotReleased = 13005,
+ }
