@@ -322,13 +322,13 @@ pub fn charge_one(
                 let token_addr = sub.token.clone();
                 write_subscription(env, subscription_id, &sub);
                 if refund_amount > 0 {
+                    crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
                     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
                     token_client.transfer(
                         &env.current_contract_address(),
                         &sub.subscriber,
                         &refund_amount,
                     );
-                    crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
                 }
                 env.events().publish(
                     (
