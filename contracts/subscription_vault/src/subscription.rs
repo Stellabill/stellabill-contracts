@@ -843,11 +843,11 @@ pub fn do_deposit_funds(
         .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
 
+    crate::accounting::add_total_accounted(env, &token_addr, amount)?;
+
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
-    crate::accounting::add_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (TOPIC_DEPOSITED, subscription_id),
@@ -1928,6 +1928,13 @@ fn bulk_deposit_one(
         }
     };
     sub.prepaid_balance = new_balance;
+    if let Err(e) = crate::accounting::add_total_accounted(env, &token_addr, amount) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: e.to_code(),
+        };
+    }
     env.storage()
         .instance()
         .remove(&DataKey::ChargeFailureCounter(subscription_id));
@@ -1936,8 +1943,6 @@ fn bulk_deposit_one(
     // INTERACTIONS: transfer tokens from caller to contract.
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(caller, &env.current_contract_address(), &amount);
-
-    let _ = crate::accounting::add_total_accounted(env, &token_addr, amount);
 
     // Emit per-subscription deposited event.
     env.events().publish(
@@ -2793,11 +2798,12 @@ pub fn do_partial_refund(
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
     write_subscription(env, subscription_id, &sub);
 
+    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
+
     // Interactions: transfer refund from vault to subscriber.
     let token_addr = sub.token.clone();
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "partial_refund"), subscription_id),
