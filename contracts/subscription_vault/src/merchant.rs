@@ -10,7 +10,7 @@
 //! All functions follow the **Checks-Effects-Interactions (CEI)** pattern:
 //!
 //! 1. **Checks**: Validate merchant authorization and sufficient balance
-//! 2. **Effects**: Update internal state (merchant balance, earnings) in storage
+//! 2. **Effects**: Update internal state (merchant balance, earnings) in storage, and call `sub_total_accounted` on outbound token transfers
 //! 3. **Interactions**: Call token.transfer() AFTER state is consistent and persisted
 //!
 //! **Guard layer**: Public entry-points in `lib.rs` acquire a `ReentrancyGuard` before
