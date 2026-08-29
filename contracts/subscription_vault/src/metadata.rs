@@ -3,8 +3,8 @@ use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, TryFromVal, Vec};
 
 use crate::queries::get_subscription;
 use crate::types::{
-    DataKey, Error, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, SignedMetadataPayload,
-    MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    DataKey, Error, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    SignedMetadataPayload, MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
 };
 
 /// Length of the domain-separator prefix baked into the canonical signed message.
@@ -111,7 +111,9 @@ pub fn do_set_metadata_signed(
     let pk_array = signer_pubkey.to_array();
     let signer_address = Address::try_from_val(
         env,
-        &ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk_array)))),
+        &ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+            pk_array,
+        )))),
     )
     .map_err(|_| Error::Overflow)?;
 
@@ -142,7 +144,10 @@ pub fn do_set_metadata_signed(
     )?;
 
     env.events().publish(
-        (Symbol::new(env, "metadata_set_signed"), payload.subscription_id),
+        (
+            Symbol::new(env, "metadata_set_signed"),
+            payload.subscription_id,
+        ),
         MetadataSetSignedEvent {
             subscription_id: payload.subscription_id,
             key: payload.key.clone(),
@@ -199,7 +204,7 @@ pub fn build_metadata_signed_message(
     network_id: &BytesN<32>,
 ) -> Bytes {
     let mut buf = Bytes::new(env);
-    buf.extend_from_slice(&DOMAIN_METADATA_SIGNED[..]);
+    buf.extend_from_slice(&SIGNED_MSG_DOMAIN_TAG[..]);
 
     let sub_id_bytes = payload.subscription_id.to_be_bytes();
     buf.extend_from_slice(&sub_id_bytes);
@@ -398,18 +403,22 @@ mod signed_message_tests {
             expires_at: 100,
         };
 
-        let chain_a = BytesN::from_array(&env, &[
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-        ]);
-        let chain_b = BytesN::from_array(&env, &[
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-        ]);
+        let chain_a = BytesN::from_array(
+            &env,
+            &[
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x01,
+            ],
+        );
+        let chain_b = BytesN::from_array(
+            &env,
+            &[
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x02,
+            ],
+        );
 
         let msg_a = build_metadata_signed_message(&env, &payload, &chain_a);
         let msg_b = build_metadata_signed_message(&env, &payload, &chain_b);
@@ -424,12 +433,14 @@ mod signed_message_tests {
     #[test]
     fn message_changes_on_any_field_mutation() {
         let env = Env::default();
-        let chain = BytesN::from_array(&env, &[
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
-        ]);
+        let chain = BytesN::from_array(
+            &env,
+            &[
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x03,
+            ],
+        );
 
         let base = || SignedMetadataPayload {
             subscription_id: 1,
@@ -443,23 +454,38 @@ mod signed_message_tests {
 
         let mut different = base();
         different.subscription_id = 2;
-        assert_ne!(base_msg, build_metadata_signed_message(&env, &different, &chain));
+        assert_ne!(
+            base_msg,
+            build_metadata_signed_message(&env, &different, &chain)
+        );
 
         let mut different = base();
         different.key = String::from_str(&env, "k2");
-        assert_ne!(base_msg, build_metadata_signed_message(&env, &different, &chain));
+        assert_ne!(
+            base_msg,
+            build_metadata_signed_message(&env, &different, &chain)
+        );
 
         let mut different = base();
         different.value = String::from_str(&env, "v2");
-        assert_ne!(base_msg, build_metadata_signed_message(&env, &different, &chain));
+        assert_ne!(
+            base_msg,
+            build_metadata_signed_message(&env, &different, &chain)
+        );
 
         let mut different = base();
         different.nonce = 1;
-        assert_ne!(base_msg, build_metadata_signed_message(&env, &different, &chain));
+        assert_ne!(
+            base_msg,
+            build_metadata_signed_message(&env, &different, &chain)
+        );
 
         let mut different = base();
         different.expires_at = 101;
-        assert_ne!(base_msg, build_metadata_signed_message(&env, &different, &chain));
+        assert_ne!(
+            base_msg,
+            build_metadata_signed_message(&env, &different, &chain)
+        );
     }
 
     /// Verify the auxiliary [`get_metadata_signed_nonce`] helper is wired to
@@ -472,10 +498,7 @@ mod signed_message_tests {
 
         let signer = Address::generate(&env);
         env.as_contract(&contract_id, || {
-            assert_eq!(
-                get_metadata_signed_nonce(&env, signer.clone()),
-                0
-            );
+            assert_eq!(get_metadata_signed_nonce(&env, signer.clone()), 0);
         });
     }
 

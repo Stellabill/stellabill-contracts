@@ -25,7 +25,7 @@ env.events().publish(
 - No sensitive data: all event fields are customer-visible
 - One per action: ensures deterministic batch operation ordering
 
-## Schema Versioning Policy
+## Schema Versioning Policy This wave-5 update (dispute/escrow and governance/timelock events) documents events already emitted under the existing `schema_version: 2` layout — no field changes were made, so `EVENT_SCHEMA_VERSION` is not bumped by this change.
 
 `EVENT_SCHEMA_VERSION` is currently `2`. Version `1` is the historical event payload layout
 without an explicit schema version field. Version `2` appends `schema_version: u32` to every event
@@ -451,6 +451,24 @@ Emitted when billing statement compaction is run via `compact_statements()`.
 
 ---
 
+### ⚠️ Merchant Multi-Sig Configuration — No Event Currently Emitted
+
+`set_merchant_multisig()` (`merchant.rs`) lets an admin configure a per-merchant
+`MerchantMultiSigConfig { signers: Vec<Address>, threshold: u32 }`, which then
+requires `threshold` of the listed `signers` to co-authorize
+`withdraw_merchant_funds()`/`withdraw_merchant_funds_for_token()`.
+
+**Gap:** this function currently does **not** call `env.events().publish(...)` —
+changing a merchant's multisig configuration is invisible to indexers today. This is
+flagged here rather than silently documented as a working event, since the whole
+point of this wave-5 update is aligning indexers with contract reality before
+mainnet. **Recommend a follow-up PR** adding a `MerchantMultiSigConfiguredEvent`
+(topic `("multisig_configured", merchant)`, fields: `merchant: Address`,
+`signers: Vec<Address>`, `threshold: u32`, `timestamp: u64`,
+`schema_version: u32`) before mainnet launch, since indexers otherwise cannot
+alert on or audit multisig policy changes for a merchant's withdrawal authority.
+
+
 ## Merchant Configuration Events
 
 ### MerchantPausedEvent
@@ -561,6 +579,148 @@ Emitted when subscription metadata is deleted.
 
 ---
 
+## Dispute & Escrow Events
+
+Chargeback-style workflow (`dispute.rs`): a subscriber opens a dispute, the disputed
+amount moves from the merchant's balance into an escrow bucket
+(`DataKey::DisputeEscrow(dispute_id)`), an admin may respond with evidence, and an
+admin resolves the dispute by routing the escrowed funds to either party.
+
+**Escrow invariant** (see `dispute.rs` module docs): `sum(escrow balances) + merchant_balance == original_merchant_balance` at all times between a dispute opening and its resolution. Indexers reconciling merchant balances should treat an open dispute's escrowed amount as temporarily removed from that merchant's spendable balance, not lost.
+
+### DisputeOpenedEvent
+
+**Topic:** `("dispute_opened", dispute_id)`
+
+Emitted when a subscriber opens a dispute via `open_dispute()`. Debits the disputed amount from the merchant's balance into escrow.
+
+**Fields:**
+
+- `dispute_id`: u64 — unique dispute identifier
+- `subscription_id`: u32
+- `subscriber`: Address — the disputing party (must match the subscription's subscriber)
+- `merchant`: Address
+- `amount`: i128 — amount moved into escrow
+- `evidence_hash`: Option<BytesN<32>> — optional subscriber-supplied evidence hash
+- `timestamp`: u64
+
+**Example Use Cases:**
+
+- Alert merchant of a new dispute
+- Reconcile merchant available balance vs. escrowed balance
+- Track dispute volume/rate per merchant
+
+---
+
+### DisputeRespondedEvent
+
+**Topic:** `("dispute_responded", dispute_id)`
+
+Emitted when an admin responds to a dispute via `respond_dispute()`, transitioning it from `Open` to `Responded`. Does not move funds.
+
+**Fields:**
+
+- `dispute_id`: u64
+- `subscription_id`: u32
+- `admin_evidence_hash`: Option<BytesN<32>> — optional admin-supplied evidence hash
+- `timestamp`: u64
+
+---
+
+### DisputeResolvedEvent
+
+**Topic:** `("dispute_resolved", dispute_id)`
+
+Emitted when an admin resolves a dispute via `resolve_dispute()`. Clears the escrow and routes the funds to either the merchant (`ResolvedToMerchant`) or the subscriber (any other resolution status), per `resolution`.
+
+**Fields:**
+
+- `dispute_id`: u64
+- `subscription_id`: u32
+- `resolution`: DisputeStatus — the final status (indicates which party received the escrowed funds)
+- `timestamp`: u64
+
+**Security note:** `open_dispute` requires the caller to be the subscription's subscriber; `respond_dispute`/`resolve_dispute` are admin-only. Double-open is prevented via `DataKey::SubscriptionDispute(subscription_id)` — indexers should not expect more than one open dispute per subscription at a time.
+
+---
+
+## Governance & Timelock Events
+
+Quorum-gated proposal system (`governance.rs`): guardians vote on proposals with a
+weighted-quorum threshold; every proposal carries an `eta` (execution timestamp) that
+must have passed before it can be executed — this is the timelock. Currently supports
+rotating the contract admin and updating the protocol fee/treasury address
+(`ProposalKind::SetProtocolFee`, which is what actually changes the treasury address
+behind the timelock).
+
+### ProposalSubmittedEvent
+
+**Topic:** `("proposal_submitted",)`
+
+Emitted when a proposal is submitted via `submit_proposal()`.
+
+**Fields:**
+
+- `proposal_id`: u64
+- `kind`: ProposalKind — `RotateAdmin` (0), `SetProtocolFee` (1), or `UpgradeContract` (2, reserved/unused — execution currently always fails for this kind)
+- `target`: Address — primary target (new admin for `RotateAdmin`; unused placeholder for `SetProtocolFee`, see `ProposalExecutedEvent`/on-chain `Proposal.target2`/`target3` for the actual fee/treasury values, which are not repeated in this event)
+- `quorum_bps`: u32 — required quorum in basis points (max 10,000)
+- `eta`: u64 — earliest execution timestamp (the timelock)
+- `timestamp`: u64 — submission timestamp
+
+**Indexer note:** this event does not include `target2`/`target3` (the proposed treasury address / fee bps for a `SetProtocolFee` proposal) — an indexer needing those values must read them via `get_proposal(proposal_id)` rather than from this event alone.
+
+---
+
+### ProposalVotedEvent
+
+**Topic:** `("proposal_voted",)`
+
+Emitted on each guardian vote via `vote_proposal()`. Double-voting isn't blocked — a guardian may change their vote before execution; each call re-emits this event with their latest choice.
+
+**Fields:**
+
+- `proposal_id`: u64
+- `guardian`: Address
+- `voted_yes`: bool
+- `guardian_weight`: u32 — the guardian's voting weight **at the time of this vote** (may differ from their current weight if later changed/removed)
+- `timestamp`: u64
+
+---
+
+### ProposalExecutedEvent
+
+**Topic:** `("proposal_executed",)`
+
+Emitted when a proposal successfully executes via `execute_proposal()`, after both quorum and the ETA timelock have been satisfied.
+
+**Fields:**
+
+- `proposal_id`: u64
+- `kind`: ProposalKind
+- `votes_for`: u32 — total weight voting yes, **re-validated against current guardians** at execution time (a since-removed guardian's earlier vote is excluded)
+- `votes_against`: u32
+- `total_weight`: u32 — total voting weight across all current guardians at execution time
+- `timestamp`: u64
+
+**Security note:** guardian removal mid-vote invalidates that guardian's prior vote for quorum-counting purposes — `votes_for`/`votes_against` reflect only currently-valid guardians, which may differ from the raw vote tally recorded on `ProposalVotedEvent`.
+
+---
+
+### ProposalCancelledEvent
+
+**Topic:** `("proposal_cancelled",)`
+
+Emitted when the admin cancels a pending, not-yet-executed proposal via `cancel_proposal()`.
+
+**Fields:**
+
+- `proposal_id`: u64
+- `reason`: String — free-form cancellation reason
+- `timestamp`: u64
+
+---
+
 ## Initialization & Migration Events
 
 ### MigrationExportEvent
@@ -642,6 +802,10 @@ This enables audit trails for compliance.
 | LifetimeCapReachedEvent       | subscription_id, merchant, timestamp   | completion metrics             |
 | SubscriptionCancelledEvent    | subscription_id, subscriber, timestamp | churn metrics                  |
 | MerchantPausedEvent           | merchant, timestamp                    | merchant downtime              |
+| DisputeOpenedEvent            | dispute_id, subscription_id, merchant  | dispute volume, escrow reconciliation |
+| DisputeResolvedEvent          | dispute_id, subscription_id            | resolution outcome metrics     |
+| ProposalSubmittedEvent        | proposal_id, kind                      | governance activity tracking   |
+| ProposalExecutedEvent         | proposal_id, kind                      | timelock/quorum audit trail    |
 
 ---
 

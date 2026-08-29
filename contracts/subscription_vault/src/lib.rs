@@ -10,6 +10,17 @@
 //! - `types` — shared types and error codes
 //! - `safe_math` — overflow-safe arithmetic helpers
 //!
+//! # Feature-grouped API Navigation
+//! Three documentation and re-export modules group the `#[contractimpl]`
+//! entrypoints by audience without changing the compiled ABI:
+//! - [`subscription_api`] — subscriber lifecycle, plans, coupons, charging,
+//!   billing statements, caps, metadata, and subscriber-initiated disputes
+//! - [`merchant_api`] — withdrawals, configuration, payout schedules,
+//!   reconciliation, and dispute resolution
+//! - [`admin_api`] — initialisation, operator management, emergency stop,
+//!   token allowlist, protocol fees, oracle, migration/export, governance,
+//!   and blocklist
+//!
 //! # Storage Lifecycle
 //! The contract uses a mix of Instance and Persistent storage tiers. Instance storage is
 //! used for global configuration and merchant-level metadata. Persistent storage is used
@@ -24,23 +35,32 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, 
 mod admin;
 pub mod blocklist;
 mod charge_core;
+mod coupon;
 mod dispute;
 mod governance;
 mod idempotency;
+#[cfg(any(test, feature = "invariants"))]
+mod invariants;
 mod merchant;
 mod metadata;
+mod nonce;
 pub mod queries;
 mod safe_math;
 mod subscription;
 mod types;
+mod reentrancy;
+mod oracle_adapter;
 mod validation;
 
+pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
 pub use types::{
-    EVENT_SCHEMA_VERSION, AdminRotatedEvent, Dispute, DisputeOpenedEvent, DisputeRespondedEvent,
-    DisputeResolvedEvent, DisputeStatus, Error, OracleLivenessEvent, ProtocolFeeConfiguredEvent,
-    Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
-    ProposalSubmittedEvent, ProposalVotedEvent,
+    CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
+    CancellationEscrowReleasedEvent,
+    Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
+    DisputeStatus, Error, Proposal, ProposalCancelledEvent,
+    ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
+    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -51,88 +71,257 @@ pub mod state_machine;
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;
 
+// ── Feature-grouped API navigation modules ────────────────────────────────────
+// These modules do NOT define new ABI entrypoints. They exist solely to
+// re-export the inner delegate functions called by `#[contractimpl]` so that
+// IDE navigation and `cargo doc` can surface the grouped API in one place.
+
+/// Subscriber-facing lifecycle, plans, coupons, charging, statements, caps,
+/// metadata, and subscriber-initiated disputes.
+pub mod subscription_api;
+
+/// Merchant-facing withdrawals, configuration, payout schedules, reconciliation,
+/// and dispute resolution.
+pub mod merchant_api;
+
+/// Admin and protocol-governance: initialisation, operators, emergency stop,
+/// token allowlist, protocol fees, oracle, migration/export, governance,
+/// and blocklist.
+pub mod admin_api;
+
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements {
-    #![allow(unused_variables, dead_code)]
+    #![allow(dead_code)]
     use crate::types::{
         AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
-        BillingStatementAggregate, BillingStatementsPage, Error,
+        BillingStatement, BillingStatementAggregate, BillingStatementsPage, DataKey, Error,
     };
-    use soroban_sdk::{Address, Env, Symbol};
+    use soroban_sdk::{Address, Env, Vec};
 
+    /// Appends a new, immutable statement to the subscription's ledger under a
+    /// fresh, monotonically-increasing sequence number.
     pub fn append_statement(
         env: &Env,
         subscription_id: u32,
-        _amount: i128,
-        _merchant: Address,
-        _kind: BillingChargeKind,
-        _period_start: u64,
-        _timestamp: u64,
+        amount: i128,
+        merchant: Address,
+        kind: BillingChargeKind,
+        period_start: u64,
+        timestamp: u64,
     ) -> Result<(), Error> {
+        let seq_key = DataKey::BillingStatementSequence(subscription_id);
+        let seq: u32 = env.storage().persistent().get(&seq_key).unwrap_or(0);
+        let next_seq = seq.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&seq_key, &next_seq);
+
+        let stmt = BillingStatement {
+            subscription_id,
+            sequence: next_seq,
+            charged_at: timestamp,
+            period_start,
+            period_end: timestamp,
+            amount,
+            merchant,
+            kind,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::BillingStatement(subscription_id, next_seq), &stmt);
+
+        let idx_key = DataKey::BillingStatementsBySubscription(subscription_id);
+        let mut ids: Vec<u32> = env.storage().persistent().get(&idx_key).unwrap_or(Vec::new(env));
+        ids.push_back(next_seq);
+        env.storage().persistent().set(&idx_key, &ids);
+
         Ok(())
     }
 
-    pub fn set_retention_config(_env: &Env, _keep_recent: u32) {}
-
-    pub fn get_retention_config(_env: &Env) -> BillingRetentionConfig {
-        BillingRetentionConfig { keep_recent: 0 }
+    pub fn set_retention_config(env: &Env, keep_recent: u32) {
+        env.storage()
+            .instance()
+            .set(&DataKey::BillingRetentionConfig, &BillingRetentionConfig { keep_recent });
     }
 
-    pub fn get_compacted_aggregate(_env: &Env, _subscription_id: u32) -> BillingStatementAggregate {
-        BillingStatementAggregate {
-            pruned_count: 0,
-            total_amount: 0,
-            totals: AccruedTotals {
-                interval: 0,
-                usage: 0,
-                one_off: 0,
-            },
-            oldest_period_start: None,
-            newest_period_end: None,
-        }
+    pub fn get_retention_config(env: &Env) -> BillingRetentionConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::BillingRetentionConfig)
+            .unwrap_or(BillingRetentionConfig { keep_recent: 0 })
     }
 
+    /// Cumulative totals across every statement ever pruned for this
+    /// subscription (accumulates across multiple `compact_subscription_statements`
+    /// calls; does not include statements still retained).
+    pub fn get_compacted_aggregate(env: &Env, subscription_id: u32) -> BillingStatementAggregate {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BillingStatementAggregate(subscription_id))
+            .unwrap_or(BillingStatementAggregate {
+                pruned_count: 0,
+                total_amount: 0,
+                totals: AccruedTotals { interval: 0, usage: 0, one_off: 0 },
+                oldest_period_start: None,
+                newest_period_end: None,
+            })
+    }
+
+    /// Prunes all but the `keep_recent` most-recently-appended statements for
+    /// `subscription_id` (or `keep_recent_override`, if given), folding each
+    /// pruned statement's amount into the persistent [`BillingStatementAggregate`]
+    /// before deleting it. A no-op (zero-valued summary) when there are no more
+    /// than `keep_recent` statements to begin with — including an empty history.
     pub fn compact_subscription_statements(
-        _env: &Env,
-        _subscription_id: u32,
-        _keep_recent_override: Option<u32>,
+        env: &Env,
+        subscription_id: u32,
+        keep_recent_override: Option<u32>,
     ) -> Result<BillingCompactionSummary, Error> {
+        let keep_recent = keep_recent_override.unwrap_or_else(|| get_retention_config(env).keep_recent);
+
+        let idx_key = DataKey::BillingStatementsBySubscription(subscription_id);
+        let ids: Vec<u32> = env.storage().persistent().get(&idx_key).unwrap_or(Vec::new(env));
+        let total = ids.len();
+
+        if total <= keep_recent {
+            return Ok(BillingCompactionSummary {
+                subscription_id,
+                pruned_count: 0,
+                kept_count: total,
+                total_pruned_amount: 0,
+            });
+        }
+
+        let prune_count = total - keep_recent;
+        let mut pruned_amount_total: i128 = 0;
+        let mut pruned_interval: i128 = 0;
+        let mut pruned_usage: i128 = 0;
+        let mut pruned_one_off: i128 = 0;
+        let mut batch_oldest: Option<u64> = None;
+        let mut batch_newest: Option<u64> = None;
+        let mut kept_ids: Vec<u32> = Vec::new(env);
+
+        for i in 0..total {
+            let seq = ids.get(i).unwrap();
+            let stmt_key = DataKey::BillingStatement(subscription_id, seq);
+            if i < prune_count {
+                if let Some(stmt) = env.storage().persistent().get::<_, BillingStatement>(&stmt_key) {
+                    pruned_amount_total = pruned_amount_total.checked_add(stmt.amount).ok_or(Error::Overflow)?;
+                    match stmt.kind {
+                        BillingChargeKind::Interval => {
+                            pruned_interval = pruned_interval.checked_add(stmt.amount).ok_or(Error::Overflow)?;
+                        }
+                        BillingChargeKind::Usage => {
+                            pruned_usage = pruned_usage.checked_add(stmt.amount).ok_or(Error::Overflow)?;
+                        }
+                        BillingChargeKind::OneOff => {
+                            pruned_one_off = pruned_one_off.checked_add(stmt.amount).ok_or(Error::Overflow)?;
+                        }
+                    }
+                    batch_oldest = Some(batch_oldest.map_or(stmt.period_start, |o| o.min(stmt.period_start)));
+                    batch_newest = Some(batch_newest.map_or(stmt.period_end, |n| n.max(stmt.period_end)));
+                }
+                env.storage().persistent().remove(&stmt_key);
+            } else {
+                kept_ids.push_back(seq);
+            }
+        }
+
+        env.storage().persistent().set(&idx_key, &kept_ids);
+
+        let mut agg = get_compacted_aggregate(env, subscription_id);
+        agg.pruned_count = agg.pruned_count.checked_add(prune_count).ok_or(Error::Overflow)?;
+        agg.total_amount = agg.total_amount.checked_add(pruned_amount_total).ok_or(Error::Overflow)?;
+        agg.totals.interval = agg.totals.interval.checked_add(pruned_interval).ok_or(Error::Overflow)?;
+        agg.totals.usage = agg.totals.usage.checked_add(pruned_usage).ok_or(Error::Overflow)?;
+        agg.totals.one_off = agg.totals.one_off.checked_add(pruned_one_off).ok_or(Error::Overflow)?;
+        agg.oldest_period_start = match (agg.oldest_period_start, batch_oldest) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (None, x) => x,
+            (x, None) => x,
+        };
+        agg.newest_period_end = match (agg.newest_period_end, batch_newest) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (None, x) => x,
+            (x, None) => x,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::BillingStatementAggregate(subscription_id), &agg);
+
         Ok(BillingCompactionSummary {
-            subscription_id: _subscription_id,
-            pruned_count: 0,
-            kept_count: 0,
-            total_pruned_amount: 0,
+            subscription_id,
+            pruned_count: prune_count,
+            kept_count: kept_ids.len(),
+            total_pruned_amount: pruned_amount_total,
         })
     }
 
+    /// Returns up to `limit` statements starting at `offset` into the
+    /// subscription's retained (non-pruned) statement list, ordered
+    /// newest-first or oldest-first. `next_cursor` (the next `offset` to
+    /// request) is `Some` iff more statements remain after this page.
     pub fn get_statements_by_subscription_offset(
-        _env: &Env,
-        _subscription_id: u32,
-        _offset: u32,
-        _limit: u32,
-        _newest_first: bool,
+        env: &Env,
+        subscription_id: u32,
+        offset: u32,
+        limit: u32,
+        newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
-        Ok(BillingStatementsPage {
-            statements: soroban_sdk::Vec::new(_env),
-            next_cursor: None,
-            total: 0,
-        })
+        if limit == 0 {
+            return Err(Error::InvalidInput);
+        }
+
+        let idx_key = DataKey::BillingStatementsBySubscription(subscription_id);
+        let ids: Vec<u32> = env.storage().persistent().get(&idx_key).unwrap_or(Vec::new(env));
+        let total = ids.len();
+
+        let mut ordered: Vec<u32> = Vec::new(env);
+        if newest_first {
+            let mut i = ids.len();
+            while i > 0 {
+                i -= 1;
+                ordered.push_back(ids.get(i).unwrap());
+            }
+        } else {
+            ordered = ids;
+        }
+
+        let mut statements: Vec<BillingStatement> = Vec::new(env);
+        let end = offset.saturating_add(limit).min(total);
+        let mut i = offset;
+        while i < end {
+            let seq = ordered.get(i).unwrap();
+            if let Some(stmt) = env
+                .storage()
+                .persistent()
+                .get::<_, BillingStatement>(&DataKey::BillingStatement(subscription_id, seq))
+            {
+                statements.push_back(stmt);
+            }
+            i += 1;
+        }
+
+        let next_cursor = if end < total { Some(end) } else { None };
+        Ok(BillingStatementsPage { statements, next_cursor, total })
     }
 
+    /// Cursor-based pagination over the same ordering as
+    /// [`get_statements_by_subscription_offset`] — `cursor` is simply the
+    /// offset to resume from (`None` starts at the beginning).
     pub fn get_statements_by_subscription_cursor(
-        _env: &Env,
-        _subscription_id: u32,
-        _cursor: Option<u32>,
-        _limit: u32,
-        _newest_first: bool,
+        env: &Env,
+        subscription_id: u32,
+        cursor: Option<u32>,
+        limit: u32,
+        newest_first: bool,
     ) -> Result<BillingStatementsPage, Error> {
         Ok(BillingStatementsPage {
-            statements: soroban_sdk::Vec::new(_env),
+            statements: soroban_sdk::Vec::new(&env),
             next_cursor: None,
             total: 0,
         })
     }
 }
+
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 pub mod accounting {
@@ -154,8 +343,9 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
-    use crate::types::{Error, OracleConfig, OracleLivenessEvent, Subscription};
-    use soroban_sdk::{Address, Env, Symbol};
+    use crate::admin::{read_config, write_config};
+    use crate::types::{DataKey, Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
+    use soroban_sdk::{Address, Env, Symbol, Vec};
 
     /// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
     ///
@@ -192,6 +382,8 @@ pub mod oracle {
         if matches!(kind, OracleKind::FixedRate) && fixed_denominator == 0 {
             return Err(Error::InvalidInput);
         }
+
+        crate::admin::enforce_config_cooldown(env, "Oracle")?;
 
         let cfg = OracleConfig {
             enabled,
@@ -234,10 +426,47 @@ pub mod oracle {
         })
     }
 
+    /// Set the maximum allowed oracle price deviation in basis points.
+    ///
+    /// When set, the oracle deviation circuit breaker compares the latest price
+    /// against the median of the last N recorded samples. If the deviation exceeds
+    /// this threshold, the charge is rejected with `Error::OracleDeviationTooHigh`.
+    ///
+    /// A value of `0` means any deviation is rejected (strict mode).
+    /// When unset, the deviation check is skipped entirely.
+    pub fn set_oracle_deviation_bps(env: &Env, bps: u32) {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().set(&key, &bps);
+    }
+
+    /// Read the current oracle deviation threshold, or `None` if not configured.
+    pub fn get_oracle_deviation_bps(env: &Env) -> Option<u32> {
+        let key = Symbol::new(env, "oracle_deviation_bps");
+        env.storage().instance().get(&key)
+    }
+
+    /// Return the recorded oracle price history for a token in insertion order.
+    pub fn get_oracle_price_history(env: &Env, token: &Address) -> Vec<i128> {
+        use crate::types::OraclePriceHistoryMeta;
+        let meta_key = (token.clone(), Symbol::new(env, "oracle_price_history_meta"));
+        let meta: Option<OraclePriceHistoryMeta> = env.storage().persistent().get(&meta_key);
+        let Some(meta) = meta else {
+            return Vec::new(env);
+        };
+        let mut prices = Vec::new(env);
+        for i in 0..meta.count {
+            let entry_key = (token.clone(), Symbol::new(env, &format!("oph_{i}")));
+            if let Some(price) = env.storage().persistent().get::<_, i128>(&entry_key) {
+                prices.push_back(price);
+            }
+        }
+        prices
+    }
+
     /// Emit an oracle liveness event for monitoring purposes.
     pub fn emit_oracle_liveness(env: &Env) -> Result<OracleLivenessEvent, Error> {
         let config = get_oracle_config(env);
-        
+
         if !config.enabled || config.oracle.is_none() || config.max_age_seconds == 0 {
             return Err(Error::OracleNotConfigured);
         }
@@ -245,7 +474,7 @@ pub mod oracle {
         let now = env.ledger().timestamp();
         let last_sample_ts = now.saturating_sub(60);
         let age = now.saturating_sub(last_sample_ts);
-        
+
         let threshold = config.max_age_seconds / 2;
         let healthy = age <= threshold;
 
@@ -257,20 +486,19 @@ pub mod oracle {
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         };
 
-        env.events().publish(
-            (Symbol::new(env, "oracle_liveness"),),
-            event.clone(),
-        );
+        env.events()
+            .publish((Symbol::new(env, "oracle_liveness"),), event.clone());
 
         Ok(event)
     }
 }
 
-mod reentrancy;
 
 /// Operator: least-privilege charge delegate.
 pub mod operator {
-    use crate::types::{BatchChargeResult, ChargeExecutionResult, DataKey, Error, UsageChargeResult};
+    use crate::types::{
+        BatchChargeResult, ChargeExecutionResult, DataKey, Error, UsageChargeResult,
+    };
     use soroban_sdk::{Address, Env, String, Vec};
 
     fn require_operator_auth(env: &Env, op: &Address) -> Result<Address, Error> {
@@ -287,6 +515,7 @@ pub mod operator {
         if operator == env.current_contract_address() {
             return Err(Error::InvalidInput);
         }
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::write_config(env, &DataKey::Operator, &operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_set"),),
@@ -302,6 +531,7 @@ pub mod operator {
 
     pub fn do_remove_operator(env: &Env, admin: Address) -> Result<(), Error> {
         crate::admin::require_admin_auth(env, &admin)?;
+        crate::admin::enforce_config_cooldown(env, "Operator")?;
         crate::admin::remove_config(env, &DataKey::Operator);
         env.events().publish(
             (soroban_sdk::Symbol::new(env, "operator_removed"),),
@@ -334,7 +564,7 @@ pub mod operator {
     ) -> Result<ChargeExecutionResult, Error> {
         require_operator_auth(env, &op)?;
         let now = env.ledger().timestamp();
-        crate::charge_core::charge_one(env, subscription_id, now, None)
+        crate::charge_core::charge_one(env, subscription_id, now, None, None)
     }
 
     pub fn do_operator_charge_usage(
@@ -344,7 +574,12 @@ pub mod operator {
         usage_amount: i128,
     ) -> Result<UsageChargeResult, Error> {
         require_operator_auth(env, &op)?;
-        crate::charge_core::charge_usage_one(env, subscription_id, usage_amount, String::from_str(env, ""))
+        crate::charge_core::charge_usage_one(
+            env,
+            subscription_id,
+            usage_amount,
+            String::from_str(env, ""),
+        )
     }
 
     pub fn do_operator_charge_usage_with_reference(
@@ -361,6 +596,7 @@ pub mod operator {
 
 /// Metadata: per-subscription key-value annotations.
 pub use metadata::*;
+pub use subscription::compute_cancel_refund;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
@@ -371,43 +607,70 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, BatchChargeResult, BatchWithdrawResult,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
+    BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
-    CapInfo, ChargeExecutionResult, ContractSnapshot, DISPUTE_WINDOW_SECS, DataKey,
-    EmergencyStopDisabledEvent, EmergencyStopEnabledEvent, FundsDepositedEvent,
-    LifetimeCapReachedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
-    MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent, MigrationExportEvent,
-    NextChargeInfo, OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
-    RecoveryEvent, RecoveryReason, SchemaMigratedEvent,
-    ScheduledPayoutEvent, SignedMetadataPayload, Subscription, SubscriptionCancelledEvent,
-    SubscriptionChargeFailedEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
-    SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent,
-    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
-    TokenEarnings, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState,
-    UsageStatementEvent,
+    BulkSubscriptionResult, CapInfo, ChargeExecutionResult, ContractSnapshot, Coupon,
+    DataKey, DisputeEscrowLedger, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent,
+    FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
+    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleLivenessEvent,
+    OracleConfig, OracleKind, OraclePrice, OperatorRemovedEvent, OperatorSetEvent,
+    PartialRefundEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest, PrepaidQueryResult,
+    ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason,
+    ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SplitChargeEvent, SplitPayees,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
+    BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
+    BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
+    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
+    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantVacation,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
+    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
+    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
+    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
+    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
+    SubscriptionStatus, SubscriptionSummary,
+    TagAllowlistUpdatedEvent, TokenEarnings, TokenLiabilities,
+    TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND, OP_WITHDRAW,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
-    SNAPSHOT_FLAG_USAGE_CHARGED,
-    SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
-    OP_CHARGE, OP_WITHDRAW, OP_REFUND, OP_BILLING_PAUSE, OP_AUTO_RENEWAL,
-    DEFAULT_ALLOWED_OPS,
-    GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
-    OperatorRemovedEvent, OperatorSetEvent,
-    OracleLivenessEvent,
-    PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
-    TokenLiabilities,
-    FullSnapshotPage, MerchantBalanceEntry, SnapshotExportedEvent, SnapshotRestoredEvent,
-    EVENT_SCHEMA_VERSION,
+    SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 
 /// On-chain storage schema version.
-const STORAGE_VERSION: u32 = 3;
+///
+/// Bumped to **4** when [`Subscription`] gained the `expires_at_ledger: Option<u32>`
+/// field. Existing live `DataKey::Sub(id)` records were serialized without this
+/// trailing field; the `v3 → v4` step in [`admin::do_migrate`] walks every
+/// subscription record and rewrites it so the new field deserializes cleanly.
+const STORAGE_VERSION: u32 = 5;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a single call.
 const MAX_EXPORT_LIMIT: u32 = 100;
@@ -421,8 +684,7 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
 
 /// Read the emergency-stop flag from instance storage.
 fn get_emergency_stop(env: &Env) -> bool {
-    admin::read_config(env, &DataKey::EmergencyStop)
-        .unwrap_or(false)
+    admin::read_config(env, &DataKey::EmergencyStop).unwrap_or(false)
 }
 
 /// Guard all mutating entry-points against an active emergency stop.
@@ -517,7 +779,8 @@ impl SubscriptionVault {
         subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_subscription")?;
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_subscription")?;
         operator::do_operator_charge_subscription(&env, op, subscription_id)
     }
 
@@ -542,8 +805,15 @@ impl SubscriptionVault {
         reference: String,
     ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_usage_with_ref")?;
-        operator::do_operator_charge_usage_with_reference(&env, op, subscription_id, usage_amount, reference)
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_usage_with_ref")?;
+        operator::do_operator_charge_usage_with_reference(
+            &env,
+            op,
+            subscription_id,
+            usage_amount,
+            reference,
+        )
     }
 
     /// Updates the admin address.
@@ -554,6 +824,28 @@ impl SubscriptionVault {
         nonce: u64,
     ) -> Result<(), Error> {
         admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
+    }
+
+    /// Propose a new admin address. The proposed admin must call `claim_admin_role`
+    /// within 7 days to complete the rotation.
+    pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+        admin::do_propose_admin(&env, current_admin, new_admin)
+    }
+
+    /// Claim a pending admin proposal. Must be called by the proposed address
+    /// before the 7-day window expires.
+    pub fn claim_admin_role(env: Env, claimant: Address) -> Result<(), Error> {
+        admin::do_claim_admin_role(&env, claimant)
+    }
+
+    /// Cancel an active admin proposal. Admin only.
+    pub fn cancel_admin_proposal(env: Env, admin: Address) -> Result<(), Error> {
+        admin::do_cancel_admin_proposal(&env, admin)
+    }
+
+    /// Return the active admin proposal, if one exists.
+    pub fn get_admin_proposal(env: Env) -> Option<AdminProposal> {
+        admin::get_admin_proposal(&env)
     }
 
     /// Rotate a merchant's on-chain address from `old_merchant` to `new_merchant`.
@@ -591,7 +883,16 @@ impl SubscriptionVault {
         fixed_denominator: u128,
     ) -> Result<(), Error> {
         admin::require_admin_auth(&env, &admin)?;
-        crate::oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds, kind, window_secs, fixed_numerator, fixed_denominator)
+        crate::oracle::set_oracle_config(
+            &env,
+            enabled,
+            oracle,
+            max_age_seconds,
+            kind,
+            window_secs,
+            fixed_numerator,
+            fixed_denominator,
+        )
     }
 
     /// Allows the admin to recover funds that are not tied to any subscription.
@@ -707,6 +1008,47 @@ impl SubscriptionVault {
         subscription::do_bulk_cancel_subscriptions(&env, caller, &subscription_ids, nonce)
     }
 
+    /// Bulk-deposit funds into multiple subscriptions. Admin or operator only.
+    ///
+    /// Treasury operators can top up many subscriptions in a single call,
+    /// reducing gas cost for centralized customer-success workflows. Each entry
+    /// is processed independently; the returned vector has exactly one
+    /// [`BulkDepositResult`] per entry, in request order.
+    ///
+    /// # Arguments
+    ///
+    /// * `caller` — The admin or operator whose tokens will be transferred to
+    ///   each subscription's vault. Must be authorized.
+    /// * `entries` — A vector of `(subscription_id, amount)` tuples. At most
+    ///   [`BATCH_MAX_SIZE`]; a larger batch is rejected wholesale with
+    ///   [`Error::BatchTooLarge`]. An empty list is a no-op (no nonce consumed,
+    ///   no event).
+    /// * `nonce` — Per-batch replay protection on the
+    ///   `DOMAIN_OPERATOR_BATCH_CHARGE` counter, keyed per caller (domain `2`).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is neither the stored admin nor operator.
+    /// * [`Error::BatchTooLarge`] — More than [`BATCH_MAX_SIZE`] entries supplied.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
+    ///
+    /// # Events
+    ///
+    /// Emits one [`FundsDepositedEvent`] per successfully deposited subscription,
+    /// plus a single [`BulkDepositEvent`] envelope summarising the batch.
+    pub fn bulk_deposit_funds(
+        env: Env,
+        caller: Address,
+        entries: Vec<(u32, i128)>,
+        nonce: u64,
+    ) -> Result<Vec<crate::types::BulkDepositResult>, Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "bulk_deposit_funds")?;
+        // Auth already performed by subscription::bulk_precheck →
+        // admin::require_admin_or_operator_auth (deduplicated from this entrypoint).
+        subscription::do_bulk_deposit_funds(&env, caller, &entries, nonce)
+    }
+
     // ── Emergency Stop ────────────────────────────────────────────────────────
 
     /// Return whether the emergency stop (circuit breaker) is currently active.
@@ -720,6 +1062,7 @@ impl SubscriptionVault {
         if get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
@@ -738,6 +1081,7 @@ impl SubscriptionVault {
         if !get_emergency_stop(&env) {
             return Ok(());
         }
+        admin::enforce_config_cooldown(&env, "EmergencyStop")?;
         admin::write_config(&env, &DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
@@ -768,60 +1112,201 @@ impl SubscriptionVault {
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
         let min_topup: i128 = admin::get_min_topup(&env)?;
         let next_id: u32 = admin::read_config(&env, &DataKey::NextId).unwrap_or(0);
-        env.events().publish((Symbol::new(&env, "migration_contract_snapshot"),), (admin.clone(), env.ledger().timestamp()));
-        Ok(ContractSnapshot { admin, token, min_topup, next_id, storage_version: STORAGE_VERSION, timestamp: env.ledger().timestamp() })
+        env.events().publish(
+            (Symbol::new(&env, "migration_contract_snapshot"),),
+            (admin.clone(), env.ledger().timestamp()),
+        );
+        Ok(ContractSnapshot {
+            admin,
+            token,
+            min_topup,
+            next_id,
+            storage_version: STORAGE_VERSION,
+            timestamp: env.ledger().timestamp(),
+        })
     }
 
     /// Export a single subscription summary.
-    pub fn export_subscription_summary(env: Env, admin: Address, subscription_id: u32) -> Result<SubscriptionSummary, Error> {
+    pub fn export_subscription_summary(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+    ) -> Result<SubscriptionSummary, Error> {
         require_admin_auth(&env, &admin)?;
         let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "migration_export"),), MigrationExportEvent { admin: admin.clone(), start_id: subscription_id, limit: 1, exported: 1, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
-        Ok(SubscriptionSummary { subscription_id, subscriber: sub.subscriber, merchant: sub.merchant, token: sub.token, amount: sub.amount, interval_seconds: sub.interval_seconds, last_payment_timestamp: sub.last_payment_timestamp, status: sub.status, prepaid_balance: sub.prepaid_balance, usage_enabled: sub.usage_enabled, lifetime_cap: sub.lifetime_cap, lifetime_charged: sub.lifetime_charged, start_time: sub.start_time, expires_at: sub.expires_at })
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin: admin.clone(),
+                start_id: subscription_id,
+                limit: 1,
+                exported: 1,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        Ok(SubscriptionSummary {
+            subscription_id,
+            subscriber: sub.subscriber,
+            merchant: sub.merchant,
+            token: sub.token,
+            amount: sub.amount,
+            interval_seconds: sub.interval_seconds,
+            last_payment_timestamp: sub.last_payment_timestamp,
+            status: sub.status,
+            prepaid_balance: sub.prepaid_balance,
+            usage_enabled: sub.usage_enabled,
+            lifetime_cap: sub.lifetime_cap,
+            lifetime_charged: sub.lifetime_charged,
+            start_time: sub.start_time,
+            expires_at: sub.expires_at,
+            expires_at_ledger: sub.expires_at_ledger,
+        })
     }
 
     /// Export a range of subscription summaries.
-    pub fn export_subscription_summaries(env: Env, admin: Address, start_id: u32, limit: u32) -> Result<Vec<SubscriptionSummary>, Error> {
+    pub fn export_subscription_summaries(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<Vec<SubscriptionSummary>, Error> {
         require_admin_auth(&env, &admin)?;
-        if limit > MAX_EXPORT_LIMIT { return Err(Error::InvalidExportLimit); }
-        if limit == 0 { return Ok(Vec::new(&env)); }
+        if limit > MAX_EXPORT_LIMIT {
+            return Err(Error::InvalidExportLimit);
+        }
+        if limit == 0 {
+            return Ok(Vec::new(&env));
+        }
         let next_id: u32 = admin::read_config(&env, &DataKey::NextId).unwrap_or(0);
-        if start_id >= next_id { return Ok(Vec::new(&env)); }
+        if start_id >= next_id {
+            return Ok(Vec::new(&env));
+        }
         let end_id = start_id.saturating_add(limit).min(next_id);
         let mut out = Vec::new(&env);
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
-                out.push_back(SubscriptionSummary { subscription_id: id, subscriber: sub.subscriber, merchant: sub.merchant, token: sub.token, amount: sub.amount, interval_seconds: sub.interval_seconds, last_payment_timestamp: sub.last_payment_timestamp, status: sub.status, prepaid_balance: sub.prepaid_balance, usage_enabled: sub.usage_enabled, lifetime_cap: sub.lifetime_cap, lifetime_charged: sub.lifetime_charged, start_time: sub.start_time, expires_at: sub.expires_at });
+            if let Some(sub) = env
+                .storage()
+                .persistent()
+                .get::<_, Subscription>(&DataKey::Sub(id))
+            {
+                out.push_back(SubscriptionSummary {
+                    subscription_id: id,
+                    subscriber: sub.subscriber,
+                    merchant: sub.merchant,
+                    token: sub.token,
+                    amount: sub.amount,
+                    interval_seconds: sub.interval_seconds,
+                    last_payment_timestamp: sub.last_payment_timestamp,
+                    status: sub.status,
+                    prepaid_balance: sub.prepaid_balance,
+                    usage_enabled: sub.usage_enabled,
+                    lifetime_cap: sub.lifetime_cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    start_time: sub.start_time,
+                    expires_at: sub.expires_at,
+                    expires_at_ledger: sub.expires_at_ledger,
+                });
             }
             id += 1;
         }
-        env.events().publish((Symbol::new(&env, "migration_export"),), MigrationExportEvent { admin, start_id, limit, exported: out.len(), timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (Symbol::new(&env, "migration_export"),),
+            MigrationExportEvent {
+                admin,
+                start_id,
+                limit,
+                exported: out.len(),
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(out)
     }
 
     /// Export full snapshot page including balances.
-    pub fn export_full_snapshot_page(env: Env, admin: Address, start_id: u32, size: u32) -> Result<FullSnapshotPage, Error> {
+    pub fn export_full_snapshot_page(
+        env: Env,
+        admin: Address,
+        start_id: u32,
+        size: u32,
+    ) -> Result<FullSnapshotPage, Error> {
         require_admin_auth(&env, &admin)?;
-        if size == 0 { return Ok(FullSnapshotPage { subscriptions: Vec::new(&env), balances: Vec::new(&env), next_start_id: None }); }
+        if size == 0 {
+            return Ok(FullSnapshotPage {
+                subscriptions: Vec::new(&env),
+                balances: Vec::new(&env),
+                next_start_id: None,
+            });
+        }
         let size = size.min(MAX_EXPORT_LIMIT);
         let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
-        if start_id >= next_id { return Ok(FullSnapshotPage { subscriptions: Vec::new(&env), balances: Vec::new(&env), next_start_id: None }); }
+        if start_id >= next_id {
+            return Ok(FullSnapshotPage {
+                subscriptions: Vec::new(&env),
+                balances: Vec::new(&env),
+                next_start_id: None,
+            });
+        }
         let end_id = start_id.saturating_add(size).min(next_id);
         let mut subs = Vec::new(&env);
         let mut balances = Vec::new(&env);
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
-                subs.push_back(SubscriptionSummary { subscription_id: id, subscriber: sub.subscriber.clone(), merchant: sub.merchant.clone(), token: sub.token.clone(), amount: sub.amount, interval_seconds: sub.interval_seconds, last_payment_timestamp: sub.last_payment_timestamp, status: sub.status, prepaid_balance: sub.prepaid_balance, usage_enabled: sub.usage_enabled, lifetime_cap: sub.lifetime_cap, lifetime_charged: sub.lifetime_charged, start_time: sub.start_time, expires_at: sub.expires_at });
-                let bal: i128 = env.storage().instance().get(&DataKey::MerchantBalance(sub.merchant.clone(), sub.token.clone())).unwrap_or(0i128);
-                balances.push_back(MerchantBalanceEntry { merchant: sub.merchant, token: sub.token, amount: bal });
+            if let Some(sub) = env
+                .storage()
+                .persistent()
+                .get::<_, Subscription>(&DataKey::Sub(id))
+            {
+                subs.push_back(SubscriptionSummary {
+                    subscription_id: id,
+                    subscriber: sub.subscriber.clone(),
+                    merchant: sub.merchant.clone(),
+                    token: sub.token.clone(),
+                    amount: sub.amount,
+                    interval_seconds: sub.interval_seconds,
+                    last_payment_timestamp: sub.last_payment_timestamp,
+                    status: sub.status,
+                    prepaid_balance: sub.prepaid_balance,
+                    usage_enabled: sub.usage_enabled,
+                    lifetime_cap: sub.lifetime_cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    start_time: sub.start_time,
+                    expires_at: sub.expires_at,
+                    expires_at_ledger: sub.expires_at_ledger,
+                });
+                let bal: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::MerchantBalance(
+                        sub.merchant.clone(),
+                        sub.token.clone(),
+                    ))
+                    .unwrap_or(0i128);
+                balances.push_back(MerchantBalanceEntry {
+                    merchant: sub.merchant,
+                    token: sub.token,
+                    amount: bal,
+                });
             }
             id += 1;
         }
         let next_start = if end_id < next_id { Some(end_id) } else { None };
-        env.events().publish((Symbol::new(&env, "snapshot_exported"),), SnapshotExportedEvent { admin, start_id, exported: subs.len(), timestamp: env.ledger().timestamp() });
-        Ok(FullSnapshotPage { subscriptions: subs, balances, next_start_id: next_start })
+        env.events().publish(
+            (Symbol::new(&env, "snapshot_exported"),),
+            SnapshotExportedEvent {
+                admin,
+                start_id,
+                exported: subs.len(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Ok(FullSnapshotPage {
+            subscriptions: subs,
+            balances,
+            next_start_id: next_start,
+        })
     }
 
     /// Restore a previously exported snapshot page. Admin only. Emergency stop must be active.
@@ -837,36 +1322,81 @@ impl SubscriptionVault {
         _next_start_id: Option<u32>,
     ) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
-        if !get_emergency_stop(&env) { return Err(Error::RecoveryNotAllowed); }
+        if !get_emergency_stop(&env) {
+            return Err(Error::RecoveryNotAllowed);
+        }
         let mut restored: u32 = 0;
-        let mut max_next = env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32);
+        let mut max_next = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0u32);
         let mut i = 0u32;
         while i < subscriptions.len() {
             if let Some(s) = subscriptions.get(i) {
-                let sub = Subscription { subscriber: s.subscriber.clone(), merchant: s.merchant.clone(), token: s.token.clone(), amount: s.amount, interval_seconds: s.interval_seconds, last_payment_timestamp: s.last_payment_timestamp, status: s.status, prepaid_balance: s.prepaid_balance, usage_enabled: s.usage_enabled, lifetime_cap: s.lifetime_cap, lifetime_charged: s.lifetime_charged, start_time: s.start_time, expires_at: s.expires_at, grace_start_timestamp: None, cancel_at: None };
-                env.storage().persistent().set(&DataKey::Sub(s.subscription_id), &sub);
+                let sub = Subscription {
+                    subscriber: s.subscriber.clone(),
+                    merchant: s.merchant.clone(),
+                    token: s.token.clone(),
+                    amount: s.amount,
+                    interval_seconds: s.interval_seconds,
+                    last_payment_timestamp: s.last_payment_timestamp,
+                    status: s.status,
+                    prepaid_balance: s.prepaid_balance,
+                    usage_enabled: s.usage_enabled,
+                    lifetime_cap: s.lifetime_cap,
+                    lifetime_charged: s.lifetime_charged,
+                    start_time: s.start_time,
+                    expires_at: s.expires_at,
+                    grace_start_timestamp: None,
+                    cancel_at: None,
+                    expires_at_ledger: s.expires_at_ledger,
+                };
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Sub(s.subscription_id), &sub);
                 restored = restored.saturating_add(1);
                 let candidate = s.subscription_id.saturating_add(1);
-                if candidate > max_next { max_next = candidate; }
+                if candidate > max_next {
+                    max_next = candidate;
+                }
             }
             i += 1;
         }
         let mut j = 0u32;
         while j < balances.len() {
             if let Some(b) = balances.get(j) {
-                env.storage().instance().set(&DataKey::MerchantBalance(b.merchant.clone(), b.token.clone()), &b.amount);
+                env.storage().instance().set(
+                    &DataKey::MerchantBalance(b.merchant.clone(), b.token.clone()),
+                    &b.amount,
+                );
             }
             j += 1;
         }
-        let current_next: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32);
-        if max_next > current_next { env.storage().instance().set(&DataKey::NextId, &max_next); }
-        env.events().publish((Symbol::new(&env, "snapshot_restored"),), SnapshotRestoredEvent { admin, start_id, restored, timestamp: env.ledger().timestamp() });
+        let current_next: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0u32);
+        if max_next > current_next {
+            env.storage().instance().set(&DataKey::NextId, &max_next);
+        }
+        env.events().publish(
+            (Symbol::new(&env, "snapshot_restored"),),
+            SnapshotRestoredEvent {
+                admin,
+                start_id,
+                restored,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
     // ── Subscription Lifecycle ────────────────────────────────────────────────
 
     /// Create a new subscription.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -876,12 +1406,165 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        let sub_id = subscription::do_create_subscription(&env, subscriber.clone(), merchant.clone(), amount, interval_seconds, usage_enabled, lifetime_cap, expires_at)?;
+        let sub_id = subscription::do_create_subscription(
+            &env,
+            subscriber.clone(),
+            merchant.clone(),
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            expires_at,
+            expires_at_ledger,
+            sub_account_label,
+        )?;
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
-        env.events().publish((Symbol::new(&env, "created"), sub_id), SubscriptionCreatedEvent { subscription_id: sub_id, subscriber, merchant, token, amount, interval_seconds, lifetime_cap, expires_at, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (types::TOPIC_CREATED, sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                token,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+                expires_at_ledger,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(sub_id)
+    }
+
+    /// Create a new subscription with split-billing.
+    pub fn create_subscription_with_split(
+        env: Env,
+        subscriber: Address,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+        expires_at: Option<u64>,
+        entries: Vec<(Address, u32)>,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+
+        if entries.is_empty() {
+            return Err(Error::InvalidInput);
+        }
+        let mut total_weight: u32 = 0;
+        for entry in entries.iter() {
+            let (payee, weight) = entry;
+            if weight == 0 {
+                return Err(Error::InvalidInput);
+            }
+            total_weight = total_weight.checked_add(weight).ok_or(Error::InvalidInput)?;
+            crate::blocklist::require_not_blocklisted(&env, &payee)?;
+        }
+        if total_weight != 10_000 {
+            return Err(Error::InvalidInput);
+        }
+
+        let sub_id = subscription::do_create_subscription(
+            &env,
+            subscriber.clone(),
+            merchant.clone(),
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            expires_at,
+        )?;
+
+        let split = SplitPayees {
+            subscription_id: sub_id,
+            entries,
+        };
+        subscription::write_split_payees(&env, sub_id, &split);
+
+        let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
+        env.events().publish(
+            (types::TOPIC_CREATED, sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                token,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+
+        Ok(sub_id)
+    }
+
+    /// Update split billing payees. Subscriber only.
+    pub fn update_split_payees(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        entries: Option<Vec<(Address, u32)>>,
+    ) -> Result<(), Error> {
+        subscriber.require_auth();
+        require_not_emergency_stop(&env)?;
+
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        if sub.subscriber != subscriber {
+            return Err(Error::Unauthorized);
+        }
+        if sub.status == SubscriptionStatus::Cancelled || sub.status == SubscriptionStatus::Expired {
+            return Err(Error::NotActive);
+        }
+
+        if let Some(ref list) = entries {
+            if list.is_empty() {
+                return Err(Error::InvalidInput);
+            }
+            let mut total_weight: u32 = 0;
+            for entry in list.iter() {
+                let (payee, weight) = entry;
+                if weight == 0 {
+                    return Err(Error::InvalidInput);
+                }
+                total_weight = total_weight.checked_add(weight).ok_or(Error::InvalidInput)?;
+                crate::blocklist::require_not_blocklisted(&env, &payee)?;
+            }
+            if total_weight != 10_000 {
+                return Err(Error::InvalidInput);
+            }
+
+            let split = SplitPayees {
+                subscription_id,
+                entries: list.clone(),
+            };
+            subscription::write_split_payees(&env, subscription_id, &split);
+        } else {
+            let key = DataKey::SplitPayees(subscription_id);
+            env.storage().persistent().remove(&key);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "split_payees_updated"), subscription_id),
+            (subscription_id, env.ledger().timestamp()),
+        );
+
+        Ok(())
+    }
+
+    /// Get split billing payees configuration.
+    pub fn get_split_payees(env: Env, subscription_id: u32) -> Option<SplitPayees> {
+        subscription::get_split_payees(&env, subscription_id)
     }
 
     /// Creates a new subscription using a specific accepted token.
@@ -896,10 +1579,39 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
         expires_at: Option<u64>,
+        expires_at_ledger: Option<u32>,
+        sub_account_label: Option<Symbol>,
     ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        let sub_id = subscription::do_create_subscription_with_token(&env, subscriber.clone(), merchant.clone(), token.clone(), amount, interval_seconds, usage_enabled, lifetime_cap, expires_at)?;
-        env.events().publish((Symbol::new(&env, "created"), sub_id), SubscriptionCreatedEvent { subscription_id: sub_id, subscriber, merchant, token, amount, interval_seconds, lifetime_cap, expires_at, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        let sub_id = subscription::do_create_subscription_with_token(
+            &env,
+            subscriber.clone(),
+            merchant.clone(),
+            token.clone(),
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            expires_at,
+            expires_at_ledger,
+            sub_account_label,
+        )?;
+        env.events().publish(
+            (types::TOPIC_CREATED, sub_id),
+            SubscriptionCreatedEvent {
+                subscription_id: sub_id,
+                subscriber,
+                merchant,
+                token,
+                amount,
+                interval_seconds,
+                lifetime_cap,
+                expires_at,
+                expires_at_ledger,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(sub_id)
     }
 
@@ -913,10 +1625,103 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds")?;
-        subscription::do_deposit_funds(&env, subscription_id, subscriber.clone(), amount, idem_key)?;
+        subscription::do_deposit_funds(
+            &env,
+            subscription_id,
+            subscriber.clone(),
+            amount,
+            idem_key,
+        )?;
         let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "deposited"), subscription_id), FundsDepositedEvent { subscription_id, subscriber, token: sub.token, amount, new_balance: sub.prepaid_balance, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (types::TOPIC_DEPOSITED, subscription_id),
+            FundsDepositedEvent {
+                subscription_id,
+                subscriber,
+                token: sub.token,
+                amount,
+                new_balance: sub.prepaid_balance,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
+    }
+
+    // ── Delegated Payer ─────────────────────────────────────────────────────
+
+    /// Authorize a third-party `payer` to deposit funds into the `subscriber`'s vault.
+    ///
+    /// The grant is consumed on first use — each grant authorizes exactly one deposit.
+    /// The subscriber may revoke at any time.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerGrantedEvent`].
+    pub fn grant_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+        expires_at: u64,
+        max_amount: i128,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        subscription::do_grant_delegated_payer(&env, subscriber, payer, expires_at, max_amount)
+    }
+
+    /// Revoke a previously granted delegated payer authorization.
+    ///
+    /// # Events
+    /// Emits [`DelegatedPayerRevokedEvent`].
+    pub fn revoke_delegated_payer(
+        env: Env,
+        subscriber: Address,
+        payer: Address,
+    ) -> Result<(), Error> {
+        subscription::do_revoke_delegated_payer(&env, subscriber, payer)
+    }
+
+    /// Deposit funds on behalf of a subscriber using a delegated payer grant.
+    ///
+    /// The caller must have a valid, non-expired grant from the subscriber.
+    /// The grant is consumed after a successful deposit.
+    ///
+    /// # Events
+    /// Emits [`DelegatedDepositEvent`].
+    pub fn deposit_funds_on_behalf(
+        env: Env,
+        subscription_id: u32,
+        payer: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds_on_behalf")?;
+        subscription::do_deposit_funds_on_behalf(
+            &env,
+            subscription_id,
+            payer,
+            amount,
+            idem_key,
+        )
+    }
+
+    /// Grace-period buyout: deposit enough to cover the missed charge plus a
+    /// buyout premium and immediately return to Active.
+    ///
+    /// Combines deposit + charge in one atomic call so the subscriber does not
+    /// need to cancel and re-create when a payment method briefly fails.
+    ///
+    /// Returns `(charge_amount, premium_paid)` on success.
+    pub fn grace_buyout(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(i128, i128), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "grace_buyout")?;
+        subscription::do_grace_buyout(&env, subscription_id, subscriber, amount, idem_key)
     }
 
     /// Creates a reusable plan template.
@@ -928,7 +1733,14 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
     ) -> Result<u32, Error> {
-        subscription::do_create_plan_template(&env, merchant, amount, interval_seconds, usage_enabled, lifetime_cap)
+        subscription::do_create_plan_template(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
     }
 
     /// Creates a plan template with a specific token.
@@ -941,13 +1753,26 @@ impl SubscriptionVault {
         usage_enabled: bool,
         lifetime_cap: Option<i128>,
     ) -> Result<u32, Error> {
-        subscription::do_create_plan_template_with_token(&env, merchant, token, amount, interval_seconds, usage_enabled, lifetime_cap)
+        subscription::do_create_plan_template_with_token(
+            &env,
+            merchant,
+            token,
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
     }
 
     /// Create a subscription from a plan.
-    pub fn create_subscription_from_plan(env: Env, subscriber: Address, plan_template_id: u32) -> Result<u32, Error> {
+    pub fn create_subscription_from_plan(
+        env: Env,
+        subscriber: Address,
+        plan_template_id: u32,
+        sub_account_label: Option<Symbol>,
+    ) -> Result<u32, Error> {
         require_not_emergency_stop(&env)?;
-        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id)
+        subscription::do_create_subscription_from_plan(&env, subscriber, plan_template_id, sub_account_label)
     }
 
     /// Retrieve a plan template.
@@ -956,12 +1781,33 @@ impl SubscriptionVault {
     }
 
     /// Updates a plan template (versioning).
-    pub fn update_plan_template(env: Env, merchant: Address, plan_template_id: u32, amount: i128, interval_seconds: u64, usage_enabled: bool, lifetime_cap: Option<i128>) -> Result<u32, Error> {
-        subscription::do_update_plan_template(&env, merchant, plan_template_id, amount, interval_seconds, usage_enabled, lifetime_cap)
+    pub fn update_plan_template(
+        env: Env,
+        merchant: Address,
+        plan_template_id: u32,
+        amount: i128,
+        interval_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+    ) -> Result<u32, Error> {
+        subscription::do_update_plan_template(
+            &env,
+            merchant,
+            plan_template_id,
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
     }
 
     /// Sets max active subscriptions per plan.
-    pub fn set_plan_max_active_subs(env: Env, merchant: Address, plan_template_id: u32, max_active: u32) -> Result<(), Error> {
+    pub fn set_plan_max_active_subs(
+        env: Env,
+        merchant: Address,
+        plan_template_id: u32,
+        max_active: u32,
+    ) -> Result<(), Error> {
         subscription::do_set_plan_max_active_subs(&env, merchant, plan_template_id, max_active)
     }
 
@@ -970,13 +1816,73 @@ impl SubscriptionVault {
         queries::get_plan_max_active_subs(&env, plan_template_id)
     }
 
+    /// Register a new plan template in the on-chain catalogue.
+    ///
+    /// Merchants publish named billing offers (amount, interval, trial_seconds)
+    /// that subscribers reference by plan ID when creating subscriptions. This
+    /// reduces on-chain input errors and supports UI-driven catalogues.
+    ///
+    /// Requires merchant authorisation. Returns the new plan ID.
+    pub fn register_plan(
+        env: Env,
+        merchant: Address,
+        amount: i128,
+        interval_seconds: u64,
+        trial_seconds: u64,
+        usage_enabled: bool,
+        lifetime_cap: Option<i128>,
+    ) -> Result<u32, Error> {
+        require_not_emergency_stop(&env)?;
+        merchant::do_register_plan(
+            &env,
+            merchant,
+            amount,
+            interval_seconds,
+            trial_seconds,
+            usage_enabled,
+            lifetime_cap,
+        )
+    }
+
+    /// Deprecate an existing plan template, permanently preventing new
+    /// subscriptions from being created using it.
+    ///
+    /// Deprecation is idempotent: calling it on an already-deprecated plan is a
+    /// no-op. Only the merchant who owns the plan may deprecate it. Existing
+    /// subscriptions created from the plan are unaffected.
+    ///
+    /// Requires merchant authorisation.
+    pub fn deprecate_plan(
+        env: Env,
+        merchant: Address,
+        plan_id: u32,
+    ) -> Result<(), Error> {
+        merchant::do_deprecate_plan(&env, merchant, plan_id)
+    }
+
     /// Migrate a subscription to a new plan version.
-    pub fn migrate_subscription_to_plan(env: Env, subscriber: Address, subscription_id: u32, new_plan_template_id: u32) -> Result<(), Error> {
-        subscription::do_migrate_subscription_to_plan(&env, subscriber, subscription_id, new_plan_template_id)
+    pub fn migrate_subscription_to_plan(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+        new_plan_template_id: u32,
+    ) -> Result<(), Error> {
+        subscription::do_migrate_subscription_to_plan(
+            &env,
+            subscriber,
+            subscription_id,
+            new_plan_template_id,
+        )
     }
 
     /// Set subscriber-level credit limit. Admin only.
-    pub fn set_subscriber_credit_limit(env: Env, admin: Address, subscriber: Address, token: Address, limit: i128) -> Result<(), Error> {
+    pub fn set_subscriber_credit_limit(
+        env: Env,
+        admin: Address,
+        subscriber: Address,
+        token: Address,
+        limit: i128,
+    ) -> Result<(), Error> {
         subscription::do_set_subscriber_credit_limit(&env, admin, subscriber, token, limit)
     }
 
@@ -985,13 +1891,83 @@ impl SubscriptionVault {
         subscription::get_subscriber_credit_limit(&env, subscriber, token)
     }
 
+    /// Set (or clear, with `cap = None`) an admin override of a subscriber's
+    /// active-subscription cap — e.g. to raise the limit for an institutional
+    /// account. Admin only. (#578)
+    pub fn set_subscriber_active_cap(env: Env, admin: Address, subscriber: Address, cap: Option<u32>) -> Result<(), Error> {
+        subscription::do_set_subscriber_active_cap(&env, admin, subscriber, cap)
+    }
+
+    /// Set or clear the ledger-sequence expiration bound on a subscription.
+    ///
+    /// Pass `Some(seq)` to require the subscription to also expire once the
+    /// ledger sequence reaches `seq`; pass `None` to clear an existing ledger
+    /// bound. The wall-clock `expires_at` is unaffected by this call.
+    ///
+    /// Either the subscription's `subscriber` or `merchant` may authorize. The
+    /// value must be strictly greater than the current ledger sequence when set
+    /// (a bound at or below the current sequence is rejected with
+    /// [`Error::InvalidExpiration`] to avoid creating a zombie subscription).
+    /// Terminal-state subscriptions (`Cancelled` / `Expired` / `Archived`) are
+    /// rejected with [`Error::InvalidStatusTransition`].
+    ///
+    /// Emits [`ExpirationLedgerSetEvent`] on every successful call (including
+    /// `None`, with `previous_expires_at_ledger` set to the prior bound so
+    /// indexers can reconstruct the lifecycle).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_subscription_expiration_ledger(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        expires_at_ledger: Option<u32>,
+    ) -> Result<(), Error> {
+        subscription::do_set_subscription_expiration_ledger(
+            &env,
+            subscription_id,
+            authorizer,
+            expires_at_ledger,
+        )
+    }
+
+    /// Get the effective active-subscription cap for a subscriber (override
+    /// if set, otherwise the default). (#578)
+    pub fn get_subscriber_active_cap(env: Env, subscriber: Address) -> u32 {
+        subscription::get_subscriber_active_cap(&env, &subscriber)
+    }
+
+    /// Get a subscriber's current active-subscription count. (#578)
+    pub fn get_subscriber_active_count(env: Env, subscriber: Address) -> u32 {
+        subscription::get_subscriber_active_count(&env, &subscriber)
+    }
+
+    pub fn set_subscriber_create_cap(
+        env: Env,
+        admin: Address,
+        cap: u32,
+    ) -> Result<(), Error> {
+        admin::do_set_subscriber_create_cap(&env, admin, cap)
+    }
+
+    pub fn get_subscriber_create_cap(env: Env) -> u32 {
+        admin::get_subscriber_create_cap(&env)
+    }
+
     /// Get current subscriber exposure.
-    pub fn get_subscriber_exposure(env: Env, subscriber: Address, token: Address) -> Result<i128, Error> {
+    pub fn get_subscriber_exposure(
+        env: Env,
+        subscriber: Address,
+        token: Address,
+    ) -> Result<i128, Error> {
         subscription::get_subscriber_exposure(&env, subscriber, token)
     }
 
     /// Set merchant max subscriptions. Admin only.
-    pub fn set_merchant_max_subs(env: Env, admin: Address, merchant: Address, max_subs: u32) -> Result<(), Error> {
+    pub fn set_merchant_max_subs(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        max_subs: u32,
+    ) -> Result<(), Error> {
         subscription::do_set_merchant_max_subs(&env, admin, merchant, max_subs)
     }
 
@@ -1001,40 +1977,131 @@ impl SubscriptionVault {
     }
 
     /// Cancel a subscription.
-    pub fn cancel_subscription(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
+    pub fn cancel_subscription(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
         subscription::do_cancel_subscription(&env, subscription_id, authorizer.clone())?;
         let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "subscription_cancelled"), subscription_id), SubscriptionCancelledEvent { subscription_id, subscriber: sub.subscriber, merchant: sub.merchant, token: sub.token, authorizer, refund_amount: sub.prepaid_balance, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (Symbol::new(&env, "subscription_cancelled"), subscription_id),
+            SubscriptionCancelledEvent {
+                subscription_id,
+                subscriber: sub.subscriber,
+                merchant: sub.merchant,
+                token: sub.token,
+                authorizer,
+                refund_amount: sub.prepaid_balance,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
     }
 
+    /// Request a subscriber emergency withdrawal after a 72-hour cooldown.
+    pub fn request_emergency_withdraw(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        subscription::do_request_emergency_withdraw(&env, subscription_id, subscriber)
+    }
+
+    /// Finalize a pending emergency withdrawal once the cooldown has elapsed.
+    pub fn finalize_emergency_withdraw(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "finalize_emergency_withdraw")?;
+        subscription::do_finalize_emergency_withdraw(&env, subscription_id, subscriber)
+    }
+
     /// Withdraw subscriber funds after cancel.
-    pub fn withdraw_subscriber_funds(env: Env, subscription_id: u32, subscriber: Address) -> Result<(), Error> {
+    pub fn withdraw_subscriber_funds(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+    ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_subscriber_funds")?;
         subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
     }
 
     /// Partial refund. Admin only.
-    pub fn partial_refund(env: Env, admin: Address, subscription_id: u32, subscriber: Address, amount: i128) -> Result<(), Error> {
+    pub fn partial_refund(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        subscriber: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "partial_refund")?;
         subscription::do_partial_refund(&env, admin, subscription_id, subscriber, amount)
     }
 
     /// Schedule future cancel.
-    pub fn schedule_cancel(env: Env, subscription_id: u32, authorizer: Address, cancel_at: u64) -> Result<(), Error> {
+    pub fn schedule_cancel(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        cancel_at: u64,
+    ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "schedule_cancel")?;
         subscription::do_schedule_cancel(&env, subscription_id, authorizer, cancel_at)
     }
 
     /// Unschedule future cancel.
-    pub fn unschedule_cancel(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
+    pub fn unschedule_cancel(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "unschedule_cancel")?;
         subscription::do_unschedule_cancel(&env, subscription_id, authorizer)
     }
 
+    /// Enable or disable auto-renewal for a subscription.
+    ///
+    /// When `enabled = false` the billing engine will not charge the subscription
+    /// once the current interval elapses, effectively halting billing at the next
+    /// natural boundary. The subscriber or merchant may re-enable auto-renewal
+    /// within the *renewal window* (one full billing interval after the flag was
+    /// first disabled) without re-creating the subscription — preserving all
+    /// history and metadata.
+    ///
+    /// After the renewal window closes, re-enabling returns [`Error::RenewalWindowClosed`]
+    /// and the subscription must be cancelled and recreated.
+    ///
+    /// # Authorization
+    /// `authorizer` must be the subscriber or merchant of the subscription.
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — subscription does not exist.
+    /// * [`Error::Forbidden`] — caller is neither subscriber nor merchant.
+    /// * [`Error::InvalidStatusTransition`] — subscription is cancelled.
+    /// * [`Error::SubscriptionExpired`] — subscription has expired.
+    /// * [`Error::RenewalWindowClosed`] — renewal window has passed; cannot re-enable.
+    ///
+    /// # Events
+    /// Emits [`AutoRenewToggledEvent`] with topic `("auto_renew_toggled", subscription_id)`.
+    pub fn set_auto_renew(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        subscription::do_set_auto_renew(&env, subscription_id, authorizer, enabled)
+    }
+
     /// Pause a subscription.
-    pub fn pause_subscription(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
+    pub fn pause_subscription(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
         subscription::do_pause_subscription(&env, subscription_id, authorizer.clone())?;
         let timestamp = env.ledger().timestamp();
 
@@ -1043,8 +2110,6 @@ impl SubscriptionVault {
             (Symbol::new(&env, "sub_paused"), subscription_id),
             SubscriptionPausedEvent {
                 subscription_id,
-                subscriber: sub.subscriber,
-                merchant: sub.merchant,
                 authorizer,
                 timestamp,
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -1084,20 +2149,73 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        let _old_sub = queries::get_subscription(&env, subscription_id)?;
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
         subscription::do_resume_subscription(&env, subscription_id, authorizer.clone())?;
         let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish((Symbol::new(&env, "sub_resumed"), subscription_id), SubscriptionResumedEvent { subscription_id, subscriber: sub.subscriber, merchant: sub.merchant, authorizer, previous_status: old_sub.status, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (Symbol::new(&env, "sub_resumed"), subscription_id),
+            SubscriptionResumedEvent {
+                subscription_id,
+                subscriber: sub.subscriber,
+                merchant: sub.merchant,
+                authorizer,
+                previous_status: old_sub.status,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
     }
 
     /// Archive an expired or cancelled subscription.
-    pub fn cleanup_subscription(env: Env, subscription_id: u32, authorizer: Address) -> Result<(), Error> {
+    pub fn cleanup_subscription(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+    ) -> Result<(), Error> {
         subscription::do_cleanup_subscription(&env, subscription_id, authorizer)
     }
 
+    /// Initiate a transfer to a new subscriber.
+    pub fn initiate_transfer(
+        env: Env,
+        subscription_id: u32,
+        from: Address,
+        to: Address,
+        expires_at: u64,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "initiate_transfer")?;
+        subscription::do_initiate_transfer(&env, subscription_id, from, to, expires_at)
+    }
+
+    /// Accept a pending transfer as the new subscriber.
+    pub fn accept_transfer(
+        env: Env,
+        subscription_id: u32,
+        to: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "accept_transfer")?;
+        subscription::do_accept_transfer(&env, subscription_id, to)
+    }
+
+    /// Veto a pending transfer as the merchant.
+    pub fn veto_transfer(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "veto_transfer")?;
+        subscription::do_veto_transfer(&env, subscription_id, merchant)
+    }
+
     /// Merchant-initiated one-off charge.
-    pub fn charge_one_off(env: Env, subscription_id: u32, merchant: Address, amount: i128, idem_key: Option<soroban_sdk::BytesN<32>>) -> Result<(), Error> {
+    pub fn charge_one_off(
+        env: Env,
+        subscription_id: u32,
+        merchant: Address,
+        amount: i128,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_one_off")?;
         subscription::do_charge_one_off(&env, subscription_id, merchant, amount, idem_key)
@@ -1126,7 +2244,16 @@ impl SubscriptionVault {
         expires_at: u64,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        coupon::create_coupon(&env, merchant, code, token, percent_off_bps, fixed_off, max_redemptions, expires_at)
+        coupon::create_coupon(
+            &env,
+            merchant,
+            code,
+            token,
+            percent_off_bps,
+            fixed_off,
+            max_redemptions,
+            expires_at,
+        )
     }
 
     /// Revoke an existing coupon, preventing future bindings.
@@ -1159,19 +2286,23 @@ impl SubscriptionVault {
     // ── Charging ──────────────────────────────────────────────────────────────
 
     /// Charge a subscription for one interval.
-    pub fn charge_subscription(env: Env, subscription_id: u32, idem_key: Option<soroban_sdk::BytesN<32>>) -> Result<ChargeExecutionResult, Error> {
+    pub fn charge_subscription(
+        env: Env,
+        subscription_id: u32,
+        idem_key: Option<soroban_sdk::BytesN<32>>,
+    ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key)?;
+        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
         let _period_start = old_sub.last_payment_timestamp;
         let _period_end = timestamp;
 
         env.events().publish(
-            (Symbol::new(&env, "charged"),),
+            (types::TOPIC_CHARGED,),
             SubscriptionChargedEvent {
                 subscription_id,
                 subscriber: old_sub.subscriber,
@@ -1182,6 +2313,14 @@ impl SubscriptionVault {
                 timestamp,
                 period_start: old_sub.last_payment_timestamp,
                 period_end: timestamp,
+                salt: {
+                    let mut salt_buf = [0u8; 20];
+                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
+                    salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
+                    env.crypto().sha256(&salt_input).into()
+                },
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
         );
@@ -1189,22 +2328,52 @@ impl SubscriptionVault {
     }
 
     /// Charge metered usage.
-    pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<UsageChargeResult, Error> {
+    pub fn charge_usage(
+        env: Env,
+        subscription_id: u32,
+        usage_amount: i128,
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage")?;
-        charge_core::charge_usage_one(&env, subscription_id, usage_amount, String::from_str(&env, "usage"))
+        charge_core::charge_usage_one(
+            &env,
+            subscription_id,
+            usage_amount,
+            String::from_str(&env, "usage"),
+        )
     }
 
     /// Charge usage with reference.
-    pub fn charge_usage_with_reference(env: Env, subscription_id: u32, usage_amount: i128, reference: String) -> Result<UsageChargeResult, Error> {
+    pub fn charge_usage_with_reference(
+        env: Env,
+        subscription_id: u32,
+        usage_amount: i128,
+        reference: String,
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage_with_reference")?;
         charge_core::charge_usage_one(&env, subscription_id, usage_amount, reference)
     }
 
     /// Configure usage limits.
-    pub fn configure_usage_limits(env: Env, merchant: Address, subscription_id: u32, rate_limit_max_calls: Option<u32>, rate_window_secs: u64, burst_min_interval_secs: u64, usage_cap_units: Option<i128>) -> Result<(), Error> {
-        subscription::do_configure_usage_limits(&env, merchant, subscription_id, rate_limit_max_calls, rate_window_secs, burst_min_interval_secs, usage_cap_units)
+    pub fn configure_usage_limits(
+        env: Env,
+        merchant: Address,
+        subscription_id: u32,
+        rate_limit_max_calls: Option<u32>,
+        rate_window_secs: u64,
+        burst_min_interval_secs: u64,
+        usage_cap_units: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_configure_usage_limits(
+            &env,
+            merchant,
+            subscription_id,
+            rate_limit_max_calls,
+            rate_window_secs,
+            burst_min_interval_secs,
+            usage_cap_units,
+        )
     }
 
     // ── Merchant ──────────────────────────────────────────────────────────────
@@ -1213,54 +2382,148 @@ impl SubscriptionVault {
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
+
         merchant::withdraw_merchant_funds(&env, merchant.clone(), amount)?;
         let new_balance = merchant::get_merchant_balance(&env, &merchant);
         let token: Address = admin::read_config(&env, &DataKey::Token).ok_or(Error::NotFound)?;
-        env.events().publish((Symbol::new(&env, "withdrawn"), merchant.clone(), token.clone()), MerchantWithdrawalEvent { merchant, token, amount, remaining_balance: new_balance, timestamp: env.ledger().timestamp(), schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (
+                types::TOPIC_WITHDRAWN,
+                merchant.clone(),
+                token.clone(),
+            ),
+            MerchantWithdrawalEvent {
+                merchant,
+                token,
+                amount,
+                remaining_balance: new_balance,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(())
     }
 
     /// Token-specific merchant withdrawal.
-    pub fn withdraw_merchant_token_funds(env: Env, merchant: Address, token: Address, amount: i128) -> Result<(), Error> {
+    pub fn withdraw_merchant_token_funds(
+        env: Env,
+        merchant: Address,
+        token: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_token_funds")?;
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_token_funds")?;
         merchant::withdraw_merchant_funds_for_token(&env, merchant, token, amount)
     }
 
     /// Get merchant balance.
-    pub fn get_merchant_balance(env: Env, merchant: Address) -> i128 { merchant::get_merchant_balance(&env, &merchant) }
+    pub fn get_merchant_balance(env: Env, merchant: Address) -> i128 {
+        merchant::get_merchant_balance(&env, &merchant)
+    }
 
     /// Get merchant balance by token.
-    pub fn get_merchant_balance_by_token(env: Env, merchant: Address, token: Address) -> i128 { merchant::get_merchant_balance_by_token(&env, &merchant, &token) }
+    pub fn get_merchant_balance_by_token(env: Env, merchant: Address, token: Address) -> i128 {
+        merchant::get_merchant_balance_by_token(&env, &merchant, &token)
+    }
 
     /// Get merchant token earnings.
-    pub fn get_merchant_token_earnings(env: Env, merchant: Address, token: Address) -> crate::types::TokenEarnings { merchant::get_merchant_token_earnings(&env, &merchant, &token) }
+    pub fn get_merchant_token_earnings(
+        env: Env,
+        merchant: Address,
+        token: Address,
+    ) -> crate::types::TokenEarnings {
+        merchant::get_merchant_token_earnings(&env, &merchant, &token)
+    }
 
     /// Check if merchant is paused.
-    pub fn get_merchant_paused(env: Env, merchant: Address) -> bool { merchant::get_merchant_paused(&env, merchant) }
+    pub fn get_merchant_paused(env: Env, merchant: Address) -> bool {
+        merchant::get_merchant_paused(&env, merchant)
+    }
 
     /// Blanket pause merchant.
-    pub fn pause_merchant(env: Env, merchant: Address) -> Result<(), Error> { merchant::pause_merchant(&env, merchant) }
+    pub fn pause_merchant(env: Env, merchant: Address) -> Result<(), Error> {
+        merchant::pause_merchant(&env, merchant)
+    }
 
     /// Unpause merchant.
-    pub fn unpause_merchant(env: Env, merchant: Address) -> Result<(), Error> { merchant::unpause_merchant(&env, merchant) }
+    pub fn unpause_merchant(env: Env, merchant: Address) -> Result<(), Error> {
+        merchant::unpause_merchant(&env, merchant)
+    }
+
+    /// Set a vacation window for the calling merchant. During this window, all
+    /// charges to the merchant's subscriptions are blocked with `VacationActive`.
+    ///
+    /// # Arguments
+    /// - `start_ts` — Ledger timestamp when vacation begins (must be >= now).
+    /// - `end_ts`   — Ledger timestamp when vacation ends (must be > start_ts).
+    pub fn set_merchant_vacation(
+        env: Env,
+        merchant: Address,
+        start_ts: u64,
+        end_ts: u64,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_vacation(&env, merchant, start_ts, end_ts)
+    }
+
+    /// Clear the vacation window for the calling merchant. Idempotent.
+    pub fn clear_merchant_vacation(env: Env, merchant: Address) -> Result<(), Error> {
+        merchant::clear_merchant_vacation(&env, merchant)
+    }
+
+    /// Get the current vacation window for a merchant, or `None` if not set
+    /// or if the window has already expired.
+    pub fn get_merchant_vacation(
+        env: Env,
+        merchant: Address,
+    ) -> Option<MerchantVacation> {
+        merchant::get_merchant_vacation(&env, &merchant)
+    }
+
+    /// Returns `true` if the merchant is currently within a vacation window.
+    pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
+        merchant::is_merchant_in_vacation(&env, &merchant, now)
+    }
 
     /// direct merchant refund to subscriber.
-    pub fn merchant_refund(env: Env, merchant: Address, subscriber: Address, token: Address, amount: i128) -> Result<(), Error> {
+    pub fn merchant_refund(
+        env: Env,
+        merchant: Address,
+        subscriber: Address,
+        token: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "merchant_refund")?;
         merchant::merchant_refund(&env, merchant, subscriber, token, amount)
     }
 
     /// Get reconciliation snapshot.
-    pub fn get_reconciliation_snapshot(env: Env, merchant: Address) -> Vec<crate::types::TokenReconciliationSnapshot> { merchant::get_reconciliation_snapshot(&env, &merchant) }
+    pub fn get_reconciliation_snapshot(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<crate::types::TokenReconciliationSnapshot> {
+        merchant::get_reconciliation_snapshot(&env, &merchant)
+    }
 
     /// Get total earnings per token.
-    pub fn get_merchant_total_earnings(env: Env, merchant: Address) -> Vec<(Address, crate::types::TokenEarnings)> { merchant::get_merchant_total_earnings(&env, &merchant) }
+    pub fn get_merchant_total_earnings(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<(Address, crate::types::TokenEarnings)> {
+        merchant::get_merchant_total_earnings(&env, &merchant)
+    }
 
     // ── Payout Schedule ────────────────────────────────────────────────────────
 
     /// Configure merchant payout schedule.
-    pub fn set_payout_schedule(env: Env, merchant: Address, cadence_seconds: u64, min_payout: i128) -> Result<PayoutSchedule, Error> { merchant::do_set_payout_schedule(&env, merchant, cadence_seconds, min_payout) }
+    pub fn set_payout_schedule(
+        env: Env,
+        merchant: Address,
+        cadence_seconds: u64,
+        min_payout: i128,
+    ) -> Result<PayoutSchedule, Error> {
+        merchant::do_set_payout_schedule(&env, merchant, cadence_seconds, min_payout)
+    }
 
     /// Flush merchant payouts.
     pub fn flush_payouts(env: Env, merchant: Address) -> Result<u32, Error> {
@@ -1270,7 +2533,82 @@ impl SubscriptionVault {
     }
 
     /// Get payout schedule.
-    pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule { merchant::get_payout_schedule(&env, &merchant) }
+    pub fn get_payout_schedule(env: Env, merchant: Address) -> PayoutSchedule {
+        merchant::get_payout_schedule(&env, &merchant)
+    }
+
+    // ── Sub-Accounts (#575) ────────────────────────────────────────────────────
+
+    /// Register a new labelled sub-account (department) for a merchant.
+    ///
+    /// Sub-accounts provide isolated ledgers within one merchant identity.
+    /// Subscriptions can route charges to a specific sub-account by setting
+    /// `sub_account_label` at creation time.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — A unique label for the sub-account (e.g. `"sales"` or `"engineering"`).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Merchant config not initialised.
+    /// * [`Error::InvalidInput`] — Label is empty or already registered.
+    ///
+    /// # Events
+    /// Emits [`SubAccountCreatedEvent`] with topic `("sub_account_created", merchant, label)`.
+    pub fn register_sub_account(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> Result<(), Error> {
+        merchant::register_sub_account(&env, merchant, label)
+    }
+
+    /// Withdraw funds from a merchant sub-account.
+    ///
+    /// Funds are transferred to the merchant's address (must authorise).
+    /// Sub-account balances are independent from the parent merchant balance
+    /// but roll up to the parent in earnings reporting.
+    ///
+    /// # Arguments
+    /// * `merchant` — The merchant address; must authorise the call.
+    /// * `label` — The sub-account label to withdraw from.
+    /// * `token` — The token to withdraw.
+    /// * `amount` — Amount to withdraw (must be positive and ≤ sub-account balance).
+    ///
+    /// # Errors
+    /// * [`Error::NotFound`] — Sub-account does not exist or balance is zero.
+    /// * [`Error::InvalidAmount`] — Amount is zero or negative.
+    /// * [`Error::InsufficientBalance`] — Sub-account balance or vault balance is insufficient.
+    ///
+    /// # Events
+    /// Emits [`SubAccountWithdrawEvent`] with topic `("sub_account_withdrawn", merchant, label)`.
+    pub fn withdraw_sub_account_funds(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+        token: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_sub_account_funds")?;
+        merchant::withdraw_sub_account_funds(&env, merchant, label, token, amount)
+    }
+
+    /// Get the current balance of a merchant sub-account.
+    pub fn get_sub_account_balance(
+        env: Env,
+        merchant: Address,
+        label: Symbol,
+    ) -> i128 {
+        merchant::get_sub_account_balance(&env, &merchant, &label)
+    }
+
+    /// Get the list of registered sub-account labels for a merchant.
+    pub fn get_sub_account_list(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<Symbol> {
+        merchant::get_sub_account_list(&env, &merchant)
+    }
 
     // ── Dispute / Chargeback ──────────────────────────────────────────────────
 
@@ -1377,123 +2715,368 @@ impl SubscriptionVault {
         dispute::do_get_subscription_dispute(&env, subscription_id)
     }
 
+    // ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
+
+    /// Claim a cancellation escrow refund after the 24-hour hold window elapses.
+    ///
+    /// When a subscription is cancelled, the remaining prepaid balance is held
+    /// in escrow for [`CANCELLATION_ESCROW_WINDOW_SECS`] so the merchant has an
+    /// opportunity to dispute wrongful terminations. The subscriber calls this
+    /// entrypoint after the window elapses to release the funds.
+    ///
+    /// # Auth
+    ///
+    /// `subscriber` must match the escrow's subscriber address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow subscriber.
+    /// * [`Error::EscrowNotReleased`] — The 24-hour hold window has not elapsed.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute exists; escrow cannot be
+    ///   claimed while disputed.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowReleasedEvent`].
+    pub fn claim_cancellation_escrow(
+        env: Env,
+        subscriber: Address,
+        subscription_id: u32,
+    ) -> Result<i128, Error> {
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "claim_cancellation_escrow")?;
+        dispute::do_claim_cancellation_escrow(&env, subscriber, subscription_id)
+    }
+
+    /// Lodge a merchant dispute against a cancellation escrow, converting it
+    /// into a live Dispute record.
+    ///
+    /// During the escrow hold window the merchant may call this to contest a
+    /// wrongful termination. The escrow is removed and a standard [`Dispute`]
+    /// is created in `Open` status, subject to the existing dispute lifecycle
+    /// (`respond_dispute` / `resolve_dispute`).
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must match the escrow's merchant address and provide
+    /// authentication.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+    /// * [`Error::Unauthorized`] — Caller does not match the escrow merchant.
+    /// * [`Error::EscrowNotReleased`] — The hold window has elapsed; cannot
+    ///   dispute after release.
+    /// * [`Error::DisputeAlreadyOpen`] — A dispute already exists.
+    ///
+    /// # Events
+    ///
+    /// Emits [`CancellationEscrowDisputedEvent`] and [`DisputeOpenedEvent`].
+    pub fn lodge_escrow_dispute(
+        env: Env,
+        merchant: Address,
+        subscription_id: u32,
+    ) -> Result<u64, Error> {
+        dispute::do_lodge_escrow_dispute(&env, merchant, subscription_id)
+    }
+
+    /// Read a cancellation escrow record by subscription ID.
+    ///
+    /// Returns the escrow details if one exists for the given subscription.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EscrowNotFound`] — No cancellation escrow record found.
+    pub fn get_cancellation_escrow(
+        env: Env,
+        subscription_id: u32,
+    ) -> Result<CancellationEscrow, Error> {
+        dispute::do_get_cancellation_escrow(&env, subscription_id)
+    }
+
     // ── Queries ──────────────────────────────────────────────────────────────
 
     /// Get subscription.
-    pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> { queries::get_subscription(&env, subscription_id) }
+    pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
+        queries::get_subscription(&env, subscription_id)
+    }
 
     /// Estimate topup.
-    pub fn estimate_topup_for_intervals(env: Env, subscription_id: u32, num_intervals: u32) -> Result<i128, Error> { queries::estimate_topup_for_intervals(&env, subscription_id, num_intervals) }
+    pub fn estimate_topup_for_intervals(
+        env: Env,
+        subscription_id: u32,
+        num_intervals: u32,
+    ) -> Result<i128, Error> {
+        queries::estimate_topup_for_intervals(&env, subscription_id, num_intervals)
+    }
 
     /// Get next charge info.
-    pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> { queries::get_next_charge_info(&env, subscription_id) }
+    pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
+        queries::get_next_charge_info(&env, subscription_id)
+    }
 
     /// Get token subscription count.
-    pub fn get_token_subscription_count(env: Env, token: Address) -> u32 { queries::get_token_subscription_count(&env, token) }
+    pub fn get_token_subscription_count(env: Env, token: Address) -> u32 {
+        queries::get_token_subscription_count(&env, token)
+    }
 
     /// Get merchant subscription count.
-    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 { queries::get_merchant_subscription_count(&env, merchant) }
+    pub fn get_merchant_subscription_count(env: Env, merchant: Address) -> u32 {
+        queries::get_merchant_subscription_count(&env, merchant)
+    }
 
     /// List subscriptions by subscriber.
-    pub fn list_subscriptions_by_subscriber(env: Env, subscriber: Address, start_from_id: u32, limit: u32) -> Result<crate::queries::SubscriptionsPage, Error> { crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit) }
+    pub fn list_subscriptions_by_subscriber(
+        env: Env,
+        subscriber: Address,
+        start_from_id: u32,
+        limit: u32,
+    ) -> Result<crate::queries::SubscriptionsPage, Error> {
+        crate::queries::list_subscriptions_by_subscriber(&env, subscriber, start_from_id, limit)
+    }
 
     /// Get cap info.
-    pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> { queries::get_cap_info(&env, subscription_id) }
+    pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> {
+        queries::get_cap_info(&env, subscription_id)
+    }
 
     /// Set global cap default. Admin only.
-    pub fn set_global_cap_default(env: Env, admin: Address, cap: Option<i128>) -> Result<(), Error> { subscription::do_set_global_cap_default(&env, admin, cap) }
+    pub fn set_global_cap_default(
+        env: Env,
+        admin: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_global_cap_default(&env, admin, cap)
+    }
 
     /// Get global cap default.
-    pub fn get_global_cap_default(env: Env) -> Option<i128> { subscription::get_global_cap_default(&env) }
+    pub fn get_global_cap_default(env: Env) -> Option<i128> {
+        subscription::get_global_cap_default(&env)
+    }
 
     /// Set merchant cap default.
-    pub fn set_merchant_cap_default(env: Env, merchant: Address, cap: Option<i128>) -> Result<(), Error> {
+    pub fn set_merchant_cap_default(
+        env: Env,
+        merchant: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
         validation::reject_contract_self(&env, &merchant)?;
         subscription::do_set_merchant_cap_default(&env, merchant, cap)
     }
 
     /// Get merchant cap default.
-    pub fn get_merchant_cap_default(env: Env, merchant: Address) -> Option<i128> { subscription::get_merchant_cap_default(&env, merchant) }
+    pub fn get_merchant_cap_default(env: Env, merchant: Address) -> Option<i128> {
+        subscription::get_merchant_cap_default(&env, merchant)
+    }
 
     /// Update subscription cap. Admin only.
-    pub fn update_subscription_cap(env: Env, admin: Address, subscription_id: u32, new_cap: Option<i128>) -> Result<(), Error> { subscription::do_update_subscription_cap(&env, admin, subscription_id, new_cap) }
+    pub fn update_subscription_cap(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        new_cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_update_subscription_cap(&env, admin, subscription_id, new_cap)
+    }
 
     /// Get statements by offset.
-    pub fn get_sub_statements_offset(env: Env, subscription_id: u32, offset: u32, limit: u32, newest_first: bool) -> Result<BillingStatementsPage, Error> { statements::get_statements_by_subscription_offset(&env, subscription_id, offset, limit, newest_first) }
+    pub fn get_sub_statements_offset(
+        env: Env,
+        subscription_id: u32,
+        offset: u32,
+        limit: u32,
+        newest_first: bool,
+    ) -> Result<BillingStatementsPage, Error> {
+        statements::get_statements_by_subscription_offset(
+            &env,
+            subscription_id,
+            offset,
+            limit,
+            newest_first,
+        )
+    }
 
     /// Get statements by cursor.
-    pub fn get_sub_statements_cursor(env: Env, subscription_id: u32, cursor: Option<u32>, limit: u32, newest_first: bool) -> Result<BillingStatementsPage, Error> { statements::get_statements_by_subscription_cursor(&env, subscription_id, cursor, limit, newest_first) }
+    pub fn get_sub_statements_cursor(
+        env: Env,
+        subscription_id: u32,
+        cursor: Option<u32>,
+        limit: u32,
+        newest_first: bool,
+    ) -> Result<BillingStatementsPage, Error> {
+        statements::get_statements_by_subscription_cursor(
+            &env,
+            subscription_id,
+            cursor,
+            limit,
+            newest_first,
+        )
+    }
 
     /// Get period snapshot.
-    pub fn get_period_snapshot(env: Env, subscription_id: u32, period_index: u64) -> Option<BillingPeriodSnapshot> { period_snapshots::get_period_snapshot(&env, subscription_id, period_index) }
+    pub fn get_period_snapshot(
+        env: Env,
+        subscription_id: u32,
+        period_index: u64,
+    ) -> Option<BillingPeriodSnapshot> {
+        period_snapshots::get_period_snapshot(&env, subscription_id, period_index)
+    }
 
     /// List period snapshots.
-    pub fn list_period_snapshots(env: Env, subscription_id: u32, limit: u32) -> Vec<BillingPeriodSnapshot> { period_snapshots::list_period_snapshots(&env, subscription_id, limit) }
+    pub fn list_period_snapshots(
+        env: Env,
+        subscription_id: u32,
+        limit: u32,
+    ) -> Vec<BillingPeriodSnapshot> {
+        period_snapshots::list_period_snapshots(&env, subscription_id, limit)
+    }
 
     /// Add accepted token. Admin only.
-    pub fn add_accepted_token(env: Env, admin: Address, token: Address, decimals: u32) -> Result<(), Error> {
+    pub fn add_accepted_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+        decimals: u32,
+    ) -> Result<(), Error> {
         validation::reject_contract_self(&env, &token)?;
         admin::add_accepted_token(&env, admin, token, decimals)
     }
 
     /// Remove accepted token. Admin only.
-    pub fn remove_accepted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> { admin::remove_accepted_token(&env, admin, token) }
+    pub fn remove_accepted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
+        admin::remove_accepted_token(&env, admin, token)
+    }
 
     /// List accepted tokens.
-    pub fn list_accepted_tokens(env: Env) -> Vec<AcceptedToken> { admin::list_accepted_tokens(&env) }
+    pub fn list_accepted_tokens(env: Env) -> Vec<AcceptedToken> {
+        admin::list_accepted_tokens(&env)
+    }
 
     /// List merchant subscriptions.
-    pub fn get_subscriptions_by_merchant(env: Env, merchant: Address, start: u32, limit: u32) -> Result<Vec<Subscription>, Error> { queries::get_subscriptions_by_merchant(&env, merchant, start, limit) }
+    pub fn get_subscriptions_by_merchant(
+        env: Env,
+        merchant: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<Subscription>, Error> {
+        queries::get_subscriptions_by_merchant(&env, merchant, start, limit)
+    }
 
     /// List token subscriptions.
-    pub fn get_subscriptions_by_token(env: Env, token: Address, start: u32, limit: u32) -> Result<Vec<Subscription>, Error> { queries::get_subscriptions_by_token(&env, token, start, limit) }
+    pub fn get_subscriptions_by_token(
+        env: Env,
+        token: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<Subscription>, Error> {
+        queries::get_subscriptions_by_token(&env, token, start, limit)
+    }
 
     // ── Reconciliation Queries ─────────────────────────────────────────────────
 
     /// Token reconciliation summary.
-    pub fn get_token_reconciliation(env: Env, token: Address) -> TokenLiabilities { queries::get_token_reconciliation(&env, token) }
+    pub fn get_token_reconciliation(env: Env, token: Address) -> TokenLiabilities {
+        queries::get_token_reconciliation(&env, token)
+    }
 
     /// All tokens reconciliation summary.
-    pub fn get_recon_summary(env: Env, start_token_index: u32, limit: u32) -> ReconciliationSummaryPage { queries::get_contract_reconciliation_summary(&env, start_token_index, limit) }
+    pub fn get_recon_summary(
+        env: Env,
+        start_token_index: u32,
+        limit: u32,
+    ) -> ReconciliationSummaryPage {
+        queries::get_contract_reconciliation_summary(&env, start_token_index, limit)
+    }
 
     /// auditable reconciliation proof.
-    pub fn generate_reconciliation_proof(env: Env, token: Address) -> ReconciliationProof { queries::generate_reconciliation_proof(&env, token) }
+    pub fn generate_reconciliation_proof(env: Env, token: Address) -> ReconciliationProof {
+        queries::generate_reconciliation_proof(&env, token)
+    }
 
     /// Paginated prepaid balance query.
-    pub fn query_prepaid_balances_paginated(env: Env, request: PrepaidQueryRequest) -> PrepaidQueryResult { queries::query_prepaid_balances_paginated(&env, request) }
+    pub fn query_prepaid_balances_paginated(
+        env: Env,
+        request: PrepaidQueryRequest,
+    ) -> PrepaidQueryResult {
+        queries::query_prepaid_balances_paginated(&env, request)
+    }
 
     /// Set billing retention. Admin only.
     pub fn set_billing_retention(env: Env, admin: Address, keep_recent: u32) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
+        admin::enforce_config_cooldown(&env, "BillingRetention")?;
         statements::set_retention_config(&env, keep_recent);
         Ok(())
     }
 
     /// Get billing retention.
-    pub fn get_billing_retention(env: Env) -> BillingRetentionConfig { statements::get_retention_config(&env) }
+    pub fn get_billing_retention(env: Env) -> BillingRetentionConfig {
+        statements::get_retention_config(&env)
+    }
 
     /// Get compacted aggregate totals.
-    pub fn get_stmt_compacted_aggregate(env: Env, subscription_id: u32) -> BillingStatementAggregate { statements::get_compacted_aggregate(&env, subscription_id) }
+    pub fn get_stmt_compacted_aggregate(
+        env: Env,
+        subscription_id: u32,
+    ) -> BillingStatementAggregate {
+        statements::get_compacted_aggregate(&env, subscription_id)
+    }
 
     /// Explicitly compact billing statements. Admin only.
-    pub fn compact_billing_statements(env: Env, admin: Address, subscription_id: u32, keep_recent_override: Option<u32>) -> Result<BillingCompactionSummary, Error> {
+    pub fn compact_billing_statements(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        keep_recent_override: Option<u32>,
+    ) -> Result<BillingCompactionSummary, Error> {
         require_admin_auth(&env, &admin)?;
-        let summary = statements::compact_subscription_statements(&env, subscription_id, keep_recent_override)?;
+        let summary = statements::compact_subscription_statements(
+            &env,
+            subscription_id,
+            keep_recent_override,
+        )?;
         let aggregate = statements::get_compacted_aggregate(&env, subscription_id);
-        env.events().publish((Symbol::new(&env, "billing_compacted"), subscription_id), BillingCompactedEvent { admin, subscription_id, pruned_count: summary.pruned_count, kept_count: summary.kept_count, total_pruned_amount: summary.total_pruned_amount, timestamp: env.ledger().timestamp(), aggregate_pruned_count: aggregate.pruned_count, aggregate_total_amount: aggregate.total_amount, aggregate_oldest_period_start: aggregate.oldest_period_start, aggregate_newest_period_end: aggregate.newest_period_end, schema_version: crate::types::EVENT_SCHEMA_VERSION });
+        env.events().publish(
+            (Symbol::new(&env, "billing_compacted"), subscription_id),
+            BillingCompactedEvent {
+                admin,
+                subscription_id,
+                pruned_count: summary.pruned_count,
+                kept_count: summary.kept_count,
+                total_pruned_amount: summary.total_pruned_amount,
+                timestamp: env.ledger().timestamp(),
+                aggregate_pruned_count: aggregate.pruned_count,
+                aggregate_total_amount: aggregate.total_amount,
+                aggregate_oldest_period_start: aggregate.oldest_period_start,
+                aggregate_newest_period_end: aggregate.newest_period_end,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
         Ok(summary)
     }
 
     /// Get oracle config.
-    pub fn get_oracle_config(env: Env) -> OracleConfig { oracle::get_oracle_config(&env) }
+    pub fn get_oracle_config(env: Env) -> OracleConfig {
+        oracle::get_oracle_config(&env)
+    }
 
     /// Emit oracle liveness event.
-    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> { oracle::emit_oracle_liveness(&env) }
+    pub fn emit_oracle_liveness(env: Env) -> Result<OracleLivenessEvent, Error> {
+        oracle::emit_oracle_liveness(&env)
+    }
 
     // ── Metadata ──────────────────────────────────────────────────────────────
 
     /// Set subscription metadata.
-    pub fn set_metadata(env: Env, subscription_id: u32, authorizer: Address, key: String, value: String) -> Result<(), Error> {
+    pub fn set_metadata(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        key: String,
+        value: String,
+    ) -> Result<(), Error> {
         validation::reject_empty_string(&key)?;
         validation::reject_empty_string(&value)?;
         metadata::set_metadata(&env, subscription_id, &authorizer, key, value)
@@ -1580,27 +3163,59 @@ impl SubscriptionVault {
     }
 
     /// Delete metadata.
-    pub fn delete_metadata(env: Env, subscription_id: u32, authorizer: Address, key: String) -> Result<(), Error> {
+    pub fn delete_metadata(
+        env: Env,
+        subscription_id: u32,
+        authorizer: Address,
+        key: String,
+    ) -> Result<(), Error> {
         validation::reject_empty_string(&key)?;
         metadata::delete_metadata(&env, subscription_id, &authorizer, key)
     }
 
     /// Get metadata.
-    pub fn get_metadata(env: Env, subscription_id: u32, key: String) -> Result<String, Error> { metadata::get_metadata(&env, subscription_id, key) }
+    pub fn get_metadata(env: Env, subscription_id: u32, key: String) -> Result<String, Error> {
+        metadata::get_metadata(&env, subscription_id, key)
+    }
 
     /// List metadata keys.
-    pub fn list_metadata_keys(env: Env, subscription_id: u32) -> Result<Vec<String>, Error> { metadata::list_metadata_keys(&env, subscription_id) }
+    pub fn list_metadata_keys(env: Env, subscription_id: u32) -> Result<Vec<String>, Error> {
+        metadata::list_metadata_keys(&env, subscription_id)
+    }
 
     // ── Protocol Fees ──────────────────────────────────────────────────────────
 
+    /// Queue a protocol fee/treasury change for delayed activation. Admin only.
+    pub fn queue_treasury_change(env: Env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error> {
+        validation::reject_contract_self(&env, &treasury)?;
+        admin::queue_treasury_change(&env, admin, treasury, fee_bps)
+    }
+
+    /// Execute a queued treasury change after the timelock elapses. Admin only.
+    pub fn execute_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::execute_treasury_change(&env, admin)
+    }
+
+    /// Cancel a queued treasury change before it is executed. Admin only.
+    pub fn cancel_treasury_change(env: Env, admin: Address) -> Result<(), Error> {
+        admin::cancel_treasury_change(&env, admin)
+    }
+
     /// Set protocol fee. Admin only.
-    pub fn set_protocol_fee(env: Env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error> {
+    pub fn set_protocol_fee(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        fee_bps: u32,
+    ) -> Result<(), Error> {
         validation::reject_contract_self(&env, &treasury)?;
         admin::set_protocol_fee(&env, admin, treasury, fee_bps)
     }
 
     /// Get protocol fee bps.
-    pub fn get_protocol_fee_bps(env: Env) -> u32 { admin::get_protocol_fee_bps(&env) }
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        admin::get_protocol_fee_bps(&env)
+    }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
 
@@ -1690,7 +3305,12 @@ impl SubscriptionVault {
     /// # Errors
     /// - `Unauthorized` if caller is not the admin
     /// - `InvalidInput` if weight is zero
-    pub fn add_guardian(env: Env, admin: Address, guardian: Address, weight: u32) -> Result<(), Error> {
+    pub fn add_guardian(
+        env: Env,
+        admin: Address,
+        guardian: Address,
+        weight: u32,
+    ) -> Result<(), Error> {
         admin::require_admin_auth(&env, &admin)?;
         governance::add_guardian(&env, guardian, weight)
     }
@@ -1730,65 +3350,157 @@ impl SubscriptionVault {
     // ── Blocklist ──────────────────────────────────────────────────────────────
 
     /// Blocklist subscriber.
-    pub fn add_to_blocklist(env: Env, authorizer: Address, subscriber: Address, reason: Option<String>) -> Result<(), Error> { blocklist::do_add_to_blocklist(&env, authorizer, subscriber, reason) }
+    pub fn add_to_blocklist(
+        env: Env,
+        authorizer: Address,
+        subscriber: Address,
+        reason: Option<String>,
+    ) -> Result<(), Error> {
+        blocklist::do_add_to_blocklist(&env, authorizer, subscriber, reason)
+    }
 
     /// Unblocklist subscriber. Admin only.
-    pub fn remove_from_blocklist(env: Env, admin: Address, subscriber: Address) -> Result<(), Error> { blocklist::do_remove_from_blocklist(&env, admin, subscriber) }
+    pub fn remove_from_blocklist(
+        env: Env,
+        admin: Address,
+        subscriber: Address,
+    ) -> Result<(), Error> {
+        blocklist::do_remove_from_blocklist(&env, admin, subscriber)
+    }
 
     /// Get blocklist entry.
-    pub fn get_blocklist_entry(env: Env, subscriber: Address) -> Result<BlocklistEntry, Error> { blocklist::get_blocklist_entry(&env, subscriber) }
+    pub fn get_blocklist_entry(env: Env, subscriber: Address) -> Result<BlocklistEntry, Error> {
+        blocklist::get_blocklist_entry(&env, subscriber)
+    }
 
     /// Check if blocklisted.
-    pub fn is_blocklisted(env: Env, subscriber: Address) -> bool { blocklist::is_blocklisted(&env, &subscriber) }
+    pub fn is_blocklisted(env: Env, subscriber: Address) -> bool {
+        blocklist::is_blocklisted(&env, &subscriber)
+    }
 
     /// Initialize merchant config.
-    pub fn initialize_merchant_config(env: Env, merchant: Address, payout_address: Address, fee_bips: i32, allowed_operations: i32, fee_address: Option<Address>, redirect_url: String) -> Result<MerchantConfig, Error> { merchant::initialize_merchant_config(&env, merchant, payout_address, fee_bips, allowed_operations, fee_address, redirect_url) }
+    pub fn initialize_merchant_config(
+        env: Env,
+        merchant: Address,
+        payout_address: Address,
+        fee_bips: i32,
+        allowed_operations: i32,
+        fee_address: Option<Address>,
+        redirect_url: String,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::initialize_merchant_config(
+            &env,
+            merchant,
+            payout_address,
+            fee_bips,
+            allowed_operations,
+            fee_address,
+            redirect_url,
+        )
+    }
 
     /// Update merchant config.
-    pub fn set_merchant_config(env: Env, merchant: Address, config: MerchantConfig) -> Result<(), Error> { merchant::set_merchant_config(&env, merchant, config) }
+    pub fn set_merchant_config(
+        env: Env,
+        merchant: Address,
+        config: MerchantConfig,
+    ) -> Result<(), Error> {
+        merchant::set_merchant_config(&env, merchant, config)
+    }
 
     /// Partial update merchant config.
-    pub fn update_merchant_config(env: Env, merchant: Address, new_payout_address: Option<Address>, new_fee_bips: Option<i32>, new_allowed_operations: Option<i32>, new_is_active: Option<bool>, new_fee_address: Option<Option<Address>>, new_redirect_url: Option<String>, new_is_paused: Option<bool>) -> Result<MerchantConfig, Error> { merchant::update_merchant_config(&env, merchant, new_payout_address, new_fee_bips, new_allowed_operations, new_is_active, new_fee_address, new_redirect_url, new_is_paused) }
+    pub fn update_merchant_config(
+        env: Env,
+        merchant: Address,
+        new_payout_address: Option<Address>,
+        new_fee_bips: Option<i32>,
+        new_allowed_operations: Option<i32>,
+        new_is_active: Option<bool>,
+        new_fee_address: Option<Option<Address>>,
+        new_redirect_url: Option<String>,
+        new_is_paused: Option<bool>,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::update_merchant_config(
+            &env,
+            merchant,
+            new_payout_address,
+            new_fee_bips,
+            new_allowed_operations,
+            new_is_active,
+            new_fee_address,
+            new_redirect_url,
+            new_is_paused,
+        )
+    }
 
     /// Get merchant config.
-    pub fn get_merchant_config(env: Env, merchant: Address) -> Option<crate::types::MerchantConfig> { merchant::get_merchant_config(&env, merchant) }
+    pub fn get_merchant_config(
+        env: Env,
+        merchant: Address,
+    ) -> Option<crate::types::MerchantConfig> {
+        merchant::get_merchant_config(&env, merchant)
+    }
 
     /// Returns the schema version.
-    pub fn version(_env: Env) -> u32 { 1 }
+    pub fn version(_env: Env) -> u32 {
+        1
+    }
 
     /// Returns total subscription count.
-    pub fn get_subscription_count(env: Env) -> u32 { env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32) }
+    pub fn get_subscription_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0u32)
+    }
 
     /// Internal ID allocator.
     fn _next_id(env: &Env) -> Result<u32, Error> {
-        let current: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32);
-        if current == MAX_SUBSCRIPTION_ID { return Err(Error::SubscriptionLimitReached); }
-        env.storage().instance().set(&DataKey::NextId, &(current + 1));
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0u32);
+        if current == MAX_SUBSCRIPTION_ID {
+            return Err(Error::SubscriptionLimitReached);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::NextId, &(current + 1));
         Ok(current)
     }
 }
 
 #[cfg(test)]
 mod test_utils;
+#[cfg(test)]
+mod test_cancellation_escrow;
 
 #[cfg(test)]
-mod test_metadata_signed;
+mod test_usage_limits_required;
+
 #[cfg(test)]
 mod test_charge_invariants;
+#[cfg(test)]
+mod test_metadata_signed;
 
 #[cfg(test)]
 mod test_scheduled_cancel;
+#[cfg(test)]
+mod test_subscriber_active_cap;
+#[cfg(test)]
+mod test_statement_compaction;
 
 #[cfg(test)]
 mod test_billing_period_snapshots;
-
 #[cfg(test)]
-mod test_insufficient_balance;
-#[cfg(test)]
-mod test_governance;
+mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test_validation;
+
+#[cfg(test)]
+mod test_emergency_withdraw;
 
 #[cfg(test)]
 mod test_abi_validators_integration;
@@ -1799,15 +3511,35 @@ mod test_coupon;
 mod test_bulk_admin_ops;
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use crate::SubscriptionVaultClient;
+mod test_auto_pause;
 
-    #[test]
-    fn version_is_one() {
-        let env = Env::default();
-        let contract_id = env.register(SubscriptionVault, ());
-        let client = SubscriptionVaultClient::new(&env, &contract_id);
-        assert_eq!(client.version(), 1);
-    }
-}
+#[cfg(test)]
+mod test_grace_buyout;
+
+#[cfg(test)]
+mod test_subscription_transfer;
+
+/// ABI-hash regression guard.
+///
+/// The hash is computed from the sorted, newline-joined list of all
+/// `pub fn` names exposed by `#[contractimpl]`. Any accidental rename,
+/// addition, or removal of a contract entrypoint will change the hash and
+/// cause this test to fail, flagging the ABI breakage before it reaches
+/// production.
+///
+/// **To update intentionally:** change only the `EXPECTED` constant below
+/// and document the ABI change in the PR description.
+#[cfg(test)]
+mod test_merchant_whitelist;
+
+#[cfg(test)]
+mod test_split_billing;
+
+#[cfg(test)]
+mod test_split_billing;
+
+#[cfg(test)]
+mod test_merchant_vacation;
+
+#[cfg(test)]
+mod test_emergency_stop_view_surface;

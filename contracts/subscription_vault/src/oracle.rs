@@ -1,147 +1,327 @@
+//! Optional oracle integration for cross-currency pricing.
+//!
+//! Includes a deviation circuit breaker that rejects price spikes exceeding a
+//! configurable basis-point threshold relative to the median of recent samples.
+
+use crate::safe_math::{safe_add, safe_div, safe_mul, safe_pow, safe_sub};
 use crate::types::{
-    DataKey, Error, OracleConfig, OracleKind, OracleLivenessEvent, OracleConfigUpdatedEvent,
-    Subscription,
+    DataKey, Error, OracleConfig, OracleDeviationBreakerEvent, OraclePrice,
+    OraclePriceHistoryMeta, Subscription,
 };
-use crate::admin::{read_config, write_config};
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
-/// Resolve the charge amount for a subscription, applying oracle pricing when enabled.
-///
-/// When oracle pricing is disabled or the subscription has no cross-currency amount,
-/// the subscription's own `amount` is returned directly (existing behaviour).
-pub fn resolve_charge_amount(
-    env: &Env,
-    _subscription_id: u32,
-    sub: &Subscription,
-) -> Result<i128, Error> {
-    let config = get_oracle_config(env);
-    if !config.enabled {
-        return Ok(sub.amount);
-    }
+const KEY_ORACLE_ENABLED: &str = "oracle_enabled";
+const KEY_ORACLE_ADDR: &str = "oracle_addr";
+const KEY_ORACLE_MAX_AGE: &str = "oracle_max_age";
+const KEY_ORACLE_DEVIATION_BPS: &str = "oracle_deviation_bps";
 
-    // When oracle is enabled, call the adapter to resolve the price.
-    // We pass the token address as both base and quote to the adapter to fulfill the API,
-    // though the current SpotAdapter implementation delegates to a latest_price() method 
-    // that takes no arguments.
-    let price = crate::oracle_adapter::dispatch_price(env, &config, &sub.token, &sub.token)?;
+/// Number of recent price samples retained per token for the deviation check.
+const ORACLE_PRICE_HISTORY_SIZE: u32 = 10;
 
-    // Calculate token_amount = ceil(quote_amount * 10^7 / price)
-    // sub.amount is treated as the quote_amount.
-    let scaled_amount = (sub.amount as u128)
-        .checked_mul(crate::oracle_adapter::PRICE_SCALE)
-        .ok_or(Error::MathOverflow)?;
+// ── Oracle config ──────────────────────────────────────────────────────────────
 
-    let token_amount = scaled_amount
-        .checked_add(price.saturating_sub(1))
-        .ok_or(Error::MathOverflow)?
-        .checked_div(price)
-        .ok_or(Error::MathOverflow)?;
-
-    if token_amount > i128::MAX as u128 {
-        return Err(Error::MathOverflow);
-    }
-
-    Ok(token_amount as i128)
-}
-
-/// Persist oracle configuration. Admin only (caller must have verified auth).
-#[allow(clippy::too_many_arguments)]
 pub fn set_oracle_config(
     env: &Env,
     enabled: bool,
     oracle: Option<Address>,
-    max_age: u64,
-    kind: OracleKind,
-    window_secs: u64,
-    fixed_numerator: u128,
-    fixed_denominator: u128,
+    max_age_seconds: u64,
 ) -> Result<(), Error> {
-    // Validate FixedRate denominator eagerly so bad config is rejected.
-    if matches!(kind, OracleKind::FixedRate) && fixed_denominator == 0 {
+    #[cfg(not(feature = "oracle-pricing"))]
+    {
+        let _ = (env, enabled, oracle, max_age_seconds);
         return Err(Error::InvalidInput);
     }
+    #[cfg(feature = "oracle-pricing")]
+    {
+        if enabled {
+            if oracle.is_none() {
+                return Err(Error::OracleNotConfigured);
+            }
+            if max_age_seconds == 0 {
+                return Err(Error::InvalidInput);
+            }
+        }
+        let storage = env.storage().instance();
+        storage.set(&Symbol::new(env, KEY_ORACLE_ENABLED), &enabled);
+        if let Some(ref addr) = oracle {
+            storage.set(&Symbol::new(env, KEY_ORACLE_ADDR), addr);
+        } else {
+            storage.remove(&Symbol::new(env, KEY_ORACLE_ADDR));
+        }
+        storage.set(&Symbol::new(env, KEY_ORACLE_MAX_AGE), &max_age_seconds);
+        Ok(())
+    }
+}
 
-    let cfg = OracleConfig {
-        enabled,
-        oracle: oracle.clone(),
-        max_age_seconds: max_age,
-        kind: kind.clone(),
-        window_secs,
-        fixed_numerator,
-        fixed_denominator,
-    };
-    write_config(env, &DataKey::Oracle, &cfg);
+pub fn get_oracle_config(env: &Env) -> OracleConfig {
+    #[cfg(not(feature = "oracle-pricing"))]
+    {
+        let _ = env;
+        return OracleConfig {
+            enabled: false,
+            oracle: None,
+            max_age_seconds: 0,
+        };
+    }
+    #[cfg(feature = "oracle-pricing")]
+    {
+        let storage = env.storage().instance();
+        OracleConfig {
+            enabled: storage
+                .get(&Symbol::new(env, KEY_ORACLE_ENABLED))
+                .unwrap_or(false),
+            oracle: storage.get::<_, Address>(&Symbol::new(env, KEY_ORACLE_ADDR)),
+            max_age_seconds: storage
+                .get(&Symbol::new(env, KEY_ORACLE_MAX_AGE))
+                .unwrap_or(0u64),
+        }
+    }
+}
 
-    env.events().publish(
-        (Symbol::new(env, "oracle_config_updated"),),
-        OracleConfigUpdatedEvent {
-            enabled,
-            oracle,
-            max_age_seconds: max_age,
-            kind,
-            window_secs,
-            fixed_numerator,
-            fixed_denominator,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
+// ── Deviation circuit breaker ──────────────────────────────────────────────────
+
+/// Set the maximum allowed price deviation in basis points.
+///
+/// A value of `0` means any deviation at all will be rejected (strict mode).
+/// When unset (default), the deviation check is skipped entirely.
+pub fn set_oracle_deviation_bps(env: &Env, bps: u32) {
+    #[cfg(feature = "oracle-pricing")]
+    env.storage()
+        .instance()
+        .set(&Symbol::new(env, KEY_ORACLE_DEVIATION_BPS), &bps);
+    #[cfg(not(feature = "oracle-pricing"))]
+    let _ = (env, bps);
+}
+
+/// Read the deviation threshold.
+///
+/// Returns `None` when no threshold has been configured (check disabled).
+pub fn get_oracle_deviation_bps(env: &Env) -> Option<u32> {
+    #[cfg(feature = "oracle-pricing")]
+    {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(env, KEY_ORACLE_DEVIATION_BPS))
+    }
+    #[cfg(not(feature = "oracle-pricing"))]
+    {
+        let _ = env;
+        None
+    }
+}
+
+/// Read the price history for a given token.
+pub fn get_oracle_price_history(env: &Env, token: &Address) -> Vec<i128> {
+    #[cfg(feature = "oracle-pricing")]
+    {
+        load_prices(env, token)
+    }
+    #[cfg(not(feature = "oracle-pricing"))]
+    {
+        let _ = (env, token);
+        Vec::new(env)
+    }
+}
+
+/// Load the ring-buffer metadata for `token`.
+fn load_history_meta(env: &Env, token: &Address) -> OraclePriceHistoryMeta {
+    env.storage()
+        .instance()
+        .get::<DataKey, OraclePriceHistoryMeta>(&DataKey::OraclePriceHistoryMeta(token.clone()))
+        .unwrap_or(OraclePriceHistoryMeta { head: 0, count: 0 })
+}
+
+/// Persist updated ring-buffer metadata.
+fn save_history_meta(env: &Env, token: &Address, meta: &OraclePriceHistoryMeta) {
+    env.storage().instance().set(
+        &DataKey::OraclePriceHistoryMeta(token.clone()),
+        meta,
     );
+}
+
+/// Read all samples currently in the ring buffer for `token` (in insertion order).
+fn load_prices(env: &Env, token: &Address) -> Vec<i128> {
+    let meta = load_history_meta(env, token);
+    let mut out = Vec::new(env);
+    if meta.count == 0 {
+        return out;
+    }
+    let n = meta.count.min(ORACLE_PRICE_HISTORY_SIZE);
+    // tail = (head - count) mod size  (logical oldest)
+    let size = ORACLE_PRICE_HISTORY_SIZE;
+    let tail = if meta.count < size {
+        0u32
+    } else {
+        meta.head
+    };
+    for i in 0..n {
+        let slot = (tail + i) % size;
+        if let Some(price) = env.storage().instance().get::<DataKey, i128>(
+            &DataKey::OraclePriceHistoryEntry(token.clone(), slot),
+        ) {
+            out.push_back(price);
+        }
+    }
+    out
+}
+
+/// Append a new price sample to the ring buffer for `token`.
+fn record_price(env: &Env, token: &Address, price: i128) {
+    let mut meta = load_history_meta(env, token);
+    let slot = meta.head;
+    meta.head = (meta.head + 1) % ORACLE_PRICE_HISTORY_SIZE;
+    meta.count = meta.count.saturating_add(1);
+    save_history_meta(env, token, &meta);
+    env.storage().instance().set(
+        &DataKey::OraclePriceHistoryEntry(token.clone(), slot),
+        &price,
+    );
+}
+
+/// Compute the median of a sorted price Vec.
+/// Panics / returns the lower-middle for even-length lists.
+fn median_of_sorted(sorted: &Vec<i128>) -> i128 {
+    let len = sorted.len();
+    sorted.get(len / 2).unwrap()
+}
+
+/// Sort prices using selection sort (N ≤ 10, so this is fine).
+fn sort_prices(prices: &Vec<i128>, env: &Env) -> Vec<i128> {
+    let n = prices.len();
+    let mut sorted = Vec::new(env);
+    for i in 0..n {
+        sorted.push_back(prices.get(i).unwrap());
+    }
+    for i in 0..n {
+        let mut min_idx = i;
+        for j in (i + 1)..n {
+            if sorted.get(min_idx).unwrap() > sorted.get(j).unwrap() {
+                min_idx = j;
+            }
+        }
+        if min_idx != i {
+            let tmp = sorted.get(i).unwrap();
+            sorted.set(i, sorted.get(min_idx).unwrap());
+            sorted.set(min_idx, tmp);
+        }
+    }
+    sorted
+}
+
+/// Check whether `new_price` deviates too far from the median of the last N
+/// samples for `token`. If the deviation exceeds the configured threshold (or
+/// the threshold is zero), return `Err(Error::OracleDeviationTooHigh)`.
+///
+/// On success the new price is recorded in the ring buffer.
+fn check_deviation_and_record(
+    env: &Env,
+    token: &Address,
+    new_price: i128,
+) -> Result<(), Error> {
+    let threshold_opt = get_oracle_deviation_bps(env);
+    let threshold = match threshold_opt {
+        Some(t) => t,
+        None => return record_and_ok(env, token, new_price),
+    };
+
+    let prices = load_prices(env, token);
+    let median = if prices.len() > 0 {
+        let sorted = sort_prices(&prices, env);
+        median_of_sorted(&sorted)
+    } else {
+        // Bootstrap: no history yet, always accept
+        record_price(env, token, new_price);
+        return Ok(());
+    };
+
+    let diff = if new_price > median {
+        new_price - median
+    } else {
+        median - new_price
+    };
+    // deviation_bps = (diff * 10_000) / median
+    let numerator = safe_mul(diff, 10_000i128)?;
+    let deviation = safe_div(numerator, median)?;
+
+    if (threshold == 0 && new_price != median) || deviation > threshold as i128 {
+        let now = env.ledger().timestamp();
+        env.events().publish(
+            (Symbol::new(env, "oracle_deviation_breaker"),),
+            OracleDeviationBreakerEvent {
+                token: token.clone(),
+                latest_price: new_price,
+                median_price: median,
+                deviation_bps: deviation as u64,
+                threshold_bps: threshold,
+                timestamp: now,
+            },
+        );
+        return Err(Error::OracleDeviationTooHigh);
+    }
+
+    record_price(env, token, new_price);
     Ok(())
 }
 
-/// Read the stored oracle configuration, defaulting to a disabled Spot config.
-pub fn get_oracle_config(env: &Env) -> OracleConfig {
-    read_config::<OracleConfig>(env, &DataKey::Oracle).unwrap_or(OracleConfig {
-        enabled: false,
-        oracle: None,
-        max_age_seconds: 0,
-        kind: OracleKind::Spot,
-        window_secs: 0,
-        fixed_numerator: 0,
-        fixed_denominator: 1,
-    })
+// Split out to avoid redundant code in the early-return path.
+fn record_and_ok(env: &Env, token: &Address, price: i128) -> Result<(), Error> {
+    record_price(env, token, price);
+    Ok(())
 }
 
-/// Emit an oracle liveness event for monitoring purposes.
-pub fn emit_oracle_liveness(env: &Env) -> Result<OracleLivenessEvent, Error> {
-    let config = get_oracle_config(env);
+// ── Charge resolution ──────────────────────────────────────────────────────────
 
-    if !config.enabled || config.oracle.is_none() || config.max_age_seconds == 0 {
-        return Err(Error::OracleNotConfigured);
+/// Resolve token-denominated charge amount.
+///
+/// With oracle disabled, returns `subscription.amount` as-is.
+/// With oracle enabled, interprets `subscription.amount` as quote units and converts
+/// to token base units using oracle quote:
+///
+/// token_amount = ceil(quote_amount * 10^token_decimals / quote_per_token)
+pub fn resolve_charge_amount(env: &Env, subscription: &Subscription) -> Result<i128, Error> {
+    #[cfg(not(feature = "oracle-pricing"))]
+    {
+        let _ = env;
+        return Ok(subscription.amount);
     }
+    #[cfg(feature = "oracle-pricing")]
+    {
+        let cfg = get_oracle_config(env);
+        if !cfg.enabled {
+            return Ok(subscription.amount);
+        }
 
-    // In a real implementation this would fetch the latest sample timestamp from the oracle.
-    // Since we don't have a standardized way to just get the timestamp without doing a full 
-    // quote (or maybe we do if we query the oracle directly), we will do a spot quote.
-    // BUT this function is view-only and should not fail if price is stale, only report it.
-    
-    let now = env.ledger().timestamp();
-    let oracle_addr = config.oracle.clone().unwrap();
-    let price: crate::types::OraclePrice = env
-        .invoke_contract(
-            &oracle_addr,
-            &soroban_sdk::Symbol::new(env, "latest_price"),
-            soroban_sdk::Vec::new(env),
-        );
+        let oracle = cfg.oracle.ok_or(Error::OracleNotConfigured)?;
+        let price: OraclePrice =
+            env.invoke_contract(&oracle, &Symbol::new(env, "latest_price"), Vec::new(env));
 
-    let last_sample_ts = price.timestamp;
-    let age = now.saturating_sub(last_sample_ts);
+        if price.price <= 0 {
+            return Err(Error::OraclePriceInvalid);
+        }
+        if price.timestamp == 0 {
+            return Err(Error::OraclePriceUnavailable);
+        }
+        if cfg.max_age_seconds > 0 {
+            let now = env.ledger().timestamp();
+            if now.saturating_sub(price.timestamp) > cfg.max_age_seconds {
+                return Err(Error::OraclePriceStale);
+            }
+        }
 
-    let threshold = config.max_age_seconds / 2;
-    let healthy = age <= threshold;
+        // Deviation circuit breaker — checked before the price is consumed.
+        check_deviation_and_record(env, &subscription.token, price.price)?;
 
-    let event = OracleLivenessEvent {
-        last_sample_ts,
-        age,
-        healthy,
-        timestamp: now,
-        schema_version: crate::types::EVENT_SCHEMA_VERSION,
-    };
+        let token_decimals =
+            crate::admin::get_token_decimals(env, &subscription.token).unwrap_or(6);
 
-    env.events().publish(
-        (Symbol::new(env, "oracle_liveness"),),
-        event.clone(),
-    );
+        let scale = safe_pow(10i128, token_decimals)?;
+        let numerator = safe_mul(subscription.amount, scale)?;
+        let ceil_adjust = safe_sub(price.price, 1)?;
+        let token_amount = safe_div(safe_add(numerator, ceil_adjust)?, price.price)?;
 
-    Ok(event)
+        if token_amount <= 0 {
+            return Err(Error::OraclePriceInvalid);
+        }
+        Ok(token_amount)
+    }
 }

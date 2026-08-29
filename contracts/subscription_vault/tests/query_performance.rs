@@ -23,11 +23,11 @@
 
 use std::time::Instant;
 
+use soroban_sdk::token::{Client as TokenClient, StellarAssetClient as TokenAdminClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
 };
-use soroban_sdk::token::{Client as TokenClient, StellarAssetClient as TokenAdminClient};
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
 // ── Documented performance budgets (docs/query_performance.md) ───────────────
@@ -82,9 +82,9 @@ fn make_env<'a>() -> (
 
     vault.init(
         &token.address,
-        &7u32,       // token_decimals (Stellar USDC)
+        &7u32, // token_decimals (Stellar USDC)
         &admin,
-        &100i128,    // min_topup
+        &100i128,         // min_topup
         &(3 * 86_400u64), // grace_period (3 days)
     );
 
@@ -108,6 +108,7 @@ fn new_funded_sub<'a>(
         &false,
         &None,
         &None,
+        &None::<Address>,
     );
     vault.deposit_funds(&sub_id, subscriber, &50_000i128, &None);
     sub_id
@@ -171,7 +172,10 @@ fn perf_get_subscription_missing_id() {
         report("get_subscription_missing", elapsed_ms, BUDGET_GET_SUB_MS),
         "[Perf] get_subscription_missing exceeded budget: {elapsed_ms}ms > {BUDGET_GET_SUB_MS}ms"
     );
-    assert!(result.is_err(), "expected NotFound for non-existent ID 99_999");
+    assert!(
+        result.is_err(),
+        "expected NotFound for non-existent ID 99_999"
+    );
 }
 
 /// `create_subscription` at scale — measures total and per-call wall-clock cost.
@@ -196,6 +200,7 @@ fn perf_create_subscription_at_scale() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         created += 1;
     }
@@ -234,6 +239,7 @@ fn perf_get_subscription_large_id_range() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
     }
 
@@ -257,7 +263,10 @@ fn perf_get_subscription_large_id_range() {
         report("get_subscription_past_end", miss_ms, BUDGET_GET_SUB_MS),
         "[Perf] get_subscription_past_end exceeded budget: {miss_ms}ms > {BUDGET_GET_SUB_MS}ms"
     );
-    assert!(miss.is_err(), "expected NotFound for ID past last allocated");
+    assert!(
+        miss.is_err(),
+        "expected NotFound for ID past last allocated"
+    );
 }
 
 /// Constant-time lookup — first, mid, and last IDs must all complete within budget.
@@ -282,6 +291,7 @@ fn perf_get_subscription_constant_time_across_range() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         ids.push(id);
     }
@@ -331,6 +341,7 @@ fn perf_list_by_subscriber_paginated() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
@@ -409,12 +420,16 @@ fn perf_get_subscriptions_by_token() {
             &false,
             &None,
             &None,
+            &None::<Address>,
         );
     }
 
     // Count before the timed call (index read is cheap).
     let count = vault.get_token_subscription_count(&token.address);
-    assert_eq!(count, SCALE_N, "token index must contain all {SCALE_N} subs");
+    assert_eq!(
+        count, SCALE_N,
+        "token index must contain all {SCALE_N} subs"
+    );
 
     // Timed paginated read (limit = 100, which covers all SCALE_N entries).
     let t0 = Instant::now();
@@ -429,8 +444,5 @@ fn perf_get_subscriptions_by_token() {
         "[Perf] get_subscriptions_by_token returned={} of {SCALE_N} total",
         subs.len()
     );
-    assert!(
-        subs.len() > 0,
-        "expected subscriptions in the token index"
-    );
+    assert!(subs.len() > 0, "expected subscriptions in the token index");
 }
