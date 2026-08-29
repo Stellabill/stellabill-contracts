@@ -187,6 +187,23 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
+    // Update total-accounted ledger on any change in subscriber prepaid balance.
+    if let Some(prev) = env
+        .storage()
+        .persistent()
+        .get::<_, Subscription>(&DataKey::Sub(subscription_id))
+    {
+        let delta: i128 = sub.prepaid_balance - prev.prepaid_balance;
+        if delta > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, delta);
+        } else if delta < 0 {
+            let _ = crate::accounting::sub_total_accounted(env, &sub.token, -delta);
+        }
+    } else {
+        if sub.prepaid_balance > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, sub.prepaid_balance);
+        }
+    }
     env.storage()
         .persistent()
         .set(&DataKey::Sub(subscription_id), sub);
