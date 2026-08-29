@@ -72,11 +72,7 @@ fn save_buffer(env: &Env, subscription_id: u32, buf: &IdemRingBuffer) {
 /// Check whether `hashed` already exists in the ring buffer.
 ///
 /// Returns `true` when the key is a duplicate (replay).
-pub fn check_key(
-    env: &Env,
-    subscription_id: u32,
-    hashed: &BytesN<32>,
-) -> bool {
+pub fn check_key(env: &Env, subscription_id: u32, hashed: &BytesN<32>) -> bool {
     let buf = load_buffer(env, subscription_id);
     for entry in buf.entries.iter() {
         if entry == *hashed {
@@ -90,11 +86,7 @@ pub fn check_key(
 ///
 /// When the buffer is full the oldest entry (at `cursor`) is silently
 /// overwritten.
-pub fn push_key(
-    env: &Env,
-    subscription_id: u32,
-    hashed: &BytesN<32>,
-) {
+pub fn push_key(env: &Env, subscription_id: u32, hashed: &BytesN<32>) {
     let mut buf = load_buffer(env, subscription_id);
     if buf.entries.len() < IDEM_HISTORY {
         buf.entries.push_back(hashed.clone());
