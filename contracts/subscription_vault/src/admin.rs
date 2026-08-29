@@ -915,6 +915,33 @@ pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
     touched
 }
 
+/// v5 → v6 migration: rewrite every `DataKey::Sub(id)` record so the new
+/// trailing `arrears: i128` field deserializes cleanly for subscriptions
+/// created before STORAGE_VERSION 6. The in-memory struct already carries
+/// `arrears: 0` after the deserialization round-trip, so a read-write of each
+/// record is sufficient to persist the new field in the XDR encoding.
+pub fn rewrite_subscriptions_for_arrears(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {
     let instance = env.storage().instance();
     let persistent = env.storage().persistent();
@@ -1079,6 +1106,13 @@ pub fn do_migrate(
             (4, _) => {
                 rewrite_subscriptions_for_sub_account_label(env);
                 current = 5;
+            }
+            // v5 → v6: rewrite every `DataKey::Sub(id)` record so the new
+            // trailing `arrears: i128` field deserializes cleanly for
+            // subscriptions created before STORAGE_VERSION 6.
+            (5, _) => {
+                rewrite_subscriptions_for_arrears(env);
+                current = 6;
             }
             _ => {
                 current += 1;

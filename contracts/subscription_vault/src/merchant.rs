@@ -562,6 +562,7 @@ pub fn initialize_merchant_config(
         redirect_url,
         is_paused: false,
         last_updated: env.ledger().timestamp(),
+        allow_partial_payment: false,
     };
 
     let key = DataKey::MerchantConfig(merchant.clone());
@@ -1203,6 +1204,7 @@ pub fn update_merchant_config(
     new_fee_address: Option<Option<Address>>,
     new_redirect_url: Option<soroban_sdk::String>,
     new_is_paused: Option<bool>,
+    new_allow_partial_payment: Option<bool>,
 ) -> Result<MerchantConfig, Error> {
     merchant.require_auth();
 
@@ -1238,6 +1240,9 @@ pub fn update_merchant_config(
     }
     if let Some(paused) = new_is_paused {
         config.is_paused = paused;
+    }
+    if let Some(partial) = new_allow_partial_payment {
+        config.allow_partial_payment = partial;
     }
 
     config.last_updated = env.ledger().timestamp();

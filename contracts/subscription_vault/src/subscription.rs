@@ -656,6 +656,7 @@ pub fn do_create_subscription_with_token(
         sub_account_label,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     };
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
@@ -835,13 +836,35 @@ pub fn do_deposit_funds(
     enforce_deposit_cap(&sub, amount)?;
 
     // EFFECTS
-    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Apply the deposit to outstanding arrears before topping up the prepaid
+    // balance (issue #942). Only the portion of the deposit that exceeds the
+    // arrears increases the prepaid balance.
+    let mut arrears_paid = 0i128;
+    if sub.arrears > 0 {
+        arrears_paid = sub.arrears.min(amount);
+        sub.arrears = crate::safe_math::safe_sub(sub.arrears, arrears_paid)?;
+    }
+    let topup = crate::safe_math::safe_sub(amount, arrears_paid)?;
+    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, topup)?;
     // Reset consecutive failure counter on fresh deposit so the clock starts
     // clean if the subscriber tops up before the next charge attempt.
     env.storage()
         .instance()
         .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
+
+    if arrears_paid > 0 {
+        env.events().publish(
+            (Symbol::new(env, "arrears_settled"), subscription_id),
+            crate::types::ArrearsSettledEvent {
+                subscription_id,
+                arrears_paid,
+                remaining_arrears: sub.arrears,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
 
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
@@ -2676,8 +2699,30 @@ pub fn do_deposit_funds_on_behalf(
     enforce_deposit_cap(&sub, amount)?;
 
     // EFFECTS
-    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Apply the deposit to outstanding arrears before topping up the prepaid
+    // balance (issue #942). Only the portion that exceeds the arrears tops up
+    // the prepaid balance.
+    let mut arrears_paid = 0i128;
+    if sub.arrears > 0 {
+        arrears_paid = sub.arrears.min(amount);
+        sub.arrears = crate::safe_math::safe_sub(sub.arrears, arrears_paid)?;
+    }
+    let topup = crate::safe_math::safe_sub(amount, arrears_paid)?;
+    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, topup)?;
     write_subscription(env, subscription_id, &sub);
+
+    if arrears_paid > 0 {
+        env.events().publish(
+            (Symbol::new(env, "arrears_settled"), subscription_id),
+            crate::types::ArrearsSettledEvent {
+                subscription_id,
+                arrears_paid,
+                remaining_arrears: sub.arrears,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
 
     // Consume the grant
     env.storage().persistent().remove(&grant_key);
@@ -3143,6 +3188,7 @@ pub fn do_create_subscription_from_plan(
         sub_account_label,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     };
 
     write_subscription(env, id, &sub);

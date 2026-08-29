@@ -283,7 +283,7 @@ pub fn charge_one(
     // Discount is applied to the oracle-resolved gross amount. The fee split and
     // merchant credit then operate on `charge_amount` (the post-discount payable).
     // This preserves: Gross = Discount + Merchant Net + Treasury Fee.
-    let (charge_amount, _discount_amount) = crate::coupon::apply_discount_at_charge(
+    let (mut charge_amount, _discount_amount) = crate::coupon::apply_discount_at_charge(
         env,
         subscription_id,
         now,
@@ -491,6 +491,25 @@ pub fn charge_one(
         }
     }
 
+    // ── Partial-payment handling (issue #942) ────────────────────────────────
+    // If the merchant enables partial payments, an underfunded interval charge
+    // (some prepaid balance but less than the full amount) is settled by
+    // collecting whatever is available and carrying the uncovered shortfall as
+    // arrears on the subscription. Without this, the charge would fall through
+    // into the grace/insufficient-balance path below.
+    let mut arrears_delta = 0i128;
+    {
+        let allows_partial = crate::merchant::get_merchant_config(env, sub.merchant.clone())
+            .map(|c| c.allow_partial_payment)
+            .unwrap_or(false);
+        if allows_partial && sub.prepaid_balance > 0 && sub.prepaid_balance < charge_amount {
+            arrears_delta = charge_amount - sub.prepaid_balance;
+            // Reduce the effective charge to the available balance. The success
+            // branch below then runs exactly as a normal charge of this amount.
+            charge_amount = sub.prepaid_balance;
+        }
+    }
+
     let storage = env.storage().instance();
 
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
@@ -601,6 +620,24 @@ pub fn charge_one(
 
             if cap_reached {
                 transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
+            }
+
+            // Carry the uncovered shortfall forward as arrears on a partial
+            // payment (issue #942). Applied before the subscription is written so
+            // the arrears balance is persisted atomically with the charge.
+            if arrears_delta > 0 {
+                sub.arrears = crate::safe_math::safe_add(sub.arrears, arrears_delta)?;
+                env.events().publish(
+                    (Symbol::new(env, "arrears_accrued"), subscription_id),
+                    crate::types::ArrearsAccruedEvent {
+                        subscription_id,
+                        partial_amount: charge_amount,
+                        shortfall: arrears_delta,
+                        total_arrears: sub.arrears,
+                        timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    },
+                );
             }
 
             write_subscription(env, subscription_id, &sub);
