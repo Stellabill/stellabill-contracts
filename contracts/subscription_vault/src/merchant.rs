@@ -899,18 +899,13 @@ pub fn withdraw_merchant_funds_for_token(
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
-    earnings.refunds = earnings
-        .refunds
-        .checked_add(amount)
-        .ok_or(Error::Overflow)?;
-    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (
