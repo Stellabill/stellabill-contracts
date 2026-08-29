@@ -42,20 +42,25 @@ pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
 /// be replayed into a higher-privilege domain. Auth check (signer must be
 /// subscriber or merchant) runs **before** the nonce check.
 pub const DOMAIN_METADATA_SIGNED: u32 = 3;
+
+/// Domain constant for merchant address rotation operations.
+///
+/// Keeps `rotate_merchant_address` nonces separated from every other domain so
+/// a captured rotation payload cannot be replayed against a different
+/// privileged operation for the same admin signer.
 pub const DOMAIN_MERCHANT_ROTATION: u32 = 4;
 
+pub const DOMAIN_SUBSCRIBER_WITHDRAWAL: u32 = 8;
+pub const DOMAIN_CHARGEBACK_DISPUTE: u32 = 9;
+
 /// Domain constant for charge_interval operations.
-pub const DOMAIN_CHARGE_INTERVAL: u32 = 4;
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 5;
 
 /// Domain constant for deposit_funds operations.
-pub const DOMAIN_DEPOSIT_FUNDS: u32 = 5;
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 6;
 
 /// Domain constant for charge_one_off operations.
-pub const DOMAIN_CHARGE_ONEOFF: u32 = 6;
-
-/// Domain constant for merchant rotation operations.
-pub const DOMAIN_MERCHANT_ROTATION: u32 = 7;
-
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 7;
 
 /// Retrieve the current (next-expected) nonce for a `(signer, domain)` pair.
 ///
@@ -158,6 +163,35 @@ mod tests {
         assert_eq!(DOMAIN_ADMIN_ROTATION, 1);
         assert_eq!(DOMAIN_OPERATOR_BATCH_CHARGE, 2);
         assert_eq!(DOMAIN_METADATA_SIGNED, 3);
+        assert_eq!(DOMAIN_MERCHANT_ROTATION, 4);
+        assert_eq!(DOMAIN_CHARGE_INTERVAL, 5);
+        assert_eq!(DOMAIN_DEPOSIT_FUNDS, 6);
+        assert_eq!(DOMAIN_CHARGE_ONEOFF, 7);
+        assert_eq!(DOMAIN_SUBSCRIBER_WITHDRAWAL, 8);
+        assert_eq!(DOMAIN_CHARGEBACK_DISPUTE, 9);
+    }
+
+    /// All nine domain constants must be pairwise distinct — a collision here
+    /// would let a nonce from one privileged operation be replayed as another.
+    #[test]
+    fn test_domain_constants_are_unique() {
+        let domains = [
+            DOMAIN_BATCH_CHARGE,
+            DOMAIN_ADMIN_ROTATION,
+            DOMAIN_OPERATOR_BATCH_CHARGE,
+            DOMAIN_METADATA_SIGNED,
+            DOMAIN_MERCHANT_ROTATION,
+            DOMAIN_CHARGE_INTERVAL,
+            DOMAIN_DEPOSIT_FUNDS,
+            DOMAIN_CHARGE_ONEOFF,
+            DOMAIN_SUBSCRIBER_WITHDRAWAL,
+            DOMAIN_CHARGEBACK_DISPUTE,
+        ];
+        for i in 0..domains.len() {
+            for j in (i + 1)..domains.len() {
+                assert_ne!(domains[i], domains[j], "domain collision at indices {i} and {j}");
+            }
+        }
     }
 
     #[test]

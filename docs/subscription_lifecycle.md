@@ -29,6 +29,8 @@ Defined in `contracts/subscription_vault/src/types.rs`:
 | `prepaid_balance` | `i128` | Current balance; increased by deposit, decreased by successful charge. |
 | `expiration` | `Option<u64>` | Optional ledger timestamp after which the subscription is expired. `None` means no expiry. Charging returns `Error::SubscriptionExpired` (4003) once `now >= expiration`. |
 | `usage_enabled` | `bool` | Usage flag (reserved for future use). |
+| `auto_renew` | `bool` | When `false`, the billing engine skips charges once the current interval elapses. Defaults to `true` on creation. See [auto_renew.md](auto_renew.md). |
+| `auto_renew_disabled_at` | `Option<u64>` | Ledger timestamp of the first `set_auto_renew(false)` call. Used to enforce the one-interval renewal window. `None` when auto-renewal is enabled. |
 
 The **status** field is the only one modified by the state machine. Other fields change only through specific operations: `prepaid_balance` and `last_payment_timestamp` change on deposit and charge; the rest are set at creation (or not changed). The `expiration` field is checked on every charge attempt; it does not trigger an automatic status change but blocks charging via `Error::SubscriptionExpired`.
 
@@ -160,6 +162,12 @@ flowchart LR
 - **Pause:** `pause_subscription(env, subscription_id, authorizer)` — validates transition to Paused, then sets `status = Paused`. Auth: subscriber or merchant. Implemented in `subscription.rs`.
 - **Resume:** `resume_subscription(env, subscription_id, authorizer)` — validates transition to Active and enforces `prepaid_balance >= amount` when resuming from `GracePeriod` or `InsufficientBalance`. Auth: subscriber or merchant. Implemented in `subscription.rs`.
 - **Cancel:** `cancel_subscription(env, subscription_id, authorizer)` — validates transition to Cancelled, then sets `status = Cancelled`. Auth: subscriber or merchant. Implemented in `subscription.rs`.
+
+### Emergency subscriber withdrawal
+
+- **Request:** `request_emergency_withdraw(env, subscription_id, subscriber)` — allows a subscriber to lock in a 72-hour cooldown for a paused or cancelled subscription with prepaid balance.
+- **Finalize:** `finalize_emergency_withdraw(env, subscription_id, subscriber)` — only succeeds after the cooldown elapses and the subscription still matches the state captured at request time.
+- **Safety:** the intent record is removed once finalized, and the flow rejects stale or double-finalized requests to prevent unauthorized withdrawals.
 
 All three use `validate_status_transition` before updating status.
 

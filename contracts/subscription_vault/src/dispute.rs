@@ -26,8 +26,9 @@ use crate::admin;
 use crate::merchant;
 use crate::queries;
 use crate::types::{
-    DataKey, Dispute, DisputeOpenedEvent, DisputeRespondedEvent, DisputeResolvedEvent,
-    DisputeStatus, Error, DISPUTE_WINDOW_SECS,
+    CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowReleasedEvent, DataKey,
+    Dispute, DisputeEscrowLedger, DisputeOpenedEvent, DisputeResolvedEvent,
+    DisputeRespondedEvent, DisputeStatus, Error, DISPUTE_WINDOW_SECS,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Symbol};
 
@@ -79,10 +80,14 @@ pub fn do_open_dispute(
         .ok_or(Error::Underflow)?;
     merchant::set_merchant_balance(env, &sub.merchant, token_addr, &new_merchant_balance);
 
-    // 2. Credit dispute escrow
+    // 2. Credit dispute escrow with cumulative ledger
+    let escrow_ledger = DisputeEscrowLedger {
+        original_amount: amount,
+        total_disbursed: 0,
+    };
     env.storage()
         .instance()
-        .set(&DataKey::DisputeEscrow(dispute_id), &amount);
+        .set(&DataKey::DisputeEscrow(dispute_id), &escrow_ledger);
 
     // 3. Record dispute
     let now = env.ledger().timestamp();
@@ -215,43 +220,78 @@ pub fn do_resolve_dispute(
         DisputeStatus::ResolvedToMerchant
     };
 
-    // ── Effects ───────────────────────────────────────────────────────────
-    let escrow_amount: i128 = env
+    // ── Read the escrow ledger ───────────────────────────────────────────
+    let mut escrow_ledger: DisputeEscrowLedger = env
         .storage()
         .instance()
         .get(&DataKey::DisputeEscrow(dispute_id))
-        .unwrap_or(0);
+        .ok_or(Error::InsufficientBalance)?;
 
-    if escrow_amount <= 0 {
+    // Calculate the remaining escrowed amount
+    let remaining = escrow_ledger
+        .original_amount
+        .checked_sub(escrow_ledger.total_disbursed)
+        .ok_or(Error::Underflow)?;
+
+    if remaining <= 0 {
         return Err(Error::InsufficientBalance);
+    }
+
+    // ── Invariant: cumulative disbursement must never exceed original escrow ─
+    //
+    // This check is a defense-in-depth guard against partial-resolution bugs
+    // or future code changes that split escrow across multiple resolutions.
+    //
+    // NOTE: In the current all-or-nothing flow `new_total_disbursed` always
+    //       equals `original_amount` exactly (since `remaining` is the full
+    //       undrawn balance). The check is mathematically unreachable today
+    //       but protects against regressions if partial-resolution logic is
+    //       added later.
+    let new_total_disbursed = escrow_ledger
+        .total_disbursed
+        .checked_add(remaining)
+        .ok_or(Error::Overflow)?;
+
+    if new_total_disbursed > escrow_ledger.original_amount {
+        return Err(Error::DisputeOverpay);
     }
 
     // Read subscription for token and party addresses
     let sub = queries::get_subscription(env, dispute.subscription_id)?;
     let token_addr = &sub.token;
 
-    // Clear escrow
-    env.storage()
-        .instance()
-        .remove(&DataKey::DisputeEscrow(dispute_id));
+    // ── Effects ───────────────────────────────────────────────────────────
+    // Update the ledger so that future resolution attempts (if any) see the
+    // updated disbursement and cannot overpay.
+    escrow_ledger.total_disbursed = new_total_disbursed;
+
+    if new_total_disbursed == escrow_ledger.original_amount {
+        // Fully disbursed — remove the escrow key
+        env.storage()
+            .instance()
+            .remove(&DataKey::DisputeEscrow(dispute_id));
+    } else {
+        // Partial disbursement — update the ledger
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeEscrow(dispute_id), &escrow_ledger);
+    }
 
     if resolution == DisputeStatus::ResolvedToMerchant {
         // Return escrowed funds to merchant balance
         let current = merchant::get_merchant_balance_by_token(env, &dispute.merchant, token_addr);
-        let new_balance = current
-            .checked_add(escrow_amount)
-            .ok_or(Error::Overflow)?;
+        let new_balance = current.checked_add(remaining).ok_or(Error::Overflow)?;
         merchant::set_merchant_balance(env, &dispute.merchant, token_addr, &new_balance);
     } else {
         // Transfer escrowed funds to subscriber
         // Funds leave vault custody — keep accounting consistent.
-        crate::accounting::sub_total_accounted(env, token_addr, escrow_amount)?;
+        crate::accounting::sub_total_accounted(env, token_addr, remaining)?;
 
         let token_client = token::Client::new(env, token_addr);
         token_client.transfer(
             &env.current_contract_address(),
             &dispute.subscriber,
-            &escrow_amount,
+            &remaining,
         );
     }
 
@@ -290,6 +330,213 @@ pub fn do_get_subscription_dispute(env: &Env, subscription_id: u32) -> Option<u6
     env.storage()
         .instance()
         .get(&DataKey::SubscriptionDispute(subscription_id))
+}
+
+/// Claim a cancellation escrow refund after the hold window has elapsed.
+///
+/// Only the subscriber may claim. The escrow record is removed and the funds
+/// are transferred to the subscriber. If a dispute has been lodged against the
+/// escrow (converting it into a live Dispute), this returns
+/// [`Error::DisputeAlreadyOpen`].
+///
+/// # Arguments
+/// * `subscriber` — Must match the escrow's subscriber address.
+/// * `subscription_id` — The subscription whose escrow to claim.
+///
+/// # Errors
+/// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+/// * [`Error::Unauthorized`] — Caller does not match the escrow subscriber.
+/// * [`Error::EscrowNotReleased`] — The hold window has not elapsed yet.
+/// * [`Error::DisputeAlreadyOpen`] — A dispute exists for this subscription.
+///
+/// # Events
+/// Emits [`CancellationEscrowReleasedEvent`].
+pub fn do_claim_cancellation_escrow(
+    env: &Env,
+    subscriber: Address,
+    subscription_id: u32,
+) -> Result<i128, Error> {
+    subscriber.require_auth();
+
+    let escrow: CancellationEscrow = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CancellationEscrow(subscription_id))
+        .ok_or(Error::EscrowNotFound)?;
+
+    if subscriber != escrow.subscriber {
+        return Err(Error::Unauthorized);
+    }
+
+    let now = env.ledger().timestamp();
+    if now < escrow.released_at {
+        return Err(Error::EscrowNotReleased);
+    }
+
+    // Reject if a dispute is already active for this subscription.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
+    // Effects: remove escrow before external transfer (CEI).
+    env.storage()
+        .persistent()
+        .remove(&DataKey::CancellationEscrow(subscription_id));
+
+    // Interactions: release funds to subscriber.
+    let token_client = token::Client::new(env, &escrow.token);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &escrow.subscriber,
+        &escrow.amount,
+    );
+    crate::accounting::sub_total_accounted(env, &escrow.token, escrow.amount)?;
+
+    env.events().publish(
+        (Symbol::new(env, "cancellation_escrow_released"), subscription_id),
+        CancellationEscrowReleasedEvent {
+            subscription_id,
+            subscriber: escrow.subscriber.clone(),
+            amount: escrow.amount,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(escrow.amount)
+}
+
+/// Lodge a merchant dispute against a cancellation escrow, converting it into
+/// a live Dispute record.
+///
+/// Only the merchant on the escrow may call this, and only during the escrow
+/// hold window (before `released_at`). Once disputed, the escrow is removed
+/// and a standard [`Dispute`] is created with `Open` status, subject to the
+/// existing dispute-resolution lifecycle.
+///
+/// # Arguments
+/// * `merchant` — Must match the escrow's merchant address.
+/// * `subscription_id` — The subscription whose escrow to dispute.
+///
+/// # Errors
+/// * [`Error::EscrowNotFound`] — No escrow record for this subscription.
+/// * [`Error::Unauthorized`] — Caller does not match the escrow merchant.
+/// * [`Error::EscrowNotReleased`] — The hold window has elapsed (cannot dispute).
+/// * [`Error::DisputeAlreadyOpen`] — A dispute already exists for this subscription.
+///
+/// # Events
+/// Emits [`CancellationEscrowDisputedEvent`] and [`DisputeOpenedEvent`].
+pub fn do_lodge_escrow_dispute(
+    env: &Env,
+    merchant: Address,
+    subscription_id: u32,
+) -> Result<u64, Error> {
+    merchant.require_auth();
+
+    let escrow: CancellationEscrow = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CancellationEscrow(subscription_id))
+        .ok_or(Error::EscrowNotFound)?;
+
+    if merchant != escrow.merchant {
+        return Err(Error::Unauthorized);
+    }
+
+    let now = env.ledger().timestamp();
+    if now >= escrow.released_at {
+        return Err(Error::EscrowNotReleased);
+    }
+
+    // Reject if a dispute is already active for this subscription.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
+    // Effects: remove cancellation escrow, create dispute.
+
+    env.storage()
+        .persistent()
+        .remove(&DataKey::CancellationEscrow(subscription_id));
+
+    let dispute_id: u64 = next_dispute_id(env);
+
+    let escrow_ledger = DisputeEscrowLedger {
+        original_amount: escrow.amount,
+        total_disbursed: 0,
+    };
+    env.storage()
+        .instance()
+        .set(&DataKey::DisputeEscrow(dispute_id), &escrow_ledger);
+
+    let dispute = Dispute {
+        id: dispute_id,
+        subscription_id,
+        subscriber: escrow.subscriber.clone(),
+        merchant: escrow.merchant.clone(),
+        amount: escrow.amount,
+        opened_at: now,
+        status: DisputeStatus::Open,
+        evidence_hash: None,
+        responded_at: None,
+        admin_evidence_hash: None,
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::Dispute(dispute_id), &dispute);
+
+    env.storage()
+        .instance()
+        .set(&DataKey::SubscriptionDispute(subscription_id), &dispute_id);
+
+    // Emit cancellation-escrow-disputed event.
+    env.events().publish(
+        (Symbol::new(env, "cancellation_escrow_disputed"), subscription_id),
+        CancellationEscrowDisputedEvent {
+            subscription_id,
+            merchant: escrow.merchant.clone(),
+            dispute_id,
+            amount: escrow.amount,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    // Emit standard dispute-opened event for indexer compatibility.
+    env.events().publish(
+        (Symbol::new(env, "dispute_opened"), dispute_id),
+        DisputeOpenedEvent {
+            dispute_id,
+            subscription_id,
+            subscriber: escrow.subscriber,
+            merchant: escrow.merchant,
+            amount: escrow.amount,
+            evidence_hash: None,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(dispute_id)
+}
+
+/// Read a cancellation escrow record by subscription ID.
+pub fn do_get_cancellation_escrow(
+    env: &Env,
+    subscription_id: u32,
+) -> Result<CancellationEscrow, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::CancellationEscrow(subscription_id))
+        .ok_or(Error::EscrowNotFound)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

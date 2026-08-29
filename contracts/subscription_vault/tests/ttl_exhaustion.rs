@@ -46,8 +46,7 @@ use soroban_sdk::{
     Address, Env,
 };
 use subscription_vault::{
-    Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
-    SUB_TTL_EXTEND_TO,
+    Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, SUB_TTL_EXTEND_TO,
 };
 
 // ── Shared constants ────────────────────────────────────────────────────────────
@@ -106,7 +105,8 @@ fn create_sub(env: &Env, client: &SubscriptionVaultClient) -> u32 {
         &false,
         &None::<i128>,
         &None::<u64>,
-    )
+        &None::<u32>,
+)
 }
 
 /// Keep the contract **instance** entry alive far beyond any TTL boundary under test,
@@ -150,7 +150,10 @@ fn readable_at_exact_ttl_boundary() {
 
     set_seq(&env, LIVE_UNTIL);
     let sub = client.get_subscription(&id);
-    assert_eq!(sub.amount, AMOUNT, "record must be readable on its last live ledger");
+    assert_eq!(
+        sub.amount, AMOUNT,
+        "record must be readable on its last live ledger"
+    );
     assert_eq!(sub.status, SubscriptionStatus::Active);
 }
 
