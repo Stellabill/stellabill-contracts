@@ -13,10 +13,12 @@
 
 use crate::test_utils::setup::TestEnv;
 use crate::types::DataKey;
-use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, String, Vec};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, String, Vec,
+};
 
 const FEE_BPS: u32 = 500; // 5 %
-const CHARGE: i128 = 100_000_000; // 100.000000
+const CHARGE: i128 = 100_000_000;
 const PREPAID: i128 = 1_000_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
 
@@ -42,6 +44,16 @@ fn make_merchant(t: &TestEnv) -> Address {
 
 fn make_funded_subscription(t: &TestEnv, merchant: &Address, usage_enabled: bool) -> u32 {
     let subscriber = Address::generate(&t.env);
+    if usage_enabled {
+        t.client.configure_usage_limits(
+            merchant,
+            &0u32,
+            &None::<u32>,
+            &0u64,
+            &0u64,
+            &None::<i128>,
+        );
+    }
     let id = t.client.create_subscription(
         &subscriber,
         merchant,
@@ -51,7 +63,6 @@ fn make_funded_subscription(t: &TestEnv, merchant: &Address, usage_enabled: bool
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None,
     );
     let mut sub = t.client.get_subscription(&id);
     sub.prepaid_balance = PREPAID;
@@ -84,7 +95,14 @@ fn protocol_fee_event_count(t: &TestEnv) -> usize {
         .count()
 }
 
-/// `set_protocol_fee` persists `DataKey::FeeBps` and `DataKey::Treasury`.
+fn set_override_bps(t: &TestEnv, merchant: &Address, bps: u32) {
+    t.env.as_contract(&t.client.address, || {
+        t.env.storage()
+            .instance()
+            .set(&DataKey::MerchantFeeBps(merchant.clone()), &bps);
+    });
+}
+
 #[test]
 fn set_protocol_fee_writes_fee_bps_and_treasury() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
@@ -107,7 +125,6 @@ fn set_protocol_fee_writes_fee_bps_and_treasury() {
     });
 }
 
-/// Interval charge: 5% fee is skimmed to treasury, merchant receives net.
 #[test]
 fn interval_charge_routes_fee_to_treasury() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
@@ -131,7 +148,6 @@ fn interval_charge_routes_fee_to_treasury() {
     assert!(protocol_fee_event_count(&t) >= 1);
 }
 
-/// Fee = 0: full gross to merchant, no protocol-fee event.
 #[test]
 fn interval_charge_zero_fee_sends_full_amount_to_merchant() {
     let (t, treasury) = setup_with_fee(0);
@@ -154,7 +170,6 @@ fn interval_charge_zero_fee_sends_full_amount_to_merchant() {
     assert_eq!(protocol_fee_event_count(&t), before);
 }
 
-/// Fee = 10_000: entire gross to treasury, merchant net is 0.
 #[test]
 fn interval_charge_max_fee_sends_full_amount_to_treasury() {
     let (t, treasury) = setup_with_fee(10_000);
@@ -175,7 +190,6 @@ fn interval_charge_max_fee_sends_full_amount_to_treasury() {
     );
 }
 
-/// Rounding remainder stays with the merchant.
 #[test]
 fn interval_charge_rounding_remainder_stays_with_merchant() {
     let (t, treasury) = setup_with_fee(333);
@@ -198,7 +212,6 @@ fn interval_charge_rounding_remainder_stays_with_merchant() {
     assert_eq!(net + fee, CHARGE);
 }
 
-/// Usage charge applies the same split.
 #[test]
 fn usage_charge_routes_fee_to_treasury() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
@@ -220,7 +233,6 @@ fn usage_charge_routes_fee_to_treasury() {
     assert_eq!(net + fee, usage);
 }
 
-/// One-off charge applies the same split.
 #[test]
 fn one_off_charge_routes_fee_to_treasury() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
@@ -243,7 +255,6 @@ fn one_off_charge_routes_fee_to_treasury() {
     assert_eq!(net + fee, amount);
 }
 
-/// One-off with fee = 0 credits the merchant in full.
 #[test]
 fn one_off_zero_fee_sends_full_amount_to_merchant() {
     let (t, treasury) = setup_with_fee(0);
@@ -263,14 +274,12 @@ fn one_off_zero_fee_sends_full_amount_to_merchant() {
     );
 }
 
-/// Batch charge must not ignore merchant override just because FeeBps is cached.
 #[test]
 fn batch_charge_respects_merchant_fee_override() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
     let merchant = make_merchant(&t);
     let override_bps: u32 = 200;
-    t.client
-        .set_merchant_fee_override(&t.admin, &merchant, &override_bps);
+    set_override_bps(&t, &merchant, override_bps);
 
     let id = make_funded_subscription(&t, &merchant, false);
     advance_interval(&t);
@@ -292,7 +301,6 @@ fn batch_charge_respects_merchant_fee_override() {
     assert_eq!(net + fee, CHARGE);
 }
 
-/// Unauthorized one-off (wrong merchant) does not move balances.
 #[test]
 fn one_off_wrong_merchant_is_rejected() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
@@ -317,7 +325,6 @@ fn one_off_wrong_merchant_is_rejected() {
     );
 }
 
-/// Invalid (zero) one-off amount is rejected and leaves accounting untouched.
 #[test]
 fn one_off_zero_amount_is_rejected() {
     let (t, treasury) = setup_with_fee(FEE_BPS);
