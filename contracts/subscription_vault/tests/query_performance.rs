@@ -7,8 +7,8 @@
 //! Edge cases covered
 //! ------------------
 //! - Single direct lookup (O(1) path)
-//! - Missing-ID lookup — same O(1) cost, must return `NotFound` without scanning
-//! - Lookup over a large ID range — verifies no linear scan at high IDs
+//! - Missing-ID lookup â€” same O(1) cost, must return `NotFound` without scanning
+//! - Lookup over a large ID range â€” verifies no linear scan at high IDs
 //! - `create_subscription` at scale (`N = SCALE_N`)
 //! - `list_subscriptions_by_subscriber` first-page and multi-page traversal
 //! - `get_subscriptions_by_token` index read + record fetch
@@ -19,7 +19,7 @@
 //!   `list_subscriptions_by_subscriber`; tested explicitly below.
 //! - Each `create_subscription` is O(1) (monotone counter, no global scan).
 //! - Missing-ID lookups are bounded and do not leak timing information about
-//!   the ID space — they complete in the same O(1) budget as a hit.
+//!   the ID space â€” they complete in the same O(1) budget as a hit.
 
 use std::time::Instant;
 
@@ -30,11 +30,11 @@ use soroban_sdk::{
 };
 use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
-// ── Documented performance budgets (docs/query_performance.md) ───────────────
+// â”€â”€ Documented performance budgets (docs/query_performance.md) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Hard wall-clock limit for a single `get_subscription` call (ms).
 ///
-/// `get_subscription` is O(1) — one persistent storage lookup.  Even on the
+/// `get_subscription` is O(1) â€” one persistent storage lookup.  Even on the
 /// slowest CI runner this should complete well under 500 ms.
 const BUDGET_GET_SUB_MS: u128 = 500;
 
@@ -53,7 +53,7 @@ const SOFT_WARN_PCT: u128 = 80;
 /// Number of subscriptions created in scale / large-range tests.
 const SCALE_N: u32 = 50;
 
-// ── Test helpers ─────────────────────────────────────────────────────────────
+// â”€â”€ Test helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Set up an initialized vault with a funded USDC-like token.
 ///
@@ -107,8 +107,7 @@ fn new_funded_sub<'a>(
         &(30 * 86_400u64),
         &false,
         &None,
-        &None,
-        &None::<Address>,
+        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, subscriber, &50_000i128, &None);
     sub_id
@@ -126,14 +125,14 @@ fn report(label: &str, elapsed_ms: u128, budget_ms: u128) -> bool {
         if within { "PASS" } else { "FAIL" }
     );
     if pct > SOFT_WARN_PCT && within {
-        println!("[Warn] {label} consumed {pct}% of budget — approaching limit");
+        println!("[Warn] {label} consumed {pct}% of budget â€” approaching limit");
     }
     within
 }
 
-// ── Performance tests ─────────────────────────────────────────────────────────
+// â”€â”€ Performance tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/// O(1) direct lookup — must complete within `BUDGET_GET_SUB_MS`.
+/// O(1) direct lookup â€” must complete within `BUDGET_GET_SUB_MS`.
 ///
 /// Creates a single subscription and times the `get_subscription` call.
 /// This is the baseline: any correct implementation should be well under budget.
@@ -156,7 +155,7 @@ fn perf_get_subscription_direct_lookup() {
     assert_eq!(sub.merchant, merchant, "returned wrong merchant");
 }
 
-/// Missing-ID lookup must fail fast — same O(1) cost as a hit.
+/// Missing-ID lookup must fail fast â€” same O(1) cost as a hit.
 ///
 /// Security note: a non-existent ID must NOT trigger any scan of existing IDs.
 /// Timing bounds verify no fallback linear search occurs.
@@ -178,7 +177,7 @@ fn perf_get_subscription_missing_id() {
     );
 }
 
-/// `create_subscription` at scale — measures total and per-call wall-clock cost.
+/// `create_subscription` at scale â€” measures total and per-call wall-clock cost.
 ///
 /// Security note: `create_subscription` uses a monotone counter and does NOT
 /// scan existing subscriptions, so this must stay O(1) per call regardless of N.
@@ -199,8 +198,7 @@ fn perf_create_subscription_at_scale() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         created += 1;
     }
@@ -217,7 +215,7 @@ fn perf_create_subscription_at_scale() {
     );
 }
 
-/// Lookup over a large ID range — verifies O(1) at the highest allocated ID.
+/// Lookup over a large ID range â€” verifies O(1) at the highest allocated ID.
 ///
 /// Creates `SCALE_N` subscriptions (IDs 0..SCALE_N-1) and then times lookups
 /// at both the highest valid ID and just past the end.  An O(n) implementation
@@ -238,12 +236,11 @@ fn perf_get_subscription_large_id_range() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
     }
 
-    // Highest valid ID — must complete in the same O(1) budget as ID 0.
+    // Highest valid ID â€” must complete in the same O(1) budget as ID 0.
     let t0 = Instant::now();
     let sub = vault.get_subscription(&last_id);
     let hit_ms = t0.elapsed().as_millis();
@@ -254,7 +251,7 @@ fn perf_get_subscription_large_id_range() {
     );
     assert_eq!(sub.merchant, merchant);
 
-    // One past the end — must also be O(1) (NotFound without scan).
+    // One past the end â€” must also be O(1) (NotFound without scan).
     let t1 = Instant::now();
     let miss = vault.try_get_subscription(&(last_id + 1));
     let miss_ms = t1.elapsed().as_millis();
@@ -269,7 +266,7 @@ fn perf_get_subscription_large_id_range() {
     );
 }
 
-/// Constant-time lookup — first, mid, and last IDs must all complete within budget.
+/// Constant-time lookup â€” first, mid, and last IDs must all complete within budget.
 ///
 /// Regression guard: if `get_subscription` is ever refactored to scan from ID 0,
 /// the "last" lookup would fail the budget while "first" passes, making the
@@ -290,8 +287,7 @@ fn perf_get_subscription_constant_time_across_range() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         ids.push(id);
     }
@@ -340,8 +336,7 @@ fn perf_list_by_subscriber_paginated() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
@@ -365,7 +360,7 @@ fn perf_list_by_subscriber_paginated() {
         "expected at least one subscription ID on first page"
     );
 
-    // Multi-page drain — accumulate totals across all pages.
+    // Multi-page drain â€” accumulate totals across all pages.
     let t1 = Instant::now();
     let mut total_ids: u32 = page.subscription_ids.len();
     let mut cursor = page.next_start_id;
@@ -395,7 +390,7 @@ fn perf_list_by_subscriber_paginated() {
     );
 }
 
-/// `get_subscriptions_by_token` at scale — index read + record fetches.
+/// `get_subscriptions_by_token` at scale â€” index read + record fetches.
 ///
 /// Creates `SCALE_N` subscriptions all using the default token, then times a
 /// paginated read of up to 100 records.  Budget: `BUDGET_GET_BY_TOKEN_MS`.
@@ -419,8 +414,7 @@ fn perf_get_subscriptions_by_token() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None,
-            &None::<Address>,
+            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
         );
     }
 

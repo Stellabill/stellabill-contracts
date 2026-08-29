@@ -1,65 +1,81 @@
 # Usage Rate Limits & Burst Protection
 
-Usage charge calls now support per-subscription rate limiting and abuse protection to ensure the billing system cannot be spammed or exploited.
+Usage charge calls support per-subscription rate limiting and abuse protection to prevent billing spam or exploitation.
 
 ## Configuration
 
-These limits are configured by the merchant via the `configure_usage_limits` entry point:
+Configured by the merchant via `configure_usage_limits`:
 
-- `rate_limit_max_calls: Option<u32>`: Maximum allowed usage charges within the rate window.
-- `rate_window_secs: u64`: Duration of the rate limit window in seconds.
-- `burst_min_interval_secs: u64`: Minimum required time (in seconds) between any two consecutive usage charges.
-- `usage_cap_units: Option<i128>`: Maximum usage amount allowed per billing period.
+- `rate_limit_max_calls: Option<u32>` — max usage charges within the rate window. `None` disables rate limiting.
+- `rate_window_secs: u64` — duration of the rate-limit window in seconds.
+- `burst_min_interval_secs: u64` — minimum seconds required between any two consecutive charges. `0` disables burst protection.
+- `usage_cap_units: Option<i128>` — max usage amount per billing period. `None` disables the cap.
 
-## Enforcement Mechanisms
+Limits are stored under `DataKey::UsageLimits(subscription_id)`. Runtime counters are stored under `DataKey::UsageState(subscription_id)`. All window math uses `env.ledger().timestamp()`.
+
+## Enforcement in `charge_usage_one`
+
+Enforcement runs **before** any state mutation or fund transfer, in this order:
 
 ### 1. Burst Protection
-- The contract records `last_usage_timestamp` for each subscription.
-- If a new charge is attempted where `now - last_usage_timestamp < burst_min_interval_secs`, it is rejected with `UsageChargeResult::BurstLimitExceeded`.
-- **Purpose**: Prevents rapid repeated calls in the same ledger or across very short intervals.
 
-### 2. Time-Based Rate Limits
-- A rolling fixed window counter (`window_call_count`) is kept in contract storage alongside `window_start_timestamp`.
-- When calls in the active window reach `rate_limit_max_calls`, additional usage charges are rejected with `UsageChargeResult::RateLimitExceeded`.
-- Counters reset automatically once the window expires (`now - window_start_timestamp >= rate_window_secs`).
-  - A call at exactly `window_start_timestamp + rate_window_secs` is treated as the first call of a new window.
+- Records `last_usage_timestamp` in `UsageState`.
+- If `now - last_usage_timestamp < burst_min_interval_secs`, returns `UsageChargeResult::BurstLimitExceeded`.
+- A call where `elapsed == burst_min_interval_secs` is **allowed** (boundary-inclusive).
 
-### 3. Replay Protection
-- Every usage charge must include a unique `reference: String` parameter.
-- The contract stores the last processed reference per subscription.
-- If a subsequent call provides the exact same reference, it is rejected with `UsageChargeResult::Replay`.
-- **Purpose**: Ensures the same off-chain usage event cannot be double-processed if the metering service retries a delayed transaction.
+### 2. Rate Limiting (Fixed Window)
 
-## Indexer-visible enforcement outcomes
+- Tracks `window_call_count` and `window_start_timestamp` in `UsageState`.
+- Window resets when `now >= window_start_timestamp + rate_window_secs`.
+- If `window_call_count >= rate_limit_max_calls`, returns `UsageChargeResult::RateLimitExceeded`.
+- A call at exactly `window_start_timestamp + rate_window_secs` starts a new window.
 
-Usage charge enforcement is designed to be observable by indexers without relying on reverted transactions.
+### 3. Per-Period Usage Cap
 
-- On success, `charge_usage_with_reference` completes normally and emits `usage_charged`.
-- On enforcement outcomes (replay / burst / rate limit / per-period cap), `charge_usage_with_reference` completes normally and emits `usage_charge_rejected`.
-- When a usage charge would exceed the subscription's `lifetime_cap`, the subscription is cancelled and `lifetime_cap_reached` is emitted (this outcome is not emitted as `usage_charge_rejected`).
+- Tracks `current_period_usage_units` and `period_index` in `UsageState`.
+- Period index = `(now - sub.start_time) / sub.interval_seconds`.
+- When a new period begins, `current_period_usage_units` resets to `0`.
+- If `current_period_usage_units + usage_amount > usage_cap_units`, returns `UsageChargeResult::UsageCapExceeded`.
+- A charge that brings usage to exactly `usage_cap_units` is **allowed**.
 
-`usage_charge_rejected` payload is `UsageChargeRejectedEvent` and includes:
+### State Update
 
-- `subscription_id`
-- `merchant`
-- `token`
-- `usage_amount`
-- `timestamp`
-- `reference`
-- `result: UsageChargeResult`
+On a successful pass through all checks, `UsageState` is updated atomically:
+- `last_usage_timestamp = now`
+- `window_call_count += 1`
+- `current_period_usage_units += usage_amount`
 
-`configure_usage_limits` emits `usage_limits_configured` with the final stored parameters.
+This happens before the token transfer, preserving a safe Checks-Effects-Interactions order.
 
-## Storage Footprint
-The state is highly bounded:
-- **Limits**: Stored under `DataKey::UsageLimits(subscription_id)`
-- **State**: Stored under `DataKey::UsageState(subscription_id)` (contains timestamps, counters, and period usage)
-- **Reference**: Stored under `DataKey::UsageReference(subscription_id)`
+### Passthrough (No Limits Configured)
 
-## Example: Valid Usage vs Rejected Usage
-- **Valid Usage**:
-  - `charge_usage_with_reference(sub_id, 1_000_000, "txn_123")` succeeds.
-  - 5 seconds later: `charge_usage_with_reference(sub_id, 2_000_000, "txn_124")` succeeds (burst interval > 2s).
-- **Rejected Usage**:
-  - `charge_usage_with_reference(sub_id, 1_000_000, "txn_123")` immediately fails (Replay).
-  - Calling 10 times in 1 minute when max_calls=5 fails on the 6th call (RateLimitExceeded).
+When no `UsageLimits` entry exists for a subscription, all three checks are skipped and the charge proceeds normally.
+
+## Observability
+
+All enforcement outcomes emit `usage_charge_rejected` with a `UsageChargeRejectedEvent` payload:
+
+| Field | Description |
+|---|---|
+| `subscription_id` | Subscription that was rejected |
+| `merchant` | Merchant address |
+| `token` | Settlement token |
+| `usage_amount` | Attempted charge amount |
+| `timestamp` | Ledger timestamp |
+| `reference` | Idempotency reference |
+| `result` | `BurstLimitExceeded`, `RateLimitExceeded`, or `UsageCapExceeded` |
+
+`configure_usage_limits` emits `usage_limits_configured` on every successful call.
+
+## Storage
+
+| Key | Tier | Contents |
+|---|---|---|
+| `DataKey::UsageLimits(id)` | Instance | Rate/burst/cap configuration |
+| `DataKey::UsageState(id)` | Instance | Runtime counters (timestamps, window count, period units) |
+
+## Security Notes
+
+- All limit checks occur before any state mutation — a rejected charge never partially updates state.
+- Replay protection (`DataKey::UsageReference`) runs before limit checks, so duplicate references are caught first.
+- Limits are merchant-configurable per subscription; the merchant address stored in `UsageLimits` is verified against the subscription's merchant on creation.

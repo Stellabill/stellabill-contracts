@@ -98,7 +98,8 @@ mod test_auto_renew {
             &false,
             &None::<i128>,
             &None::<u64>,
-            &None::<Address>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
 
         // Seed balance directly so we do not need a live token transfer.
@@ -480,7 +481,8 @@ mod test_auto_renew {
                 &false,
                 &None::<i128>,
                 &Some(expires_at),
-                &None::<Address>,
+                &None::<u32>,
+                &None::<soroban_sdk::Symbol>,
             );
             let mut sub = client.get_subscription(&id);
             sub.prepaid_balance = PREPAID;

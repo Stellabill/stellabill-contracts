@@ -1,0 +1,7 @@
+topic: ("withdrawn", <merchant Address>, <token Address>)
+data:
+  merchant: <Address>
+  token: <Address>
+  amount: <i128>
+  remaining_balance: <i128>
+  schema_version: 2

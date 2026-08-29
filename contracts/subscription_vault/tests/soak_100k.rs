@@ -94,13 +94,15 @@ fn subscription_for(
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        cancel_at: None,
-        expires_at_ledger: None,
-lifetime_charged: 0,
+        lifetime_charged: 0,
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     }
 }
 

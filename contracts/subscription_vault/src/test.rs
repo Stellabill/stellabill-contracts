@@ -386,7 +386,7 @@ fn lifecycle_action_target(action: LifecycleAction) -> SubscriptionStatus {
     }
 }
 
-// ── State Machine Helper Tests ─────────────────────────────────────────────────
+// â”€â”€ State Machine Helper Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_validate_status_transition_same_status_is_allowed() {
@@ -1053,6 +1053,10 @@ fn test_subscription_struct_status_field() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -1079,6 +1083,10 @@ fn test_subscription_struct_with_lifetime_cap() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -1205,7 +1213,7 @@ fn test_withdraw_subscriber_funds() {
     assert_eq!(test_env.token_client().balance(&test_env.client.address), 0);
 }
 
-// ── Min-Topup Enforcement Tests ────────────────────────────────────────────────
+// â”€â”€ Min-Topup Enforcement Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_min_topup_below_threshold() {
@@ -1296,7 +1304,7 @@ fn test_min_topup_above_threshold() {
         .is_ok());
 }
 
-// ── Usage-charge tests ─────────────────────────────────────────────────────────
+// â”€â”€ Usage-charge tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // -- Deposit tests ------------------------------------------------------------
 
@@ -2383,6 +2391,10 @@ fn test_compute_next_charge_info_active() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2408,6 +2420,10 @@ fn test_compute_next_charge_info_paused() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2433,6 +2449,10 @@ fn test_compute_next_charge_info_cancelled() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2457,6 +2477,10 @@ fn test_compute_next_charge_info_insufficient_balance() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
@@ -2590,6 +2614,10 @@ fn test_compute_next_charge_info_overflow_protection() {
         expires_at: None,
         grace_start_timestamp: None,
         cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     };
     let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
@@ -3006,7 +3034,7 @@ fn test_partial_refund_rejects_invalid_amounts_and_auth() {
 }
 
 // =============================================================================
-// Partial Refund — Extended Coverage
+// Partial Refund â€” Extended Coverage
 // =============================================================================
 
 /// Repeated partial refunds each debit the correct incremental amount.
@@ -3076,7 +3104,7 @@ fn test_partial_refund_cumulative_exact_drain_then_over_refund_fails() {
 
     assertions::assert_prepaid_balance(&test_env.client, &sub_id, 0);
 
-    // Any further refund must fail — balance is zero.
+    // Any further refund must fail â€” balance is zero.
     let over = test_env
         .client
         .try_partial_refund(&test_env.admin, &sub_id, &subscriber, &1i128);
@@ -3480,7 +3508,7 @@ fn test_cap_cancelled_subscriber_can_withdraw() {
         .env
         .ledger()
         .with_mut(|li| li.timestamp = T0 + 2 * INTERVAL + 1);
-    test_env.client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>); // remaining cap < AMOUNT → cancel, balance stays 5M
+    test_env.client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>); // remaining cap < AMOUNT â†’ cancel, balance stays 5M
 
     assertions::assert_status(&test_env.client, &sub_id, SubscriptionStatus::Cancelled);
     let sub_after = test_env.client.get_subscription(&sub_id);
@@ -6224,33 +6252,33 @@ fn test_rotate_admin_allowed_during_emergency_stop() {
 }
 
 // =============================================================================
-// Pause / Resume — Actor Authorization & Transition Guard Tests
+// Pause / Resume â€” Actor Authorization & Transition Guard Tests
 // =============================================================================
 //
 // Security model
-// ──────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Only the subscription's `subscriber` or `merchant` may call pause_subscription
 // or resume_subscription.  Any other address receives Error::Forbidden (403).
 //
 // Transition rules (enforced before the actor check so the state machine is
 // always the first line of defence):
 //
-//   pause:  Active  → Paused          ✓
-//           Paused  → Paused          ✓ (idempotent, no event)
-//           Cancelled / InsufficientBalance → Paused  ✗ (InvalidStatusTransition)
+//   pause:  Active  â†’ Paused          âœ“
+//           Paused  â†’ Paused          âœ“ (idempotent, no event)
+//           Cancelled / InsufficientBalance â†’ Paused  âœ— (InvalidStatusTransition)
 //
-//   resume: Paused              → Active  ✓
-//           InsufficientBalance → Active  ✓
-//           Active              → Active  ✓ (idempotent, no event)
-//           Cancelled           → Active  ✗ (InvalidStatusTransition)
+//   resume: Paused              â†’ Active  âœ“
+//           InsufficientBalance â†’ Active  âœ“
+//           Active              â†’ Active  âœ“ (idempotent, no event)
+//           Cancelled           â†’ Active  âœ— (InvalidStatusTransition)
 //
 // Table-driven helpers
-// ────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // `pause_actor_cases` / `resume_actor_cases` iterate over every (actor, state)
 // combination and assert the expected outcome, giving full permutation coverage
 // in a single test function.
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Patch a subscription's status directly in storage (test-only).
 fn set_status(env: &Env, client: &SubscriptionVaultClient, id: u32, status: SubscriptionStatus) {
@@ -6262,7 +6290,7 @@ fn set_status(env: &Env, client: &SubscriptionVaultClient, id: u32, status: Subs
     });
 }
 
-// ── actor × state table for pause ────────────────────────────────────────────
+// â”€â”€ actor Ã— state table for pause â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn pause_actor_cases() {
@@ -6316,7 +6344,7 @@ fn pause_actor_cases() {
     }
 }
 
-// ── actor × state table for resume ───────────────────────────────────────────
+// â”€â”€ actor Ã— state table for resume â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn resume_actor_cases() {
@@ -6376,7 +6404,7 @@ fn resume_actor_cases() {
     }
 }
 
-// ── explicit error-code assertions ───────────────────────────────────────────
+// â”€â”€ explicit error-code assertions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn pause_by_stranger_returns_forbidden() {
@@ -6444,7 +6472,7 @@ fn pause_from_insufficient_balance_returns_invalid_transition() {
     );
 }
 
-// ── cross-actor scenarios ─────────────────────────────────────────────────────
+// â”€â”€ cross-actor scenarios â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn merchant_pauses_subscriber_resumes() {
@@ -6478,7 +6506,7 @@ fn subscriber_pauses_merchant_resumes() {
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
 }
 
-// ── event emission ────────────────────────────────────────────────────────────
+// â”€â”€ event emission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // env.events().all() in the Soroban test harness returns only the events from
 // the most recent contract invocation, so we check the count after each call
@@ -6519,7 +6547,7 @@ fn idempotent_pause_does_not_emit_event() {
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
     test_env.client.pause_subscription(&id, &subscriber);
 
-    // Second pause on already-Paused subscription — idempotent, no new event.
+    // Second pause on already-Paused subscription â€” idempotent, no new event.
     // env.events().all() reflects only the most recent invocation.
     test_env.client.pause_subscription(&id, &subscriber);
     assert!(
@@ -6534,7 +6562,7 @@ fn idempotent_resume_does_not_emit_event() {
     let (id, subscriber, _) =
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
 
-    // Resume on already-Active subscription — idempotent, no new event.
+    // Resume on already-Active subscription â€” idempotent, no new event.
     test_env.client.resume_subscription(&id, &subscriber);
     assert!(
         test_env.env.events().all().is_empty(),
@@ -6542,7 +6570,7 @@ fn idempotent_resume_does_not_emit_event() {
     );
 }
 
-// ── repeat pause / resume cycles ─────────────────────────────────────────────
+// â”€â”€ repeat pause / resume cycles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn repeated_pause_resume_cycles_stay_consistent() {
@@ -6623,7 +6651,7 @@ fn test_cancelled_to_insufficient_balance_blocked() {
 }
 
 // -----------------------------------------------------------------------------
-// Idempotent Operations — field preservation under repeated calls
+// Idempotent Operations â€” field preservation under repeated calls
 // -----------------------------------------------------------------------------
 
 // Two consecutive pause calls must leave all financial fields unchanged.
@@ -6759,7 +6787,7 @@ fn test_cancel_during_grace_period() {
 }
 
 // -----------------------------------------------------------------------------
-// §4  Multiple Pause or Resume Cycles
+// Â§4  Multiple Pause or Resume Cycles
 // -----------------------------------------------------------------------------
 
 // Exactly five consecutive paus or resume cycles must all succeed without corruption.
@@ -7006,13 +7034,13 @@ fn test_shared_merchant_multiple_states() {
     assertions::assert_status(&test_env.client, &id_b, SubscriptionStatus::Paused);
     assertions::assert_status(&test_env.client, &id_c, SubscriptionStatus::Cancelled);
 
-    // Mutate A — B and C must be unaffected.
+    // Mutate A â€” B and C must be unaffected.
     test_env.client.pause_subscription(&id_a, &sub_a_sub);
     assertions::assert_status(&test_env.client, &id_a, SubscriptionStatus::Paused);
     assertions::assert_status(&test_env.client, &id_b, SubscriptionStatus::Paused);
     assertions::assert_status(&test_env.client, &id_c, SubscriptionStatus::Cancelled);
 
-    // Resume B — A and C must be unaffected.
+    // Resume B â€” A and C must be unaffected.
     test_env.client.resume_subscription(&id_b, &sub_b_sub);
     assertions::assert_status(&test_env.client, &id_a, SubscriptionStatus::Paused);
     assertions::assert_status(&test_env.client, &id_b, SubscriptionStatus::Active);
@@ -7035,14 +7063,14 @@ fn test_pause_with_varying_intervals() {
 
     let id1 = test_env
         .client
-        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
     let id2 = test_env
         .client
-        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
     let id3 =
         test_env
             .client
-            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, &None::<u64>, &None::<Address>);
+            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // All three should pause without error regardless of interval.
     test_env.client.pause_subscription(&id1, &s1);
@@ -7109,7 +7137,7 @@ fn test_batch_charge_with_paused_and_cancelled() {
 // Issue-specified end-to-end flows
 // -----------------------------------------------------------------------------
 
-// pause => cancel => withdraw — the explicit example from the issue.
+// pause => cancel => withdraw â€” the explicit example from the issue.
 #[test]
 fn test_pause_cancel_withdraw_flow() {
     let test_env = TestEnv::default();
@@ -7120,17 +7148,17 @@ fn test_pause_cancel_withdraw_flow() {
 
     let original_balance = test_env.client.get_subscription(&id).prepaid_balance;
 
-    // Pause — balance unchanged.
+    // Pause â€” balance unchanged.
     test_env.client.pause_subscription(&id, &subscriber);
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
     assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
 
-    // Cancel — balance still retained for withdrawal.
+    // Cancel â€” balance still retained for withdrawal.
     test_env.client.cancel_subscription(&id, &subscriber);
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Cancelled);
     assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
 
-    // Withdraw — balance zeroed, tokens returned to subscriber.
+    // Withdraw â€” balance zeroed, tokens returned to subscriber.
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
     assertions::assert_prepaid_balance(&test_env.client, &id, 0);
 
@@ -7142,7 +7170,7 @@ fn test_pause_cancel_withdraw_flow() {
     );
 }
 
-// insufficient => deposit => resume — the explicit example from the issue.
+// insufficient => deposit => resume â€” the explicit example from the issue.
 #[test]
 fn test_insufficient_deposit_resume_flow() {
     let test_env = TestEnv::default();
@@ -7177,12 +7205,12 @@ fn test_insufficient_deposit_resume_flow() {
     let result = test_env.client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert!(
         result.is_ok(),
-        "charge after insufficient→deposit→resume must succeed"
+        "charge after insufficientâ†’depositâ†’resume must succeed"
     );
     assertions::assert_prepaid_balance(&test_env.client, &id, PREPAID - AMOUNT);
 }
 
-// ── Oracle validation tests ───────────────────────────────────────────────────
+// â”€â”€ Oracle validation tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Helper: register oracle, configure vault, create subscription, deposit funds.
 /// Returns (subscription_id, subscriber, merchant, oracle_client).
@@ -7345,7 +7373,7 @@ fn test_oracle_negative_price_rejected() {
 fn test_oracle_zero_timestamp_price_unavailable() {
     let test_env = TestEnv::default();
     test_env.env.ledger().set_timestamp(T0);
-    // price=2_000_000 but timestamp=0 → OraclePriceUnavailable
+    // price=2_000_000 but timestamp=0 â†’ OraclePriceUnavailable
     let (id, _sub, _mer, _oracle) = setup_oracle_env(
         &test_env.env,
         &test_env.client,
@@ -7365,7 +7393,7 @@ fn test_oracle_zero_timestamp_price_unavailable() {
 
 #[test]
 fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
-    // now - price.timestamp == max_age_seconds → still fresh (not stale).
+    // now - price.timestamp == max_age_seconds â†’ still fresh (not stale).
     let test_env = TestEnv::default();
     let max_age = 3600u64;
     // Use a price_ts large enough that charge_ts - INTERVAL > 0.
@@ -7405,7 +7433,7 @@ fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
     });
 
     test_env.env.ledger().set_timestamp(charge_ts);
-    // Should succeed — price age == max_age_seconds (boundary, not stale).
+    // Should succeed â€” price age == max_age_seconds (boundary, not stale).
     test_env.client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(
         test_env.client.get_merchant_balance(&merchant),
@@ -7415,7 +7443,7 @@ fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
 
 #[test]
 fn test_oracle_price_one_second_past_max_age_rejected() {
-    // now - price.timestamp == max_age_seconds + 1 → stale.
+    // now - price.timestamp == max_age_seconds + 1 â†’ stale.
     let test_env = TestEnv::default();
     let max_age = 3600u64;
     let price_ts = T0;
@@ -7505,7 +7533,7 @@ fn test_oracle_enabled_no_address_stored_returns_not_configured() {
 fn test_oracle_error_does_not_mutate_balances() {
     let test_env = TestEnv::default();
     test_env.env.ledger().set_timestamp(T0);
-    // Zero price → OraclePriceInvalid
+    // Zero price â†’ OraclePriceInvalid
     let (id, _sub, merchant, _oracle) = setup_oracle_env(
         &test_env.env,
         &test_env.client,
@@ -7559,7 +7587,7 @@ fn test_get_oracle_config_default_is_disabled() {
     assert_eq!(cfg.kind, crate::OracleKind::Spot);
 }
 
-// ── OracleAdapter Tests ───────────────────────────────────────────────────────
+// â”€â”€ OracleAdapter Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_oracle_kind_spot_config_persists() {
@@ -7610,7 +7638,7 @@ fn test_oracle_kind_fixed_rate_config_persists() {
         &crate::OracleKind::FixedRate,
         &0u64,
         &2u128,  // numerator: 2
-        &1u128,  // denominator: 1 → price = 2 * 10^7
+        &1u128,  // denominator: 1 â†’ price = 2 * 10^7
     );
     let cfg = test_env.client.get_oracle_config();
     assert_eq!(cfg.kind, crate::OracleKind::FixedRate);
@@ -7629,7 +7657,7 @@ fn test_oracle_fixed_rate_zero_denominator_rejected() {
         &crate::OracleKind::FixedRate,
         &0u64,
         &1u128,
-        &0u128, // denominator = 0 → should fail
+        &0u128, // denominator = 0 â†’ should fail
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -7730,7 +7758,7 @@ fn test_fixed_rate_adapter_zero_denominator_errors() {
     assert_eq!(result, Err(Error::InvalidInput));
 }
 
-// ── Oracle deviation circuit breaker tests ────────────────────────────────────
+// â”€â”€ Oracle deviation circuit breaker tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_oracle_deviation_bootstrap_accepted() {
@@ -7795,7 +7823,7 @@ fn test_oracle_deviation_rejects_spike_above_threshold() {
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
 
-    // Charge #1 — bootstrap, always accepted
+    // Charge #1 â€” bootstrap, always accepted
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
     assert_eq!(
@@ -7856,7 +7884,7 @@ fn test_oracle_deviation_small_move_accepted() {
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
 
-    // Charge #1 — bootstrap
+    // Charge #1 â€” bootstrap
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
     let balance_after_first = test_env.client.get_merchant_balance(&merchant);
@@ -7877,7 +7905,7 @@ fn test_oracle_deviation_small_move_accepted() {
     test_env.client.charge_subscription(&id);
 
     // diff = 2_050_000 - 2_000_000 = 50_000
-    // deviation = 50_000 * 10_000 / 2_000_000 = 250 bps < 500 → accepted
+    // deviation = 50_000 * 10_000 / 2_000_000 = 250 bps < 500 â†’ accepted
     // amount = ceil(20_000_000 * 10^6 / 2_050_000) = 9756098
     let expected_second = 9_756_098i128;
     assert_eq!(
@@ -7921,7 +7949,7 @@ fn test_oracle_deviation_threshold_zero_rejects_any_change() {
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
 
-    // Charge #1 — bootstrap (accepted even with threshold 0)
+    // Charge #1 â€” bootstrap (accepted even with threshold 0)
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
 
@@ -7978,7 +8006,7 @@ fn test_oracle_deviation_exact_boundary_accepted() {
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
 
-    // Charge #1 — bootstrap
+    // Charge #1 â€” bootstrap
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
 
@@ -8038,11 +8066,11 @@ fn test_oracle_deviation_unset_does_not_check() {
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
 
-    // Charge #1 — bootstrap
+    // Charge #1 â€” bootstrap
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
 
-    // Wild spike — should be ACCEPTED because check is disabled
+    // Wild spike â€” should be ACCEPTED because check is disabled
     oracle.set_price(&10_000_000i128, &(T0 + INTERVAL + 1));
 
     let mut sub = test_env.client.get_subscription(&id);
@@ -8180,7 +8208,7 @@ mod storage_layout {
 
         env.as_contract(&contract_id, || {
             // Write each key variant and confirm it can be read back under the
-            // same variant — a mismatch would mean the discriminant shifted.
+            // same variant â€” a mismatch would mean the discriminant shifted.
             let storage = env.storage().instance();
 
             storage.set(&DataKey::Token, &42u32);
@@ -8267,6 +8295,11 @@ mod storage_layout {
             start_time: 0,
             expires_at: None,
             grace_start_timestamp: None,
+            cancel_at: None,
+            expires_at_ledger: None,
+            sub_account_label: None,
+            auto_renew: true,
+            auto_renew_disabled_at: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -8289,7 +8322,7 @@ mod storage_layout {
     }
 
     // -------------------------------------------------------------------------
-    // 4. Optional field default — lifetime_cap = None
+    // 4. Optional field default â€” lifetime_cap = None
     //    Subscriptions created before lifetime_cap was introduced have no cap
     //    field.  New code must treat a missing/None cap as "no cap" (not panic).
     // -------------------------------------------------------------------------
@@ -8316,7 +8349,7 @@ mod storage_layout {
     }
 
     // -------------------------------------------------------------------------
-    // 5. Optional field introduction — lifetime_cap = Some(value)
+    // 5. Optional field introduction â€” lifetime_cap = Some(value)
     //    Subscriptions created with a cap must persist and be readable.
     // -------------------------------------------------------------------------
     #[test]
@@ -8373,6 +8406,11 @@ mod storage_layout {
             start_time: 0,
             expires_at: None,
             grace_start_timestamp: None,
+            cancel_at: None,
+            expires_at_ledger: None,
+            sub_account_label: None,
+            auto_renew: true,
+            auto_renew_disabled_at: None,
         };
 
         env.as_contract(&client.address, || {
@@ -8394,7 +8432,7 @@ mod storage_layout {
     }
 
     // -------------------------------------------------------------------------
-    // 7. Config key isolation — Sub(id) keys do not collide with Symbol keys
+    // 7. Config key isolation â€” Sub(id) keys do not collide with Symbol keys
     //    Ensures u32 subscription IDs stored under DataKey::Sub(n) are
     //    distinct from Symbol-based config keys (Token, Admin, etc.).
     // -------------------------------------------------------------------------
@@ -8451,7 +8489,7 @@ mod storage_layout {
     // -------------------------------------------------------------------------
     // 9. SchemaVersion key is readable after init
     //    Confirms the schema version is written during init and can be read
-    //    back — a prerequisite for any future migration guard logic.
+    //    back â€” a prerequisite for any future migration guard logic.
     // -------------------------------------------------------------------------
     #[test]
     fn test_schema_version_is_set_after_init() {
@@ -8891,7 +8929,7 @@ fn test_event_schema_consistency() {
     assert!(!events.is_empty());
 }
 
-// ── One-Off Charge Hardening Tests ──────────────────────────────────────────
+// â”€â”€ One-Off Charge Hardening Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_oneoff_unauthorized_merchant_rejected() {
@@ -9237,7 +9275,7 @@ fn test_oneoff_lifetime_cap_boundary() {
         &None::<u64>,
     &None::<u32>,
     );
-    // Deposit exactly cap — enforce_deposit_cap rejects deposits over remaining cap.
+    // Deposit exactly cap â€” enforce_deposit_cap rejects deposits over remaining cap.
     client.deposit_funds(&id, &subscriber, &20_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Charge up to one unit below cap so subscription stays Active
@@ -9245,7 +9283,7 @@ fn test_oneoff_lifetime_cap_boundary() {
     let sub = client.get_subscription(&id);
     assert_eq!(sub.lifetime_charged, 19_999_999);
 
-    // Next charge exceeds remaining balance (1 unit left) — balance check fires first.
+    // Next charge exceeds remaining balance (1 unit left) â€” balance check fires first.
     let res = client.try_charge_one_off(&id, &merchant, &2i128, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(res, Err(Ok(Error::InsufficientPrepaidBalance)));
 }
@@ -9346,9 +9384,9 @@ fn test_compaction_aggregation_accuracy() {
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
 }
 
-// ═════════════════════════════════════════════════════════════════════=========
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•=========
 // STATE MACHINE TRANSITION TESTS - Exhaustive Coverage
-// ═════════════════════════════════════════════════════════════════════=========
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•=========
 
 /// Test that `transition_to` correctly applies valid transitions
 #[test]
@@ -9744,13 +9782,17 @@ fn setup_usage_sub(
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
-    // Pre-register usage limits
+    // Pre-register usage limits at the next ID (required before creating a
+    // usage-enabled subscription). NextId is always 0 in a fresh test env.
+    let next_id: u32 = env.as_contract(&client.address, || {
+        crate::admin::read_config(env, &crate::types::DataKey::NextId).unwrap_or(0)
+    });
     client.configure_usage_limits(
         &merchant,
-        &0, // NextId is 0 initially for the first subscription, but wait, this might be called multiple times! 
+        &next_id,
         &None::<u32>,
-        &0,
-        &0,
+        &0u64,
+        &0u64,
         &None::<i128>,
     );
     let id = client.create_subscription(
@@ -9760,7 +9802,8 @@ fn setup_usage_sub(
         &INTERVAL,
         &true,
         &None::<i128>,
-        &None::<u64>,&None::<u32>,
+        &None::<u64>,
+        &None::<u32>,
     );
     fixtures::seed_balance(env, client, id, PREPAID);
     (id, subscriber, merchant)
@@ -9858,7 +9901,7 @@ fn test_usage_burst_exactly_at_minimum_allowed() {
         &String::from_str(&env, "ref_c1"),
     );
 
-    // Advance exactly 5 seconds — should be allowed (elapsed == burst_min_interval_secs)
+    // Advance exactly 5 seconds â€” should be allowed (elapsed == burst_min_interval_secs)
     env.ledger().with_mut(|li| li.timestamp = T0 + 5);
     let r = client.charge_usage_with_reference(
         &id,
@@ -9913,11 +9956,11 @@ fn test_usage_rate_limit_window_rollover_resets_count() {
     let r1 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w1r1"));
     assert_eq!(r1, crate::UsageChargeResult::Charged);
 
-    // Still in window — rejected
+    // Still in window â€” rejected
     let r2 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w1r2"));
     assert_eq!(r2, crate::UsageChargeResult::RateLimitExceeded);
 
-    // Advance past window boundary — counter resets
+    // Advance past window boundary â€” counter resets
     env.ledger().with_mut(|li| li.timestamp = T0 + 60);
     let r3 = client.charge_usage_with_reference(&id, &500_000, &String::from_str(&env, "w2r1"));
     assert_eq!(r3, crate::UsageChargeResult::Charged);
@@ -9937,7 +9980,6 @@ fn test_usage_cap_exceeded() {
         &0u64,
         &0u64,
         &Some(1_500_000i128),
-    &None::<u32>,
     );
 
     let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "cap1"));
@@ -9962,13 +10004,12 @@ fn test_usage_cap_exactly_at_boundary_allowed() {
         &0u64,
         &0u64,
         &Some(2_000_000i128),
-    &None::<u32>,
     );
 
     let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "bnd1"));
     assert_eq!(r1, crate::UsageChargeResult::Charged);
 
-    // Exactly at cap boundary — allowed
+    // Exactly at cap boundary â€” allowed
     let r2 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "bnd2"));
     assert_eq!(r2, crate::UsageChargeResult::Charged);
 }
@@ -9987,17 +10028,16 @@ fn test_usage_cap_resets_on_period_rollover() {
         &0u64,
         &0u64,
         &Some(1_000_000i128),
-    &None::<u32>,
     );
 
     let r1 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p1c1"));
     assert_eq!(r1, crate::UsageChargeResult::Charged);
 
-    // Still in same period — rejected
+    // Still in same period â€” rejected
     let r2 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p1c2"));
     assert_eq!(r2, crate::UsageChargeResult::UsageCapExceeded);
 
-    // Advance into next billing period — cap resets
+    // Advance into next billing period â€” cap resets
     env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL);
     let r3 = client.charge_usage_with_reference(&id, &1_000_000, &String::from_str(&env, "p2c1"));
     assert_eq!(r3, crate::UsageChargeResult::Charged);
@@ -10009,7 +10049,7 @@ fn test_usage_no_limits_configured_is_passthrough() {
     env.ledger().with_mut(|li| li.timestamp = T0);
     let (id, _, _) = setup_usage_sub(&env, &client);
 
-    // No limits configured — all unique references should succeed
+    // No limits configured â€” all unique references should succeed
     for i in 0u32..5 {
         let reference = String::from_str(&env, &alloc::format!("pass_{}", i));
         let r = client.charge_usage_with_reference(&id, &100_000, &reference);
@@ -10017,7 +10057,7 @@ fn test_usage_no_limits_configured_is_passthrough() {
     }
 }
 
-// ── Schema Migration Tests ────────────────────────────────────────────────────
+// â”€â”€ Schema Migration Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // Covers the `migrate` entrypoint and the underlying `do_migrate` logic.
 // Requirements from issue #435:
@@ -10156,14 +10196,14 @@ fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
 
 #[test]
 fn test_migrate_forward_from_version_1_to_2() {
-    // Simulate upgrade from version 1 → 2.
+    // Simulate upgrade from version 1 â†’ 2.
     let (env, client, _token, admin) = setup_test_env();
 
     write_schema_version(&env, &client.address, 1);
     assert_eq!(read_schema_version(&env, &client.address), 1);
 
     let result = client.try_migrate(&admin);
-    assert!(result.is_ok(), "v1 → v2 migration must succeed");
+    assert!(result.is_ok(), "v1 â†’ v2 migration must succeed");
     assert_eq!(read_schema_version(&env, &client.address), 2);
 }
 
@@ -10172,7 +10212,7 @@ fn test_migrate_is_idempotent_after_forward_upgrade() {
     // After a successful forward migration, calling migrate again must be a no-op.
     let (env, client, _token, admin) = setup_test_env();
 
-    // First call: forward upgrade from 0 → 2.
+    // First call: forward upgrade from 0 â†’ 2.
     write_schema_version(&env, &client.address, 0);
     client.migrate(&admin);
     assert_eq!(read_schema_version(&env, &client.address), 2);
@@ -10422,7 +10462,7 @@ fn test_merchant_max_subs_and_plan_max_active_interaction() {
     assert_eq!(result_d, Err(Ok(Error::MaxConcurrentSubscriptionsReached)));
 }
 
-// ── Dispute / Chargeback Tests ────────────────────────────────────────────────
+// â”€â”€ Dispute / Chargeback Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DISPUTE_AMOUNT: i128 = 5_000_000;
 
@@ -10806,7 +10846,7 @@ fn test_resolve_dispute_auto_resolve_to_subscriber_after_window_elapsed() {
         test_env.env.ledger().timestamp() + DISPUTE_WINDOW_SECS + 1,
     );
 
-    // Resolve without responding — auto-resolve to subscriber
+    // Resolve without responding â€” auto-resolve to subscriber
     test_env
         .client
         .resolve_dispute(&test_env.admin, &dispute_id, &false) // ignored for auto-resolve
@@ -10833,7 +10873,7 @@ fn test_resolve_dispute_rejects_before_response_and_window() {
         .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<soroban_sdk::BytesN<32>>)
         .unwrap();
 
-    // Try to resolve immediately without responding — should be rejected
+    // Try to resolve immediately without responding â€” should be rejected
     let result = test_env.client.try_resolve_dispute(
         &test_env.admin,
         &dispute_id,
@@ -10983,7 +11023,7 @@ fn test_dispute_escrow_accounting_invariant() {
         initial_merchant_balance - DISPUTE_AMOUNT
     );
 
-    // Resolve to merchant — balance restored
+    // Resolve to merchant â€” balance restored
     test_env
         .client
         .respond_dispute(&test_env.admin, &dispute_id, &None::<soroban_sdk::BytesN<32>>)
