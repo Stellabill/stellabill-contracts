@@ -54,6 +54,7 @@ fn create_active_sub(
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     client.deposit_funds(&id, &subscriber, &PREPAID, &None);
     (id, subscriber, merchant, client.get_subscription(&id).token)

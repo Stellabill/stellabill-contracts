@@ -48,6 +48,7 @@ fn create_and_fund_sub(
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     let token_client = token::Client::new(env, token);

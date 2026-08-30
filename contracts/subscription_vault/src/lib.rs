@@ -60,7 +60,7 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent,
+    ProtocolFeeConfiguredEvent, CANCELLATION_ESCROW_WINDOW_SECS,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -3611,3 +3611,5 @@ mod test_merchant_vacation;
 mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
+#[cfg(test)]
+mod test_operator;

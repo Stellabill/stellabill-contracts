@@ -74,6 +74,7 @@ fn test_subscription_created_event_emitted() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     let events = env.events().all();

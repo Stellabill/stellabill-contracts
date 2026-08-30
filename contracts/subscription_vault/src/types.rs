@@ -503,7 +503,7 @@ pub enum SubscriptionStatus {
 
 /// Stores subscription details and current state.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub subscriber: Address,
     pub merchant: Address,
@@ -2902,6 +2902,17 @@ pub struct CancellationEscrow {
     pub released_at: u64,
 }
 
+impl PartialEq for CancellationEscrow {
+    fn eq(&self, other: &Self) -> bool {
+        self.subscription_id == other.subscription_id
+            && self.amount == other.amount
+            && self.token == other.token
+            && self.subscriber == other.subscriber
+            && self.merchant == other.merchant
+            && self.released_at == other.released_at
+    }
+}
+
 /// Event emitted when a cancellation escrow is opened.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -3032,7 +3043,9 @@ mod event_topic_tests {
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
-    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
+    use soroban_sdk::{Env, FromVal, Symbol};
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::testutils::Events;
 
     /// The emitted wire representation is part of the indexer-facing contract.
     /// Publish every cached short topic in one transaction and compare each
@@ -3063,12 +3076,12 @@ mod event_topic_tests {
 
             assert_eq!(
                 emitted_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
+                legacy_topic.clone().to_xdr(&env),
                 "event topic {name} changed its wire representation"
             );
             assert_eq!(
                 expected_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
+                legacy_topic.clone().to_xdr(&env),
                 "cached topic {name} differs from Symbol::new"
             );
         }
@@ -3082,9 +3095,9 @@ mod event_topic_tests {
         let long_topic = Symbol::new(&env, "subscription_created");
 
         assert_eq!(
-            long_topic.to_xdr(&env),
+            long_topic.clone().to_xdr(&env),
             Symbol::new(&env, "subscription_created").to_xdr(&env)
         );
-        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
+        assert_ne!(long_topic.clone().to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
 }
