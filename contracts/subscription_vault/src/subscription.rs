@@ -66,9 +66,10 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    AutoRenewToggledEvent, BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error,
-    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent,
-    LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
+    AutoRenewToggledEvent, BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS,
+    CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, EmergencyWithdrawIntent, Error,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
     PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent,
     ReferralAttributedEvent, SubscriberCreateWindow, SubscriberEmergencyWithdrawEvent,
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
@@ -1888,7 +1889,7 @@ fn bulk_deposit_one(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         return crate::types::BulkDepositResult {
             subscription_id,
             success: false,
@@ -2640,7 +2641,7 @@ pub fn do_deposit_funds_on_behalf(
     }
 
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -3185,6 +3186,7 @@ pub fn do_create_subscription_from_plan(
             interval_seconds: plan.interval_seconds,
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
+            expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
