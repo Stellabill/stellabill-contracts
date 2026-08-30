@@ -152,6 +152,8 @@ fn setup_env<'a>() -> (
             &false,
             &None,
             &None::<u64>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
     }
 

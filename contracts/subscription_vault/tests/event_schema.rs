@@ -4,6 +4,7 @@ extern crate alloc;
 
 use soroban_sdk::{
     testutils::{Address as _, Events},
+    token::StellarAssetClient,
     Address, Env, FromVal,
 };
 use subscription_vault::{
@@ -110,7 +111,7 @@ fn test_subscription_charged_event_emitted() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    token.mint(&subscriber, &10_000_000_000);
+    StellarAssetClient::new(&env, &token_address).mint(&subscriber, &10_000_000_000);
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
@@ -119,6 +120,8 @@ fn test_subscription_charged_event_emitted() {
 
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
@@ -131,13 +134,12 @@ fn test_subscription_charged_event_emitted() {
     for event in events.iter() {
         let topics = event.1.clone();
         if topics.len() > 0 {
-            if let Ok(topic0) = soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap()) {
-                if topic0 == soroban_sdk::Symbol::new(&env, "charged") {
-                    let charged: SubscriptionChargedEvent = FromVal::from_val(&env, &event.2);
-                    assert_eq!(charged.schema_version, EVENT_SCHEMA_VERSION);
-                    found = true;
-                    break;
-                }
+            let topic0 = Option::<soroban_sdk::Symbol>::from_val(&env, &topics.get(0).unwrap());
+            if topic0 == Some(soroban_sdk::Symbol::new(&env, "charged")) {
+                let charged: SubscriptionChargedEvent = FromVal::from_val(&env, &event.2);
+                assert_eq!(charged.schema_version, EVENT_SCHEMA_VERSION);
+                found = true;
+                break;
             }
         }
     }
@@ -159,7 +161,7 @@ fn test_merchant_withdrawal_event_emitted() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    token.mint(&subscriber, &10_000_000_000);
+    StellarAssetClient::new(&env, &token_address).mint(&subscriber, &10_000_000_000);
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
@@ -168,6 +170,8 @@ fn test_merchant_withdrawal_event_emitted() {
 
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
@@ -181,13 +185,12 @@ fn test_merchant_withdrawal_event_emitted() {
     for event in events.iter() {
         let topics = event.1.clone();
         if topics.len() > 0 {
-            if let Ok(topic0) = soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap()) {
-                if topic0 == soroban_sdk::Symbol::new(&env, "withdrawn") {
-                    let withdrawn: MerchantWithdrawalEvent = FromVal::from_val(&env, &event.2);
-                    assert_eq!(withdrawn.schema_version, EVENT_SCHEMA_VERSION);
-                    found = true;
-                    break;
-                }
+            let topic0 = Option::<soroban_sdk::Symbol>::from_val(&env, &topics.get(0).unwrap());
+            if topic0 == Some(soroban_sdk::Symbol::new(&env, "withdrawn")) {
+                let withdrawn: MerchantWithdrawalEvent = FromVal::from_val(&env, &event.2);
+                assert_eq!(withdrawn.schema_version, EVENT_SCHEMA_VERSION);
+                found = true;
+                break;
             }
         }
     }
