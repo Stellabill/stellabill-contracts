@@ -2178,8 +2178,10 @@ pub fn do_charge_one_off(
 
     let fee_bps = crate::charge_core::route_fee_bps(env, &sub.merchant);
     let treasury_opt = crate::admin::get_treasury(env);
+    let treasury_split_config = crate::admin::get_treasury_split(env);
+    let treasury_configured = treasury_opt.is_some() || treasury_split_config.is_some();
     let (merchant_amount, fee_amount) =
-        crate::charge_core::split_protocol_fee(amount, fee_bps, treasury_opt.is_some());
+        crate::charge_core::split_protocol_fee(amount, fee_bps, treasury_configured);
     crate::charge_core::credit_charge_payees(
         env,
         subscription_id,
@@ -2196,22 +2198,31 @@ pub fn do_charge_one_off(
         crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
     }
 
-    let should_emit_fee_event = if fee_amount > 0 {
-        if let Some(ref treasury) = treasury_opt {
+    // Route fee to treasury split beneficiaries or single treasury.
+    if fee_amount > 0 {
+        let splits = crate::charge_core::distribute_treasury_split(env, fee_amount, &sub.token);
+        for i in 0..splits.len() {
+            let (beneficiary, split_amount) = splits.get(i).unwrap();
             crate::merchant::credit_merchant_balance_for_token(
                 env,
-                treasury,
+                &beneficiary,
                 &sub.token,
-                fee_amount,
+                split_amount,
                 BillingChargeKind::OneOff,
             )?;
-            Some((treasury.clone(), fee_amount))
-        } else {
-            None
+            env.events().publish(
+                (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                crate::types::ProtocolFeeRoutedEvent {
+                    subscription_id,
+                    beneficiary,
+                    token: sub.token.clone(),
+                    fee_amount: split_amount,
+                    timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                },
+            );
         }
-    } else {
-        None
-    };
+    }
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;

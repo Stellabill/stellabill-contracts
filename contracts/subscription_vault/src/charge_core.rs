@@ -88,6 +88,55 @@ pub(crate) fn split_protocol_fee(
     (gross - fee, fee)
 }
 
+/// Distribute `fee_amount` across treasury split beneficiaries using integer
+/// math. The rounding remainder (from non-divisible amounts) is assigned to
+/// the first beneficiary to ensure `sum(allocations) == fee_amount` exactly.
+///
+/// If no treasury split is configured, falls back to the single treasury
+/// address.
+///
+/// Returns a `Vec` of `(beneficiary, amount)` pairs.
+pub(crate) fn distribute_treasury_split(
+    env: &Env,
+    fee_amount: i128,
+    token: &soroban_sdk::Address,
+) -> soroban_sdk::Vec<(soroban_sdk::Address, i128)> {
+    let mut result = soroban_sdk::Vec::new(env);
+    if fee_amount <= 0 {
+        return result;
+    }
+
+    let split_config = crate::admin::get_treasury_split(env);
+    let fallback_treasury = crate::admin::get_treasury(env);
+
+    if let Some(config) = split_config {
+        let entries = &config.entries;
+        // Compute each beneficiary's share: floor(fee * bps / 10_000)
+        // The last beneficiary receives the rounding remainder to ensure
+        // sum(allocations) == fee_amount exactly.
+        let mut allocated_total: i128 = 0;
+        let num_entries = entries.len();
+        for i in 0..num_entries {
+            let entry = entries.get(i).unwrap();
+            let share = if i < num_entries - 1 {
+                let amount = fee_amount * (entry.bps as i128) / 10_000i128;
+                allocated_total += amount;
+                amount
+            } else {
+                // Last beneficiary gets the remainder
+                fee_amount - allocated_total
+            };
+            if share > 0 {
+                result.push_back((entry.beneficiary.clone(), share));
+            }
+        }
+    } else if let Some(treasury) = fallback_treasury {
+        result.push_back((treasury, fee_amount));
+    }
+
+    result
+}
+
 /// Emits a [`ChargeFailureEvent`] and returns `err` unchanged.
 ///
 /// Call as `return Err(charge_fail(env, id, err, attempted, now))` on every
@@ -397,7 +446,7 @@ pub fn charge_one(
         .unwrap_or(u64::MAX);
 
     // Anti-frontrunning salt
-    let seq = env.ledger().sequence();
+    let seq = env.ledger().sequence() as u64;
     let salt = {
         let mut salt_buf = [0u8; 20];
         salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
@@ -505,6 +554,10 @@ pub fn charge_one(
             } else {
                 crate::admin::get_treasury(env)
             };
+            // Determine whether a treasury split or single-treasury routing
+            // applies. The split takes precedence when configured.
+            let treasury_split_config = crate::admin::get_treasury_split(env);
+            let treasury_configured = treasury_opt.is_some() || treasury_split_config.is_some();
             // Determine the protocol fee and merchant credit.
             //
             // Rounding rule: percentage fee is computed with integer division
@@ -515,7 +568,7 @@ pub fn charge_one(
             // in the vault. Converted fees (fee-token overrides) are handled
             // separately and do not affect the source-token accounting invariant.
             let (merchant_amount, fee_amount) =
-                split_protocol_fee(charge_amount, fee_bps, treasury_opt.is_some());
+                split_protocol_fee(charge_amount, fee_bps, treasury_configured);
 
             // Invariant sanity check: the split must sum exactly to the charged amount.
             // If this ever fails it indicates an arithmetic bug; keep as a debug
@@ -546,35 +599,106 @@ pub fn charge_one(
             } else {
                 None
             };
-            let should_emit_fee_event = if fee_amount > 0 {
-                if let Some(ref treasury) = treasury_opt {
-                    let conv = conversion.as_ref().unwrap();
-                    let fee_token = conv.target_token.clone();
-                    let fee_credit_amount = conv.effective_amount;
-                    if let Some(ref ft) = fee_token {
+            // Route fee to treasury split beneficiaries or single treasury.
+            let has_split = treasury_split_config.is_some();
+            if fee_amount > 0 && has_split {
+                // Treasury split path: distribute across beneficiaries
+                if let Some(ref conv) = conversion {
+                    let (fee_token, distributed_amount) = if let Some(ref ft) = conv.target_token {
+                        (ft.clone(), conv.effective_amount)
+                    } else {
+                        (sub.token.clone(), fee_amount)
+                    };
+                    let splits = distribute_treasury_split(env, distributed_amount, &fee_token);
+                    for i in 0..splits.len() {
+                        let (beneficiary, amount) = splits.get(i).unwrap();
                         crate::merchant::credit_merchant_balance_for_token(
                             env,
-                            treasury,
-                            ft,
-                            fee_credit_amount,
+                            &beneficiary,
+                            &fee_token,
+                            amount,
                             BillingChargeKind::Interval,
                         )?;
-                    } else {
+                        env.events().publish(
+                            (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                            crate::types::ProtocolFeeRoutedEvent {
+                                subscription_id,
+                                beneficiary,
+                                token: fee_token.clone(),
+                                fee_amount: amount,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                } else {
+                    let splits = distribute_treasury_split(env, fee_amount, &sub.token);
+                    for i in 0..splits.len() {
+                        let (beneficiary, amount) = splits.get(i).unwrap();
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            &beneficiary,
+                            &sub.token,
+                            amount,
+                            BillingChargeKind::Interval,
+                        )?;
+                        env.events().publish(
+                            (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                            crate::types::ProtocolFeeRoutedEvent {
+                                subscription_id,
+                                beneficiary,
+                                token: sub.token.clone(),
+                                fee_amount: amount,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                }
+            } else if fee_amount > 0 {
+                // Single-treasury path (existing behavior)
+                if let Some(ref conv) = conversion {
+                    if let Some(ref ft) = conv.target_token {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury_opt.as_ref().unwrap(),
+                            ft,
+                            conv.effective_amount,
+                            BillingChargeKind::Interval,
+                        )?;
+                    } else if let Some(ref treasury) = treasury_opt {
                         crate::merchant::credit_merchant_balance_for_token(
                             env,
                             treasury,
                             &sub.token,
-                            fee_credit_amount,
+                            fee_amount,
                             BillingChargeKind::Interval,
                         )?;
                     }
-                    Some((treasury.clone(), fee_amount))
-                } else {
-                    None
+                } else if let Some(ref treasury) = treasury_opt {
+                    crate::merchant::credit_merchant_balance_for_token(
+                        env,
+                        treasury,
+                        &sub.token,
+                        fee_amount,
+                        BillingChargeKind::Interval,
+                    )?;
                 }
-            } else {
-                None
-            };
+                if let Some(ref treasury) = treasury_opt {
+                    env.events().publish(
+                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                        crate::types::ProtocolFeeChargedEvent {
+                            subscription_id,
+                            merchant: sub.merchant.clone(),
+                            token: sub.token.clone(),
+                            fee_amount,
+                            treasury: treasury.clone(),
+                            timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        },
+                    );
+                }
+            }
             sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
@@ -605,21 +729,8 @@ pub fn charge_one(
 
             write_subscription(env, subscription_id, &sub);
 
-            // Emit protocol fee event after state is written
-            if let Some((treasury, fee)) = should_emit_fee_event {
-                env.events().publish(
-                    (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                    crate::types::ProtocolFeeChargedEvent {
-                        subscription_id,
-                        merchant: sub.merchant.clone(),
-                        token: sub.token.clone(),
-                        fee_amount: fee,
-                        treasury,
-                        timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                    },
-                );
-                // Emit fee conversion event when fee-token override was applied
+            // Emit fee conversion event when fee-token override was applied
+            if fee_amount > 0 {
                 if let Some(conv) = &conversion {
                     if let Some(ref target) = conv.target_token {
                         env.events().publish(
@@ -628,7 +739,7 @@ pub fn charge_one(
                                 subscription_id,
                                 source_token: sub.token.clone(),
                                 target_token: target.clone(),
-                                original_fee_amount: fee,
+                                original_fee_amount: fee_amount,
                                 converted_fee_amount: conv.effective_amount,
                                 rate: conv.rate,
                                 timestamp: now,
@@ -1132,8 +1243,10 @@ pub fn charge_usage_one(
             sub.prepaid_balance = new_balance;
             let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
+            let treasury_split_config = crate::admin::get_treasury_split(env);
+            let treasury_configured = treasury_opt.is_some() || treasury_split_config.is_some();
             let (merchant_amount, fee_amount) =
-                split_protocol_fee(usage_amount, fee_bps, treasury_opt.is_some());
+                split_protocol_fee(usage_amount, fee_bps, treasury_configured);
             credit_charge_payees(
                 env,
                 subscription_id,
@@ -1149,42 +1262,110 @@ pub fn charge_usage_one(
                 let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
                 let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
                 crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
-            }
-
-            let conversion = if fee_amount > 0 {
+            }            let conversion = if fee_amount > 0 {
                 Some(convert_fee(env, &sub.token, fee_amount))
             } else {
                 None
             };
-            let should_emit_fee_event = if fee_amount > 0 {
-                if let Some(ref treasury) = treasury_opt {
-                    let conv = conversion.as_ref().unwrap();
-                    let fee_token = conv.target_token.clone();
-                    let fee_credit_amount = conv.effective_amount;
-                    if let Some(ref ft) = fee_token {
+            // Route fee to treasury split beneficiaries or single treasury.
+            let has_split = treasury_split_config.is_some();
+            if fee_amount > 0 && has_split {
+                if let Some(ref conv) = conversion {
+                    let (fee_token, distributed_amount) = if let Some(ref ft) = conv.target_token {
+                        (ft.clone(), conv.effective_amount)
+                    } else {
+                        (sub.token.clone(), fee_amount)
+                    };
+                    let splits = distribute_treasury_split(env, distributed_amount, &fee_token);
+                    for i in 0..splits.len() {
+                        let (beneficiary, amount) = splits.get(i).unwrap();
                         crate::merchant::credit_merchant_balance_for_token(
                             env,
-                            treasury,
-                            ft,
-                            fee_credit_amount,
+                            &beneficiary,
+                            &fee_token,
+                            amount,
                             BillingChargeKind::Usage,
                         )?;
-                    } else {
+                        env.events().publish(
+                            (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                            crate::types::ProtocolFeeRoutedEvent {
+                                subscription_id,
+                                beneficiary,
+                                token: fee_token.clone(),
+                                fee_amount: amount,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                } else {
+                    let splits = distribute_treasury_split(env, fee_amount, &sub.token);
+                    for i in 0..splits.len() {
+                        let (beneficiary, amount) = splits.get(i).unwrap();
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            &beneficiary,
+                            &sub.token,
+                            amount,
+                            BillingChargeKind::Usage,
+                        )?;
+                        env.events().publish(
+                            (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                            crate::types::ProtocolFeeRoutedEvent {
+                                subscription_id,
+                                beneficiary,
+                                token: sub.token.clone(),
+                                fee_amount: amount,
+                                timestamp: now,
+                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            },
+                        );
+                    }
+                }
+            } else if fee_amount > 0 {
+                // Single-treasury path (existing behavior)
+                if let Some(ref conv) = conversion {
+                    if let Some(ref ft) = conv.target_token {
+                        crate::merchant::credit_merchant_balance_for_token(
+                            env,
+                            treasury_opt.as_ref().unwrap(),
+                            ft,
+                            conv.effective_amount,
+                            BillingChargeKind::Usage,
+                        )?;
+                    } else if let Some(ref treasury) = treasury_opt {
                         crate::merchant::credit_merchant_balance_for_token(
                             env,
                             treasury,
                             &sub.token,
-                            fee_credit_amount,
+                            fee_amount,
                             BillingChargeKind::Usage,
                         )?;
                     }
-                    Some((treasury.clone(), fee_amount))
-                } else {
-                    None
+                } else if let Some(ref treasury) = treasury_opt {
+                    crate::merchant::credit_merchant_balance_for_token(
+                        env,
+                        treasury,
+                        &sub.token,
+                        fee_amount,
+                        BillingChargeKind::Usage,
+                    )?;
                 }
-            } else {
-                None
-            };
+                if let Some(ref treasury) = treasury_opt {
+                    env.events().publish(
+                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                        crate::types::ProtocolFeeChargedEvent {
+                            subscription_id,
+                            merchant: sub.merchant.clone(),
+                            token: sub.token.clone(),
+                            fee_amount,
+                            treasury: treasury.clone(),
+                            timestamp: now,
+                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        },
+                    );
+                }
+            }
 
             sub.lifetime_charged = pending_lifetime;
             let cap_reached = sub
@@ -1195,27 +1376,13 @@ pub fn charge_usage_one(
             if cap_reached {
                 transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             } else if new_balance == 0 {
-                // Without a cap hit, zero remaining prepaid means underfunded for future usage.
                 transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
             }
 
             write_subscription(env, subscription_id, &sub);
 
-            // Emit protocol fee event after state is written
-            if let Some((treasury, fee)) = should_emit_fee_event {
-                env.events().publish(
-                    (Symbol::new(env, "protocol_fee_charged"), subscription_id),
-                    crate::types::ProtocolFeeChargedEvent {
-                        subscription_id,
-                        merchant: sub.merchant.clone(),
-                        token: sub.token.clone(),
-                        fee_amount: fee,
-                        treasury,
-                        timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
-                    },
-                );
-                // Emit fee conversion event when fee-token override was applied
+            // Emit fee conversion event when fee-token override was applied
+            if fee_amount > 0 {
                 if let Some(conv) = &conversion {
                     if let Some(ref target) = conv.target_token {
                         env.events().publish(
@@ -1224,7 +1391,7 @@ pub fn charge_usage_one(
                                 subscription_id,
                                 source_token: sub.token.clone(),
                                 target_token: target.clone(),
-                                original_fee_amount: fee,
+                                original_fee_amount: fee_amount,
                                 converted_fee_amount: conv.effective_amount,
                                 rate: conv.rate,
                                 timestamp: now,
@@ -1235,7 +1402,7 @@ pub fn charge_usage_one(
                 }
             }
 
-            env.storage().instance().set(&ref_key, &true); // Mark reference as used
+            env.storage().instance().set(&ref_key, &true);
 
             let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
             let period_start = sub

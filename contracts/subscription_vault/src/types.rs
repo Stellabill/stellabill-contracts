@@ -288,6 +288,8 @@ pub enum DataKey {
     MerchantSubAccountList(Address),
     /// Emergency withdraw intent keyed by subscription ID. Discriminant 83.
     EmergencyWithdrawIntent(u32),
+    /// Multi-beneficiary treasury split configuration. Discriminant 84.
+    TreasurySplit,
 }
 
 impl DataKey {
@@ -381,6 +383,7 @@ impl DataKey {
             DataKey::MerchantSubAccount(_, _) => 81,
             DataKey::MerchantSubAccountList(_) => 82,
             DataKey::EmergencyWithdrawIntent(_) => 83,
+            DataKey::TreasurySplit => 84,
         }
     }
 
@@ -452,6 +455,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     76, // MerchantFeeBps(Address)
     77, // OraclePriceHistoryMeta(Address)
     78, // OraclePriceHistoryEntry(Address, u32)
+    84, // TreasurySplit
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -2543,6 +2547,48 @@ pub struct TreasuryChangeExecutedEvent {
     pub treasury: Address,
     pub fee_bps: u32,
     pub effective_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// A single beneficiary entry in a multi-beneficiary treasury split.
+///
+/// `bps` is in basis points (0–10_000). The sum of all entries in a split
+/// must equal exactly 10_000.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreasurySplitEntry {
+    pub beneficiary: Address,
+    pub bps: u32,
+}
+
+/// Multi-beneficiary treasury split configuration stored under
+/// `DataKey::TreasurySplit`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreasurySplitConfig {
+    pub entries: soroban_sdk::Vec<TreasurySplitEntry>,
+}
+
+/// Emitted when the admin configures a new treasury split.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasurySplitConfiguredEvent {
+    pub admin: Address,
+    pub entries: soroban_sdk::Vec<TreasurySplitEntry>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted per beneficiary when protocol fees are routed through a treasury
+/// split during a successful charge.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeRoutedEvent {
+    pub subscription_id: u32,
+    pub beneficiary: Address,
+    pub token: Address,
+    pub fee_amount: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }

@@ -2359,38 +2359,8 @@ impl SubscriptionVault {
     ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
-        let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
-        let new_sub = queries::get_subscription(&env, subscription_id)?;
-
-        let _period_start = old_sub.last_payment_timestamp;
-        let _period_end = timestamp;
-
-        env.events().publish(
-            (types::TOPIC_CHARGED,),
-            SubscriptionChargedEvent {
-                subscription_id,
-                subscriber: old_sub.subscriber,
-                merchant: old_sub.merchant,
-                token: old_sub.token,
-                amount: old_sub.amount,
-                lifetime_charged: new_sub.lifetime_charged,
-                timestamp,
-                period_start: old_sub.last_payment_timestamp,
-                period_end: timestamp,
-                salt: {
-                    let mut salt_buf = [0u8; 20];
-                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
-                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
-                    salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
-                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
-                    env.crypto().sha256(&salt_input).into()
-                },
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
-            },
-        );
-        Ok(result)
+        charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)
     }
 
     /// Charge metered usage.
@@ -3283,6 +3253,33 @@ impl SubscriptionVault {
         admin::get_protocol_fee_bps(&env)
     }
 
+    /// Set a multi-beneficiary treasury split for protocol fee routing.
+    ///
+    /// When configured, protocol fees are distributed across the listed
+    /// beneficiaries according to their basis-point allocation instead of
+    /// being sent to the single treasury address.
+    ///
+    /// The sum of all `bps` values must equal exactly 10_000. Duplicate
+    /// beneficiaries are rejected. Each entry must have `bps > 0`.
+    pub fn set_treasury_split(
+        env: Env,
+        admin: Address,
+        entries: Vec<types::TreasurySplitEntry>,
+    ) -> Result<(), Error> {
+        admin::set_treasury_split(&env, admin, entries)
+    }
+
+    /// Get the configured treasury split, or `None` if not set.
+    pub fn get_treasury_split(env: Env) -> Option<types::TreasurySplitConfig> {
+        admin::get_treasury_split(&env)
+    }
+
+    /// Clear the treasury split, reverting protocol fees to the single
+    /// treasury address. Admin only.
+    pub fn clear_treasury_split(env: Env, admin: Address) -> Result<(), Error> {
+        admin::clear_treasury_split(&env, admin)
+    }
+
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
 
     /// Submit a governance proposal for a privileged action.
@@ -3612,5 +3609,7 @@ mod test_merchant_vacation;
 mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
+#[cfg(test)]
+mod test_treasury_split;
 #[cfg(test)]
 mod test_operator;

@@ -96,3 +96,61 @@ The total `discount = gross - discounted`. If the discount exceeds the gross cha
 ### Validation at Charge Time
 
 Coupons must match the settlement token of the subscription. At charge time, if a bound coupon has been explicitly revoked by the merchant, or if its `expires_at` timestamp has passed, the discount is **silently skipped** (the charge proceeds at the full gross amount). This intentional design ensures that invalid/lapsed coupons do not cause billing outages for active subscriptions.
+
+## Multi-Beneficiary Treasury Split
+
+Real deployments commonly split protocol fees across several beneficiaries
+(foundation, insurance fund, referrer rebates). The treasury split feature
+lets the admin reroute fees without changing user contracts.
+
+### Configuration (admin only)
+
+Call `set_treasury_split(admin, entries)` where `entries` is a `Vec<TreasurySplitEntry>`.
+Each entry contains:
+
+- `beneficiary` — address that receives a share of the protocol fee.
+- `bps` — share in basis points (must be > 0).
+
+### Validation rules
+
+The function rejects the configuration if:
+
+- The list is empty.
+- Any entry has `bps == 0`.
+- The sum of all `bps` values is **not** exactly `10_000`.
+- Two or more entries share the same `beneficiary` address.
+- The caller is not the admin.
+
+All validation failures return `Error::InvalidFeeBips`.
+
+### Fee distribution
+
+When a treasury split is configured, the protocol fee is distributed across
+beneficiaries using integer math:
+
+```
+share_i = fee * bps_i / 10_000   (floor division for all but the last entry)
+last    = fee - sum(share_0..n-1)  (receives the rounding remainder)
+```
+
+The rounding remainder from non-divisible amounts is assigned to the **last**
+beneficiary to ensure `sum(allocations) == fee_amount` exactly.
+
+### Backward compatibility
+
+- When no treasury split is configured, fees route to the single `DataKey::Treasury` address as before.
+- The single-treasury path is **not** affected by the split feature.
+- `clear_treasury_split(admin)` reverts to single-treasury routing.
+
+### Events
+
+`TreasurySplitConfiguredEvent` is emitted when `set_treasury_split` is called.
+
+`ProtocolFeeRoutedEvent` is emitted per beneficiary during each charge where
+fees are split.
+
+### Storage
+
+The split is stored under `DataKey::TreasurySplit` (discriminant 84) in
+instance storage. It takes precedence over the single `DataKey::Treasury`
+address when both are present.

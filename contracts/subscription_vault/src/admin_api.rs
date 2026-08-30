@@ -86,6 +86,9 @@
 //! | `queue_treasury_change` | [`crate::admin::queue_treasury_change`] |
 //! | `execute_treasury_change` | [`crate::admin::execute_treasury_change`] |
 //! | `cancel_treasury_change` | [`crate::admin::cancel_treasury_change`] |
+//! | `set_treasury_split` | [`crate::admin::set_treasury_split`] |
+//! | `get_treasury_split` | [`crate::admin::get_treasury_split`] |
+//! | `clear_treasury_split` | [`crate::admin::clear_treasury_split`] |
 //!
 //! ## Auto-pause & Subscriber Create Cap
 //! | Entrypoint | Delegate |
@@ -155,14 +158,15 @@
 // contract entrypoints remain in `lib.rs` under `#[contractimpl]`.
 
 pub use crate::admin::{
-    add_accepted_token, cancel_treasury_change, do_batch_charge, do_cancel_admin_proposal,
-    do_claim_admin_role, do_get_admin, do_init, do_migrate, do_propose_admin,
-    do_recover_stranded_funds, do_rotate_admin, do_set_auto_pause_threshold, do_set_grace_period,
-    do_set_min_topup, do_set_subscriber_create_cap, execute_treasury_change, get_admin_proposal,
-    get_auto_pause_threshold, get_fee_token, get_grace_period, get_min_topup,
-    get_protocol_fee_bps, get_schema_version, get_subscriber_create_cap, list_accepted_tokens,
-    migrate_config_to_persistent, queue_treasury_change, remove_accepted_token, set_fee_token,
-    set_protocol_fee,
+    add_accepted_token, cancel_treasury_change, clear_treasury_split, do_batch_charge,
+    do_cancel_admin_proposal, do_claim_admin_role, do_get_admin, do_init, do_migrate,
+    do_propose_admin, do_recover_stranded_funds, do_rotate_admin, do_set_auto_pause_threshold,
+    do_set_grace_period, do_set_min_topup, do_set_subscriber_create_cap, execute_treasury_change,
+    get_admin_proposal, get_auto_pause_threshold, get_fee_token, get_grace_period, get_min_topup,
+    get_protocol_fee_bps, get_schema_version, get_subscriber_create_cap, get_treasury_split,
+    list_accepted_tokens, migrate_config_to_persistent, queue_treasury_change,
+    remove_accepted_token, set_fee_token, set_protocol_fee, set_treasury_split,
+    validate_treasury_split,
 };
 pub use crate::blocklist::{
     do_add_to_blocklist, do_remove_from_blocklist, get_blocklist_entry, is_blocklisted,
