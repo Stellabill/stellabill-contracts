@@ -66,14 +66,16 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    AutoRenewToggledEvent, BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error,
-    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent,
-    LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
-    PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent,
-    ReferralAttributedEvent, SubscriberCreateWindow, SubscriberEmergencyWithdrawEvent,
-    SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
-    SubscriptionCancelUnscheduledEvent, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
-    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
+    AutoRenewToggledEvent, BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS,
+    CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, EmergencyWithdrawIntent, Error,
+    FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    RateLimitTrippedEvent, ReferralAttributedEvent, SubscriberCreateWindow,
+    SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent, Subscription,
+    SubscriptionCancelScheduledEvent, SubscriptionCancelUnscheduledEvent,
+    SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits,
     UsageLimitsConfiguredEvent, TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED,
     TOPIC_ONE_OFF_CHARGED, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
@@ -1331,7 +1333,7 @@ pub fn do_schedule_cancel(
 ///
 /// # Reentrancy
 /// Safe: only updates contract storage, no external calls.
-pub fn do_set_subscription_expiration_ledger(
+pub fn do_set_sub_exp_ledger(
     env: &Env,
     subscription_id: u32,
     authorizer: Address,
@@ -1888,7 +1890,7 @@ fn bulk_deposit_one(
 
     let now = env.ledger().timestamp();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         return crate::types::BulkDepositResult {
             subscription_id,
             success: false,
@@ -2640,7 +2642,7 @@ pub fn do_deposit_funds_on_behalf(
     }
 
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -3185,6 +3187,7 @@ pub fn do_create_subscription_from_plan(
             interval_seconds: plan.interval_seconds,
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
+            expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },

@@ -42,7 +42,7 @@
 //! | `schedule_cancel` | [`crate::subscription::do_schedule_cancel`] |
 //! | `unschedule_cancel` | [`crate::subscription::do_unschedule_cancel`] |
 //! | `set_auto_renew` | [`crate::subscription::do_set_auto_renew`] |
-//! | `set_subscription_expiration_ledger` | [`crate::subscription::do_set_subscription_expiration_ledger`] |
+//! | `set_sub_exp_ledger` | [`crate::subscription::do_set_sub_exp_ledger`] |
 //! | `pause_subscription` | [`crate::subscription::do_pause_subscription`] |
 //! | `resume_subscription` | [`crate::subscription::do_resume_subscription`] |
 //! | `cleanup_subscription` | [`crate::subscription::do_cleanup_subscription`] |
@@ -170,7 +170,7 @@ pub use crate::subscription::{
     do_revoke_delegated_payer, do_schedule_cancel, do_set_auto_renew,
     do_set_global_cap_default, do_set_merchant_cap_default, do_set_merchant_max_subs,
     do_set_plan_max_active_subs, do_set_subscriber_active_cap, do_set_subscriber_credit_limit,
-    do_set_subscription_expiration_ledger, do_unschedule_cancel, do_update_plan_template,
+    do_set_sub_exp_ledger, do_unschedule_cancel, do_update_plan_template,
     do_update_subscription_cap, do_veto_transfer, do_withdraw_subscriber_funds,
     get_global_cap_default, get_merchant_cap_default, get_plan_template,
     get_split_payees, get_subscriber_active_cap, get_subscriber_active_count,
