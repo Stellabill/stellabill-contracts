@@ -111,7 +111,7 @@ fn view_get_subscription_succeeds_while_stopped() {
     client.enable_emergency_stop(&admin);
     assert!(client.get_emergency_stop_status());
 
-    let sub = client.get_subscription(&sub_id).expect("get_subscription failed under stop");
+    let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.subscriber, subscriber);
     assert_eq!(sub.merchant, merchant);
     assert_eq!(sub.amount, AMOUNT);
@@ -123,9 +123,7 @@ fn view_estimate_topup_succeeds_while_stopped() {
     let (_env, client, _token, admin, _subscriber, _merchant, sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let topup = client
-        .estimate_topup_for_intervals(&sub_id, &1)
-        .expect("estimate_topup failed under stop");
+    let topup = client.estimate_topup_for_intervals(&sub_id, &1);
     assert_eq!(topup, 0i128);
 }
 
@@ -134,9 +132,7 @@ fn view_get_next_charge_info_succeeds_while_stopped() {
     let (_env, client, _token, admin, _subscriber, _merchant, sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let info = client
-        .get_next_charge_info(&sub_id)
-        .expect("get_next_charge_info failed under stop");
+    let info = client.get_next_charge_info(&sub_id);
     assert!(info.is_charge_expected);
     assert_eq!(info.amount, AMOUNT);
 }
@@ -146,9 +142,7 @@ fn view_get_cap_info_succeeds_while_stopped() {
     let (_env, client, _token, admin, _subscriber, _merchant, sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let cap = client
-        .get_cap_info(&sub_id)
-        .expect("get_cap_info failed under stop");
+    let cap = client.get_cap_info(&sub_id);
     assert!(!cap.cap_reached);
     assert_eq!(cap.lifetime_cap, None);
 }
@@ -176,9 +170,7 @@ fn view_get_subscriptions_by_merchant_while_stopped() {
     let (_env, client, _token, admin, _subscriber, merchant, sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let page = client
-        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32)
-        .expect("get_subscriptions_by_merchant failed");
+    let page = client.get_subscriptions_by_merchant(&merchant, &0u32, &10u32);
     assert_eq!(page.len(), 1u32);
     assert_eq!(page.get(0).unwrap().amount, AMOUNT);
     let _ = sub_id;
@@ -189,9 +181,7 @@ fn view_get_subscriptions_by_token_while_stopped() {
     let (_env, client, token, admin, _subscriber, _merchant, _sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let page = client
-        .get_subscriptions_by_token(&token, &0u32, &10u32)
-        .expect("get_subscriptions_by_token failed");
+    let page = client.get_subscriptions_by_token(&token, &0u32, &10u32);
     assert_eq!(page.len(), 1u32);
 }
 
@@ -200,9 +190,7 @@ fn view_list_subscriptions_by_subscriber_while_stopped() {
     let (_env, client, _token, admin, subscriber, _merchant, sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("list_subscriptions_by_subscriber failed");
+    let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 1u32);
     assert_eq!(page.subscription_ids.get(0).unwrap(), sub_id);
 }
@@ -228,8 +216,8 @@ fn view_config_views_while_stopped() {
     let (_env, client, _token, admin, _subscriber, _merchant, _sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    assert_eq!(client.get_admin().unwrap(), admin);
-    assert!(client.get_min_topup().is_ok());
+    assert_eq!(client.get_admin(), admin);
+    assert!(client.get_min_topup() > 0);
     assert!(client.get_emergency_stop_status());
 }
 
@@ -289,9 +277,7 @@ fn view_counts_empty_state() {
 fn view_get_subscriptions_by_merchant_empty_state() {
     let (env, client, _token, _admin) = setup_empty();
     let merchant = Address::generate(&env);
-    let page = client
-        .get_subscriptions_by_merchant(&merchant, &0u32, &10u32)
-        .expect("should return Ok with empty list");
+    let page = client.get_subscriptions_by_merchant(&merchant, &0u32, &10u32);
     assert_eq!(page.len(), 0u32);
 }
 
@@ -299,9 +285,7 @@ fn view_get_subscriptions_by_merchant_empty_state() {
 fn view_get_subscriptions_by_token_empty_state() {
     let (env, client, token, _admin) = setup_empty();
     let _ = env;
-    let page = client
-        .get_subscriptions_by_token(&token, &0u32, &10u32)
-        .expect("should return Ok with empty list");
+    let page = client.get_subscriptions_by_token(&token, &0u32, &10u32);
     assert_eq!(page.len(), 0u32);
 }
 
@@ -309,9 +293,7 @@ fn view_get_subscriptions_by_token_empty_state() {
 fn view_list_subscriptions_by_subscriber_empty_state() {
     let (env, client, _token, _admin) = setup_empty();
     let subscriber = Address::generate(&env);
-    let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("should return Ok with empty page");
+    let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 0u32);
     assert_eq!(page.next_start_id, None);
 }
@@ -399,9 +381,7 @@ fn view_counts_pre_init_return_zero() {
 fn view_list_by_subscriber_pre_init_returns_empty() {
     let (env, client) = setup_pre_init();
     let subscriber = Address::generate(&env);
-    let page = client
-        .list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32)
-        .expect("pre-init list should return Ok empty");
+    let page = client.list_subscriptions_by_subscriber(&subscriber, &0u32, &10u32);
     assert_eq!(page.subscription_ids.len(), 0u32);
 }
 
@@ -418,7 +398,7 @@ fn view_get_admin_while_stopped_does_not_aid_bypass() {
     let (_env, client, token, admin, subscriber, merchant, _sub_id) = setup_full();
     client.enable_emergency_stop(&admin);
 
-    let reported_admin = client.get_admin().expect("get_admin failed");
+    let reported_admin = client.get_admin();
     assert_eq!(reported_admin, admin);
 
     let result = client.try_create_subscription(

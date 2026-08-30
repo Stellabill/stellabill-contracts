@@ -54,6 +54,7 @@ fn setup() -> (
         &None,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
 );
 
     // Deposit funds
@@ -144,6 +145,7 @@ fn test_cancel_with_zero_balance_refunds_nothing() {
         &None,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
 );
 
     // Cancel with zero balance — should succeed with no refund
@@ -187,6 +189,7 @@ fn test_cancel_refunds_prepaid_balance() {
         &None,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
 );
     client.deposit_funds(&sub_id, &subscriber, &deposit, &None);
 

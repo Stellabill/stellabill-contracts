@@ -63,6 +63,7 @@ fn make_funded_subscription(t: &TestEnv, merchant: &Address, usage_enabled: bool
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     let mut sub = t.client.get_subscription(&id);
     sub.prepaid_balance = PREPAID;

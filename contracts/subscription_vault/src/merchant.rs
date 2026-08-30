@@ -29,10 +29,6 @@ use crate::types::{
     MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE,
-    MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantWhitelistModeEvent,
-    MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
-    PlanTemplate, ScheduledPayoutEvent, TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
@@ -1739,7 +1735,7 @@ pub fn register_sub_account(
     merchant.require_auth();
 
     // Reject empty labels
-    let label_str = label.to_str(env);
+    let label_str = label.to_string();
     if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }

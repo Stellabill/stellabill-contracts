@@ -42,7 +42,7 @@
 //! | `schedule_cancel` | [`crate::subscription::do_schedule_cancel`] |
 //! | `unschedule_cancel` | [`crate::subscription::do_unschedule_cancel`] |
 //! | `set_auto_renew` | [`crate::subscription::do_set_auto_renew`] |
-//! | `set_subscription_expiration_ledger` | [`crate::subscription::do_set_subscription_expiration_ledger`] |
+//! | `set_sub_expiration_ledger` | [`crate::subscription::do_set_subscription_expiration_ledger`] |
 //! | `pause_subscription` | [`crate::subscription::do_pause_subscription`] |
 //! | `resume_subscription` | [`crate::subscription::do_resume_subscription`] |
 //! | `cleanup_subscription` | [`crate::subscription::do_cleanup_subscription`] |

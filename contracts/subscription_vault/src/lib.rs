@@ -631,7 +631,8 @@ pub mod operator {
 
 /// Metadata: per-subscription key-value annotations.
 pub use metadata::*;
-pub use subscription::compute_cancel_refund;
+pub use governance::calculate_quorum;
+pub use subscription::{compute_cancel_refund, extend_subscription_ttl};
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
@@ -642,7 +643,8 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    is_known_instance_discriminant,    AcceptedToken, AccruedTotals, AdminConfigChangedEvent, AdminProposal,
+    AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
     BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
@@ -653,7 +655,7 @@ pub use types::{
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
-    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent,
+    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent, MerchantVacation,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleLivenessEvent,
     OracleConfig, OracleKind, OraclePrice, OperatorRemovedEvent, OperatorSetEvent,
@@ -663,33 +665,15 @@ pub use types::{
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason,
     ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent,
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
-    SplitChargeEvent, SplitPayees,
+    SplitChargeEvent, SplitPayees, SubAccountCreatedEvent, SubAccountWithdrawEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
-    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
-    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
-    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
-    BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
-    BillingStatementsPage, BulkSubscriptionResult, CapInfo, Coupon, DisputeEscrowLedger,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantBalanceEntry,
-    MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
-    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OperatorRemovedEvent,
-    OperatorSetEvent, OracleConfig, OracleLivenessEvent, OraclePrice, PartialRefundEvent,
-    PayoutSchedule, PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest,
-    PrepaidQueryResult, ProtocolFeeChargedEvent, ReconciliationProof,
-    ReconciliationSummaryPage, SubAccountCreatedEvent, SubAccountWithdrawEvent,
-    RecoveryEvent, RecoveryReason, ScheduledPayoutEvent, SchemaMigratedEvent,
-    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
     SubscriptionStatus, SubscriptionSummary,
     TagAllowlistUpdatedEvent, TokenEarnings, TokenLiabilities,
     TokenReconciliationSnapshot, UsageChargeResult, UsageLimits, UsageState, UsageStatementEvent,
-    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, EVENT_SCHEMA_VERSION, MAX_MERCHANT_TAGS,
+    DEFAULT_ALLOWED_OPS, DISPUTE_WINDOW_SECS, MAX_MERCHANT_TAGS,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND, OP_WITHDRAW,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
@@ -1520,6 +1504,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
+            None, // expires_at_ledger (not exposed on split-payee creation)
+            None, // sub_account_label (not exposed on split-payee creation)
         )?;
 
         let split = SplitPayees {
@@ -1540,6 +1526,7 @@ impl SubscriptionVault {
                 interval_seconds,
                 lifetime_cap,
                 expires_at,
+                expires_at_ledger: None,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1954,7 +1941,7 @@ impl SubscriptionVault {
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_subscription_expiration_ledger(
+    pub fn set_sub_expiration_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -2522,6 +2509,39 @@ impl SubscriptionVault {
     /// Returns `true` if the merchant is currently within a vacation window.
     pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
         merchant::is_merchant_in_vacation(&env, &merchant, now)
+    }
+
+    // ── Merchant allowlist mode ────────────────────────────────────────────────
+
+    /// Enable or disable merchant allowlist mode (admin only).
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Returns `true` if merchant allowlist mode is enabled.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Approve a merchant under allowlist mode (admin only).
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a merchant approval under allowlist mode (admin only).
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
+    /// Returns `true` if the merchant is approved under allowlist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Set the consecutive-failure auto-pause threshold (admin only).
+    /// `0` disables auto-pause.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
     }
 
     /// direct merchant refund to subscriber.
@@ -3574,9 +3594,6 @@ mod test_subscription_transfer;
 /// and document the ABI change in the PR description.
 #[cfg(test)]
 mod test_merchant_whitelist;
-
-#[cfg(test)]
-mod test_split_billing;
 
 #[cfg(test)]
 mod test_split_billing;
