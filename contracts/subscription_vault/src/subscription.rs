@@ -3121,7 +3121,10 @@ pub fn do_create_subscription_from_plan(
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
-    let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+    if id == crate::MAX_SUBSCRIPTION_ID {
+        return Err(Error::SubscriptionLimitReached);
+    }
+    let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
     crate::admin::write_config(env, &DataKey::NextId, &next_id);
 
     let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
