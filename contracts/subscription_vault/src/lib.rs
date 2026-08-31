@@ -3128,7 +3128,11 @@ impl SubscriptionVault {
         key: String,
         value: String,
     ) -> Result<(), Error> {
-        validation::reject_empty_string(&key)?;
+        // Value must not be empty or whitespace-only; an empty value is a
+        // degenerate write that should not reach storage.
+        // Key emptiness / length is handled in apply_metadata_value which
+        // returns MetadataKeyTooLong (3005) for an empty or over-length key,
+        // giving callers a precise, actionable error code.
         validation::reject_empty_string(&value)?;
         metadata::set_metadata(&env, subscription_id, &authorizer, key, value)
     }
