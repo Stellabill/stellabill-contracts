@@ -1485,7 +1485,7 @@ fn test_blocklist_rejects_duplicate_add_and_preserves_original_entry() {
 #[test]
 fn test_blocklist_add_and_remove_events_capture_reason_variants() {
     let test_env = TestEnv::default();
-    test_env.set_timestamp(T0);
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
     let subscriber = Address::generate(&test_env.env);
 
     let empty_reason = Some(String::from_str(&test_env.env, ""));
@@ -1680,6 +1680,509 @@ fn test_remove_from_blocklist_requires_admin_and_existing_entry() {
         .client
         .try_remove_from_blocklist(&merchant, &subscriber);
     assert_eq!(unauthorized, Err(Ok(Error::Forbidden)));
+}
+
+// -- Blocklist enforcement: pause / cancel / resume --------------------------
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_pause() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-pause is blocked.
+    assert_eq!(
+        test_env.client.try_pause_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_pause_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still pause a blocklisted subscriber's subscription.
+    test_env.client.pause_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
+}
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_cancel() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-cancel is blocked.
+    assert_eq!(
+        test_env.client.try_cancel_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_cancel_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still cancel a blocklisted subscriber's subscription.
+    test_env.client.cancel_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_resume() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // Pause first so resume is meaningful.
+    test_env.client.pause_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-resume is blocked.
+    assert_eq!(
+        test_env.client.try_resume_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_resume_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.pause_subscription(&id, &merchant);
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still resume a blocklisted subscriber's subscription.
+    test_env.client.resume_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist enforcement: deposit / charge ----------------------------------
+
+#[test]
+fn test_blocklist_blocks_subscriber_deposit() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Deposit is blocked for blocklisted subscriber.
+    assert_eq!(
+        test_env
+            .client
+            .try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_blocks_charge_when_subscriber_blocklisted() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // Seed enough balance for charging.
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Advance past interval so charge is eligible.
+    test_env.jump(INTERVAL + 1);
+
+    // Charge is blocked for blocklisted subscriber.
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
+}
+
+#[test]
+fn test_blocklist_blocks_charge_when_merchant_blocklisted() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    // Blocklist the merchant.
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &merchant, &None::<String>);
+
+    test_env.jump(INTERVAL + 1);
+
+    // Charge is blocked when merchant is blocklisted.
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
+}
+
+// -- Blocklist: subscriber retains withdrawal rights --------------------------
+
+#[test]
+fn test_blocklisted_subscriber_can_still_withdraw() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    // Cancel first — withdrawal only works on cancelled subscriptions.
+    test_env.client.cancel_subscription(&id, &subscriber);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Withdrawal of remaining prepaid balance is allowed (preventive, not punitive).
+    let before = test_env.stellar_token_client().balance(&subscriber);
+    test_env.client.withdraw_subscriber_funds(&id, &subscriber);
+    let after = test_env.stellar_token_client().balance(&subscriber);
+    assert!(after > before);
+}
+
+// -- Blocklist: block-after-creation preserves existing subscription -----------
+
+#[test]
+fn test_blocklist_after_creation_preserves_subscription_balance() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber, &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assertions::assert_prepaid_balance(&test_env.client, &id, 50_000_000i128);
+
+    // Blocklist after creation — balance is preserved.
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &Some(String::from_str(&test_env.env, "fraud")));
+
+    let sub = test_env.client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, 50_000_000i128);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: entry metadata -----------------------------------------------
+
+#[test]
+fn test_blocklist_entry_stores_added_by_and_added_at() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let reason = Some(String::from_str(&test_env.env, "chargeback"));
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &reason);
+
+    let entry = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry.subscriber, subscriber);
+    assert_eq!(entry.added_by, test_env.admin);
+    assert_eq!(entry.added_at, T0);
+    assert_eq!(entry.reason, reason);
+}
+
+#[test]
+fn test_blocklist_entry_none_reason() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    let entry = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry.reason, None);
+    assert_eq!(entry.added_at, T0);
+}
+
+// -- Blocklist: unrelated addresses unaffected -------------------------------
+
+#[test]
+fn test_blocklist_unrelated_address_unaffected() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber_a = Address::generate(&test_env.env);
+    let subscriber_b = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber_a, &None::<String>);
+
+    assert_eq!(test_env.client.is_blocklisted(&subscriber_a), true);
+    assert_eq!(test_env.client.is_blocklisted(&subscriber_b), false);
+
+    // subscriber_b can still create, deposit, etc.
+    let id = test_env.client.create_subscription(
+        &subscriber_b,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: admin can unblock and restore full access --------------------
+
+#[test]
+fn test_blocklist_unblock_restores_full_access() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Verify blocked.
+    assert_eq!(
+        test_env.client.try_create_subscription(
+            &subscriber,
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<u32>,
+        ),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+
+    // Unblock.
+    test_env
+        .client
+        .remove_from_blocklist(&test_env.admin, &subscriber);
+    assert_eq!(test_env.client.is_blocklisted(&subscriber), false);
+
+    // Full access restored.
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: duplicate-add preserves original entry ------------------------
+
+#[test]
+fn test_blocklist_duplicate_add_rejected_preserves_original() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+
+    let first_reason = Some(String::from_str(&test_env.env, "chargeback"));
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &first_reason);
+
+    let entry_before = test_env.client.get_blocklist_entry(&subscriber);
+
+    let duplicate_reason = Some(String::from_str(&test_env.env, "retry"));
+    let result = test_env
+        .client
+        .try_add_to_blocklist(&test_env.admin, &subscriber, &duplicate_reason);
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+
+    // Original entry is preserved.
+    let entry_after = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry_after.added_by, entry_before.added_by);
+    assert_eq!(entry_after.added_at, entry_before.added_at);
+    assert_eq!(entry_after.reason, entry_before.reason);
 }
 
 // -- Admin tests --------------------------------------------------------------

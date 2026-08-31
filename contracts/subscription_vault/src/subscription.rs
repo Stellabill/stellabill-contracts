@@ -1158,6 +1158,12 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
+    // Block self-cancel for blocklisted subscribers. Merchant/admin-initiated
+    // cancel remains allowed — the blocklist is preventive, not punitive.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
+    }
+
     // Reject double-cancellation of an already Cancelled subscription.
     if sub.status == SubscriptionStatus::Cancelled {
         return Err(Error::InvalidStatusTransition);
@@ -1514,6 +1520,12 @@ pub fn do_pause_subscription(
 
     if authorizer != sub.subscriber && authorizer != sub.merchant {
         return Err(Error::Forbidden);
+    }
+
+    // Block self-pause for blocklisted subscribers. Merchant/admin-initiated
+    // pause remains allowed — the blocklist is preventive, not punitive.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
     // Idempotent: already paused — nothing to do, no event.
