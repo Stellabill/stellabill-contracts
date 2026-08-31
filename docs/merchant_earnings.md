@@ -52,8 +52,8 @@ MerchantBalance[(merchant, token)]
 ```
 
 `get_reconciliation_snapshot(merchant)` returns a `TokenReconciliationSnapshot` per token
-where `computed_balance` is exactly the right-hand side. Indexers can cross-check it against
-`get_merchant_balance_by_token(merchant, token)` to detect any drift.
+where `computed_balance` is exactly the right-hand side. Consumers and tests should compare
+that value with `get_merchant_balance_by_token(merchant, token)` to detect accounting drift.
 
 ## Protocol Fee Handling
 
@@ -127,11 +127,40 @@ filter withdrawal events per token without decoding the payload.
    withdrawals. The difference `token.balance(contract) − TotalAccounted[(token)]` is the
    recoverable stranded balance.
 6. **Reconciliation**: `MerchantBalance = total_accruals − total_withdrawals − total_refunds`.
-   This must always be true and is verified by `get_reconciliation_snapshot`.
-7. **Property-test invariant**: random sequences of charges, withdrawals, and cancellations
-   are exercised by `prop_merchant_earnings_sum_equals_total_accounted` so that the sum of
-   all merchant-bucket balances for a token remains equal to `TotalAccounted[(token)]` after
-   every mutation.
+   This must always be true. The reconciliation snapshot exposes the same arithmetic as
+   `computed_balance`, allowing a direct comparison with the stored merchant balance.
+
+## Invariant Test Harness
+
+`contracts/subscription_vault/tests/merchant_invariant.rs` drives **256 deterministic,
+seeded randomized sequences**. Each sequence mixes:
+
+- interval, usage, and one-off charges;
+- deposits and ledger-time advancement;
+- partial and full withdrawals, including zero-amount withdrawal attempts;
+- partial and full refunds, including refunds against empty balances; and
+- operations interleaved across three merchants and five subscribers.
+
+After every operation, every touched merchant is checked against:
+
+```
+stored MerchantBalance
+    == accruals.interval + accruals.usage + accruals.one_off
+     − withdrawals
+     − refunds
+```
+
+The test also validates the reconciliation snapshot's accrual, withdrawal, refund, and
+computed-balance fields. Invalid operations are expected to fail without changing the
+ledger, including zero withdrawals, refunds without prior accruals, and duplicate refunds.
+
+The randomized harness uses a fixed master seed (`0x9360_2026_08_31`) so the complete run is
+reproducible. If a sequence fails, its sequence number and derived seed are appended to
+`tests/fixtures/merchant_invariant_failures.txt` for regression replay.
+
+The multi-actor integration test independently covers the happy path of two interval charges,
+a partial withdrawal, a merchant refund, and subscription cancellation while checking the
+same reconciliation equation after each accounting mutation.
 
 ## Storage Layout
 
