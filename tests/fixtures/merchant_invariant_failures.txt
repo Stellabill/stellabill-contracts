@@ -1,0 +1,5 @@
+# Merchant earnings invariant regression seeds
+# Format: sequence=<0-based sequence index> seed=<u64>
+# This file is appended by merchant_invariant_256_seeded_sequences when a
+# deterministic sequence exposes accounting drift. Re-run the recorded seed
+# with run_sequence(seed) to reproduce the failure locally.
