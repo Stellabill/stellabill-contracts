@@ -22,6 +22,31 @@ fn create_token_contract<'a>(
     )
 }
 
+fn assert_merchant_reconciliation(
+    vault: &SubscriptionVaultClient,
+    merchant: &Address,
+    token: &TokenClient,
+) {
+    let balance = vault.get_merchant_balance_by_token(merchant, &token.address);
+    let earnings = vault.get_merchant_token_earnings(merchant, &token.address);
+    let total_accruals = earnings.accruals.interval
+        + earnings.accruals.usage
+        + earnings.accruals.one_off;
+    let computed_balance = total_accruals - earnings.withdrawals - earnings.refunds;
+
+    assert_eq!(balance, computed_balance);
+
+    let snapshot = vault
+        .get_reconciliation_snapshot(merchant)
+        .into_iter()
+        .find(|entry| entry.token == token.address)
+        .expect("merchant token missing from reconciliation snapshot");
+    assert_eq!(snapshot.total_accruals, total_accruals);
+    assert_eq!(snapshot.total_withdrawals, earnings.withdrawals);
+    assert_eq!(snapshot.total_refunds, earnings.refunds);
+    assert_eq!(snapshot.computed_balance, computed_balance);
+}
+
 #[test]
 fn test_multi_actor_e2e_flow() {
     let env = Env::default();
@@ -48,7 +73,7 @@ fn test_multi_actor_e2e_flow() {
     let grace_period = 3 * 24 * 60 * 60; // 3 days
 
     // Initialize the vault contract
-    vault.init(&token.address, &7, &admin, &min_topup, &grace_period); //
+    vault.init(&token.address, &7, &admin, &min_topup, &grace_period);
 
     // Initialize merchant config
     let redirect_url = soroban_sdk::String::from_str(&env, "https://example.com");
@@ -91,7 +116,6 @@ fn test_multi_actor_e2e_flow() {
     assert_eq!(vault.get_merchant_balance(&merchant), 0);
 
     // Step 3: `charge` (Simulating Time Passing)
-    // First charge
     env.ledger()
         .set_timestamp(env.ledger().timestamp() + interval_seconds + 1);
     vault.charge_subscription(&sub_id, &None);
@@ -99,7 +123,8 @@ fn test_multi_actor_e2e_flow() {
     let sub_state = vault.get_subscription(&sub_id);
     assert_eq!(sub_state.prepaid_balance, deposit_amount - amount);
     assert_eq!(vault.get_merchant_balance(&merchant), amount);
-    assert_eq!(token.balance(&vault_id), deposit_amount); // Total tokens in vault remains the same
+    assert_eq!(token.balance(&vault_id), deposit_amount);
+    assert_merchant_reconciliation(&vault, &merchant, &token);
 
     // Second charge
     env.ledger()
@@ -110,6 +135,7 @@ fn test_multi_actor_e2e_flow() {
     assert_eq!(sub_state.prepaid_balance, deposit_amount - 2 * amount);
     assert_eq!(vault.get_merchant_balance(&merchant), 2 * amount);
     assert_eq!(token.balance(&vault_id), deposit_amount);
+    assert_merchant_reconciliation(&vault, &merchant, &token);
 
     // Step 4: `withdraw_merchant_funds` (Partial Withdrawal)
     let partial_withdraw = 3_000_000;
@@ -121,8 +147,19 @@ fn test_multi_actor_e2e_flow() {
         2 * amount - partial_withdraw
     );
     assert_eq!(token.balance(&vault_id), deposit_amount - partial_withdraw);
+    assert_merchant_reconciliation(&vault, &merchant, &token);
 
-    // Step 5: `cancel_subscription` Ã¢â‚¬â€ automatically refunds remaining prepaid balance
+    // Refund part of the merchant's remaining balance. This exercises the
+    // refunds leg of the reconciliation equation independently of cancellation.
+    let merchant_refund = 1_000_000;
+    vault.merchant_refund(&merchant, &subscriber, &token.address, &merchant_refund);
+    assert_eq!(
+        vault.get_merchant_balance(&merchant),
+        2 * amount - partial_withdraw - merchant_refund
+    );
+    assert_merchant_reconciliation(&vault, &merchant, &token);
+
+    // Step 5: `cancel_subscription` — automatically refunds remaining prepaid balance
     let subscriber_balance_before_cancel = token.balance(&subscriber);
     let vault_balance_before_cancel = token.balance(&vault_id);
     let sub_before_cancel = vault.get_subscription(&sub_id);
@@ -145,9 +182,11 @@ fn test_multi_actor_e2e_flow() {
         vault_balance_before_cancel - expected_refund
     );
 
-    // Vault balance should now exactly match the merchant's unwithdrawn funds
+    // Vault balance should now exactly match the merchant's unwithdrawn funds,
+    // and the merchant accounting equation must still reconcile.
     assert_eq!(
         token.balance(&vault_id),
         vault.get_merchant_balance(&merchant)
     );
+    assert_merchant_reconciliation(&vault, &merchant, &token);
 }
