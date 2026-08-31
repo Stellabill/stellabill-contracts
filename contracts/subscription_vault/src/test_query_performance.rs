@@ -127,6 +127,11 @@ fn create_mock_sub(env: &Env, subscriber: &Address, token: &Address) -> Subscrip
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     }
 }
 

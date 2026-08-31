@@ -52,13 +52,40 @@ use soroban_sdk::{Address, Env, String, Symbol};
 /// 1. If a per-merchant override is set (`DataKey::MerchantFeeBps`), use it.
 /// 2. Otherwise fall back to the global `DataKey::FeeBps`.
 ///
-/// A zero return value means no fee is collected.
+/// A zero return value means no fee is collected. `0` is a first-class value
+/// (not a separate code path later): the split helper short-circuits to
+/// `(gross, 0)` and no `ProtocolFeeChargedEvent` is emitted.
 #[inline(always)]
-fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
+pub(crate) fn route_fee_bps(env: &Env, merchant: &soroban_sdk::Address) -> u32 {
     if let Some(override_bps) = crate::merchant::get_merchant_fee_override_bps(env, merchant) {
         return override_bps;
     }
     crate::admin::get_protocol_fee_bps(env)
+}
+
+/// Split `gross` into `(merchant_net, treasury_fee)` using floor division.
+///
+/// ```text
+/// fee = gross * fee_bps / 10_000
+/// net = gross - fee
+/// ```
+///
+/// Returns `(gross, 0)` when the fee is disabled (`fee_bps == 0`) or when no
+/// treasury address is configured. That fallback is load-bearing: it prevents
+/// a configured rate with a missing treasury from silently destroying funds.
+///
+/// Invariant: `net + fee == gross` for every non-negative `gross`.
+#[inline(always)]
+pub(crate) fn split_protocol_fee(
+    gross: i128,
+    fee_bps: u32,
+    treasury_configured: bool,
+) -> (i128, i128) {
+    if fee_bps == 0 || !treasury_configured || gross <= 0 {
+        return (gross, 0);
+    }
+    let fee = gross * (fee_bps as i128) / 10_000i128;
+    (gross - fee, fee)
 }
 
 /// Emits a [`ChargeFailureEvent`] and returns `err` unchanged.
@@ -526,13 +553,14 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            let (fee_bps, treasury_opt) = if let Some(cfg) = admin_config {
-                (cfg.fee_bps, cfg.treasury.clone())
+            // Effective bps always comes from FeeBps (or the per-merchant
+            // override). The cached admin config is only used for the treasury
+            // address so a batch loop does not re-read instance storage.
+            let fee_bps = route_fee_bps(env, &sub.merchant);
+            let treasury_opt = if let Some(cfg) = admin_config {
+                cfg.treasury.clone()
             } else {
-                (
-                    crate::admin::get_protocol_fee_bps(env),
-                    crate::admin::get_treasury(env),
-                )
+                crate::admin::get_treasury(env)
             };
             // Determine the protocol fee and merchant credit.
             //
@@ -543,17 +571,8 @@ pub fn charge_one(
             // exactly in the charge token and prevents 1-unit dust from remaining
             // in the vault. Converted fees (fee-token overrides) are handled
             // separately and do not affect the source-token accounting invariant.
-            let (merchant_amount, fee_amount) = if fee_bps > 0 {
-                if let Some(ref _t) = treasury_opt {
-                    let fee = charge_amount * fee_bps as i128 / 10_000i128;
-                    let net = charge_amount - fee;
-                    (net, fee)
-                } else {
-                    (charge_amount, 0i128)
-                }
-            } else {
-                (charge_amount, 0i128)
-            };
+            let (merchant_amount, fee_amount) =
+                split_protocol_fee(charge_amount, fee_bps, treasury_opt.is_some());
 
             // Invariant sanity check: the split must sum exactly to the charged amount.
             // If this ever fails it indicates an arithmetic bug; keep as a debug
@@ -1177,16 +1196,8 @@ pub fn charge_usage_one(
             sub.prepaid_balance = new_balance;
             let fee_bps = route_fee_bps(env, &sub.merchant);
             let treasury_opt = crate::admin::get_treasury(env);
-            let (merchant_amount, fee_amount) = if fee_bps > 0 {
-                if let Some(ref _t) = treasury_opt {
-                    let fee = usage_amount * fee_bps as i128 / 10_000i128;
-                    (usage_amount - fee, fee)
-                } else {
-                    (usage_amount, 0i128)
-                }
-            } else {
-                (usage_amount, 0i128)
-            };
+            let (merchant_amount, fee_amount) =
+                split_protocol_fee(usage_amount, fee_bps, treasury_opt.is_some());
             credit_charge_payees(
                 env,
                 subscription_id,

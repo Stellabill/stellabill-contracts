@@ -358,6 +358,21 @@ Emitted when a subscriber withdraws funds from a cancelled subscription.
 
 ## Admin & Config Events
 
+### NonceConsumedEvent
+
+**Topic:** `("nonce_consumed", signer, domain)`
+
+Emitted when a replay-protection nonce is successfully consumed.
+
+**Fields:**
+
+- `signer`: Address — the account consuming the nonce
+- `domain`: u32 — the operation domain constant
+- `nonce`: u64 — the consumed nonce value
+- `timestamp`: u64
+
+---
+
 ### EmergencyStopEnabledEvent
 
 **Topic:** `("emergency_stop_enabled",)`
