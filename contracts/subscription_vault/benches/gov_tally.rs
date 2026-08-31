@@ -33,11 +33,8 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env, Map};
-use subscription_vault::{
-    governance::calculate_quorum,
-    types::{DataKey, Proposal, ProposalKind},
-};
+use soroban_sdk::{testutils::Address as _, Address, Env, Map, Vec};
+use subscription_vault::{calculate_quorum, DataKey, Proposal, ProposalKind};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -53,7 +50,7 @@ const DEFAULT_WEIGHT: u32 = 100;
 /// and return their addresses in a Vec.
 fn seed_guardians(env: &Env, count: u32, weight: u32) -> Vec<Address> {
     let mut guardians: Map<Address, u32> = Map::new(env);
-    let mut addresses = Vec::new(env);
+    let mut addresses: Vec<Address> = Vec::new(env);
     for _ in 0..count {
         let addr = Address::generate(env);
         guardians.set(addr.clone(), weight);
@@ -68,11 +65,11 @@ fn seed_guardians(env: &Env, count: u32, weight: u32) -> Vec<Address> {
 /// Remaining guardians in the passed slice abstain.
 fn build_proposal(env: &Env, guardians: &Vec<Address>, yes_count: u32, no_count: u32) -> Proposal {
     let mut votes: Map<Address, bool> = Map::new(env);
-    let end_yes = yes_count.min(guardians.len());
+    let end_yes = yes_count.min(guardians.len() as u32);
     for i in 0..end_yes {
         votes.set(guardians.get(i).unwrap(), true);
     }
-    let end_no = (yes_count.saturating_add(no_count)).min(guardians.len());
+    let end_no = (yes_count.saturating_add(no_count)).min(guardians.len() as u32);
     for i in end_yes..end_no {
         votes.set(guardians.get(i).unwrap(), false);
     }

@@ -752,7 +752,7 @@ fn test_set_ledger_expiration_by_subscriber() {
 
     let current_seq = env.ledger().sequence();
     let new_bound = current_seq + 50;
-    client.set_sub_exp_ledger(&sub_id, &subscriber, &Some(new_bound));
+    client.set_sub_expiration_ledger(&sub_id, &subscriber, &Some(new_bound));
 
     assert_eq!(
         client.get_subscription(&sub_id).expires_at_ledger,
@@ -783,7 +783,7 @@ fn test_set_ledger_expiration_by_merchant() {
 
     let current_seq = env.ledger().sequence();
     let new_bound = current_seq + 25;
-    client.set_sub_exp_ledger(&sub_id, &merchant, &Some(new_bound));
+    client.set_sub_expiration_ledger(&sub_id, &merchant, &Some(new_bound));
 
     assert_eq!(
         client.get_subscription(&sub_id).expires_at_ledger,
@@ -812,7 +812,7 @@ fn test_set_ledger_expiration_unauthorized_rejected() {
         &None::<soroban_sdk::Symbol>,
     );
 
-    let res = client.try_set_sub_exp_ledger(&sub_id, &stranger, &Some(100u32));
+    let res = client.try_set_sub_expiration_ledger(&sub_id, &stranger, &Some(100u32));
     assert_eq!(res, Err(Ok(Error::Forbidden)));
 }
 
@@ -839,7 +839,7 @@ fn test_set_ledger_expiration_rejects_past_or_equal() {
     let current_seq = env.ledger().sequence();
 
     // Equal to current → rejected.
-    let res = client.try_set_sub_exp_ledger(
+    let res = client.try_set_sub_expiration_ledger(
         &sub_id,
         &subscriber,
         &Some(current_seq),
@@ -849,7 +849,7 @@ fn test_set_ledger_expiration_rejects_past_or_equal() {
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 
     // Past → rejected.
-    let res = client.try_set_sub_exp_ledger(
+    let res = client.try_set_sub_expiration_ledger(
         &sub_id,
         &subscriber,
         &Some(current_seq.saturating_sub(1)),
@@ -883,7 +883,7 @@ fn test_set_ledger_expiration_none_clears_bound() {
         Some(current_seq + 100)
     );
 
-    client.set_sub_exp_ledger(&sub_id, &subscriber, &None::<u32>);
+    client.set_sub_expiration_ledger(&sub_id, &subscriber, &None::<u32>);
     assert_eq!(client.get_subscription(&sub_id).expires_at_ledger, None);
 
     // Even after the original bound would have been hit, the subscription
@@ -921,7 +921,7 @@ fn test_set_ledger_expiration_rejects_cancelled() {
         SubscriptionStatus::Cancelled
     );
 
-    let res = client.try_set_sub_exp_ledger(&sub_id, &subscriber, &Some(100u32));
+    let res = client.try_set_sub_expiration_ledger(&sub_id, &subscriber, &Some(100u32));
     assert_eq!(res, Err(Ok(Error::InvalidStatusTransition)));
 }
 
@@ -950,7 +950,7 @@ fn test_set_ledger_expiration_emits_event() {
     );
 
     let new_bound = current_seq + 200;
-    client.set_sub_exp_ledger(&sub_id, &subscriber, &Some(new_bound));
+    client.set_sub_expiration_ledger(&sub_id, &subscriber, &Some(new_bound));
 
     // Find the ExpirationLedgerSetEvent in the event log.
     let events = env.events().all();

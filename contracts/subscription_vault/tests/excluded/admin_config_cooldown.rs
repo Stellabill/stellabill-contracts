@@ -15,7 +15,7 @@ extern crate alloc;
 
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger as _},
-    Address, Env, String, Symbol,
+    Address, Env, FromVal, String, Symbol,
 };
 use subscription_vault::{
     AdminConfigChangedEvent, DataKey, Error, SubscriptionVault, SubscriptionVaultClient,
@@ -44,9 +44,9 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 /// Read the raw cooldown timestamp for a key label from persistent storage.
 fn read_cooldown_ts(env: &Env, client: &SubscriptionVaultClient, key_label: &str) -> u64 {
     env.as_contract(&client.address, || {
-        let label_bytes = soroban_sdk::Bytes::from_array(env, key_label.as_bytes());
+        let label_bytes = soroban_sdk::Bytes::from_slice(env, key_label.as_bytes());
         let hash = env.crypto().sha256(&label_bytes);
-        let storage_key = DataKey::AdminConfigLastChangedAt(hash);
+        let storage_key = DataKey::AdminConfigLastChangedAt(hash.into());
         env.storage()
             .persistent()
             .get::<_, u64>(&storage_key)
@@ -77,7 +77,7 @@ fn second_mutation_within_window_rejected() {
     env.ledger().with_mut(|li| li.timestamp = 1000 + 1);
     assert_eq!(
         client.try_set_min_topup(&admin, &3_000_000i128),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 }
 
@@ -114,7 +114,7 @@ fn orthogonal_keys_independent() {
     // Mutate MinTopup again at t=1000 -- same key, still within cooldown. Rejected.
     assert_eq!(
         client.try_set_min_topup(&admin, &4_000_000i128),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 }
 
@@ -131,7 +131,7 @@ fn interleaved_orthogonal_keys() {
     assert_eq!(client.try_set_operator(&admin, &op1), Ok(Ok(())));
     assert_eq!(
         client.try_set_min_topup(&admin, &3_000_000i128),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 }
 
@@ -162,7 +162,7 @@ fn one_second_before_boundary_rejected() {
     env.ledger().with_mut(|li| li.timestamp = 1000 + COOLDOWN - 1);
     assert_eq!(
         client.try_set_min_topup(&admin, &5_000_000i128),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 }
 
@@ -203,7 +203,7 @@ fn emergency_stop_cooldown() {
     // Immediately try to disable -- should be rejected (same key: "EmergencyStop").
     assert_eq!(
         client.try_disable_emergency_stop(&admin),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // Advance past cooldown and disable succeeds.
@@ -242,7 +242,7 @@ fn operator_cooldown_shared() {
     // Immediately remove operator -- same key, rejected.
     assert_eq!(
         client.try_remove_operator(&admin),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // Advance past cooldown and remove succeeds.
@@ -268,7 +268,7 @@ fn protocol_fee_cooldown() {
     // Immediately again -- rejected.
     assert_eq!(
         client.try_set_protocol_fee(&admin, &treasury, &1000u32),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // After cooldown -- succeeds.
@@ -295,7 +295,7 @@ fn billing_retention_cooldown() {
     // Immediately again -- rejected.
     assert_eq!(
         client.try_set_billing_retention(&admin, &20u32),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // After cooldown -- succeeds.
@@ -328,7 +328,7 @@ fn accepted_tokens_cooldown_shared() {
     // Immediately try to remove -- same key, rejected.
     assert_eq!(
         client.try_remove_accepted_token(&admin, &new_token),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // After cooldown -- remove succeeds.
@@ -348,22 +348,22 @@ fn rotate_admin_cooldown() {
     let new_admin = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
-    let nonce = client.get_admin_nonce(&admin, 1);
+    let nonce = client.get_admin_nonce(&admin, &1);
     assert_eq!(
         client.try_rotate_admin(&admin, &new_admin, &nonce),
         Ok(Ok(()))
     );
 
     // Immediately rotate back -- same "Admin" key, rejected.
-    let nonce2 = client.get_admin_nonce(&new_admin, 1);
+    let nonce2 = client.get_admin_nonce(&new_admin, &1);
     assert_eq!(
         client.try_rotate_admin(&new_admin, &admin, &nonce2),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // After cooldown -- succeeds.
     env.ledger().with_mut(|li| li.timestamp = 1000 + COOLDOWN);
-    let nonce3 = client.get_admin_nonce(&new_admin, 1);
+    let nonce3 = client.get_admin_nonce(&new_admin, &1);
     assert_eq!(
         client.try_rotate_admin(&new_admin, &admin, &nonce3),
         Ok(Ok(()))
@@ -393,17 +393,17 @@ fn governance_proposal_bypasses_cooldown() {
     env.ledger().with_mut(|li| li.timestamp = 1000);
 
     // Rotate admin first (to set cooldown on "Admin" key).
-    let nonce = client.get_admin_nonce(&admin, 1);
+    let nonce = client.get_admin_nonce(&admin, &1);
     assert_eq!(
         client.try_rotate_admin(&admin, &new_admin, &nonce),
         Ok(Ok(()))
     );
 
     // Immediately try to rotate again via admin function -- should be rejected.
-    let nonce2 = client.get_admin_nonce(&new_admin, 1);
+    let nonce2 = client.get_admin_nonce(&new_admin, &1);
     assert_eq!(
         client.try_rotate_admin(&new_admin, &admin, &nonce2),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 
     // Submit a governance proposal to rotate admin back.
@@ -417,8 +417,7 @@ fn governance_proposal_bypasses_cooldown() {
             &0u32,
             &5000u32, // 50% quorum
             &eta,
-        )
-        .unwrap();
+        ); // flattens to u64 in SDK 22
 
     // Vote as guardian.
     assert_eq!(client.try_vote_proposal(&proposal_id, &true), Ok(Ok(())));
@@ -444,7 +443,7 @@ fn auth_failure_does_not_trigger_cooldown() {
     // Non-admin call fails with Unauthorized (not CooldownActive).
     assert_eq!(
         client.try_set_min_topup(&non_admin, &2_000_000i128),
-        Ok(Err(Error::Unauthorized))
+        Err(Ok(Error::Unauthorized))
     );
 
     // Admin can still set_min_topup -- no cooldown was set by the failed call.
@@ -464,7 +463,7 @@ fn validation_failure_does_not_trigger_cooldown() {
     // Zero amount is invalid.
     assert_eq!(
         client.try_set_min_topup(&admin, &0i128),
-        Ok(Err(Error::InvalidAmount))
+        Err(Ok(Error::InvalidAmount))
     );
 
     // Admin can still set_min_topup -- no cooldown was set.
@@ -489,9 +488,9 @@ fn event_emitted_on_success() {
     // Find the admin_config_changed event.
     let mut found = false;
     for i in 0..events.len() {
-        let (topics, data) = events.get_unchecked(i);
+        let (_contract, topics, data) = events.get_unchecked(i);
         // The event topic is a Symbol.
-        let topic0: Symbol = topics.get_unchecked(0);
+        let topic0 = Symbol::from_val(&env, &topics.get_unchecked(0));
         if topic0 == Symbol::new(&env, "admin_config_changed") {
             let evt: AdminConfigChangedEvent =
                 soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
@@ -526,8 +525,8 @@ fn event_prev_ts_on_second_mutation() {
     let events = env.events().all();
     let mut found = false;
     for i in 0..events.len() {
-        let (topics, data) = events.get_unchecked(i);
-        let topic0: Symbol = topics.get_unchecked(0);
+        let (_contract, topics, data) = events.get_unchecked(i);
+        let topic0 = Symbol::from_val(&env, &topics.get_unchecked(0));
         if topic0 == Symbol::new(&env, "admin_config_changed") {
             let evt: AdminConfigChangedEvent =
                 soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
@@ -558,7 +557,7 @@ fn timestamp_underflow_safe() {
     env.ledger().with_mut(|li| li.timestamp = 500);
     assert_eq!(
         client.try_set_min_topup(&admin, &3_000_000i128),
-        Ok(Err(Error::CooldownActive))
+        Err(Ok(Error::CooldownActive))
     );
 }
 

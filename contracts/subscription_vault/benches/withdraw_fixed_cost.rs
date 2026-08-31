@@ -137,6 +137,8 @@ fn fund_merchant_balance(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     token::StellarAssetClient::new(env, token).mint(&subscriber, &DEPOSIT);
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None);
@@ -198,6 +200,8 @@ fn bench_withdraw_multi_token() {
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     token::StellarAssetClient::new(&env, &token2).mint(&subscriber2, &DEPOSIT);
     client.deposit_funds(&sub2, &subscriber2, &DEPOSIT, &None);

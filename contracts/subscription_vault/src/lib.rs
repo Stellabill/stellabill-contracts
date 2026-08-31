@@ -582,7 +582,8 @@ pub mod operator {
 
 /// Metadata: per-subscription key-value annotations.
 pub use metadata::*;
-pub use subscription::compute_cancel_refund;
+pub use governance::calculate_quorum;
+pub use subscription::{compute_cancel_refund, extend_subscription_ttl};
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
@@ -593,7 +594,8 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    is_known_instance_discriminant,    AcceptedToken, AccruedTotals, AdminConfigChangedEvent, AdminProposal,
+    AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
     ArrearsAccruedEvent, ArrearsSettledEvent,
     BatchChargeResult, BatchWithdrawResult,
@@ -1493,8 +1495,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            None,
-            None,
+            None, // expires_at_ledger (not exposed on split-payee creation)
+            None, // sub_account_label (not exposed on split-payee creation)
         )?;
 
         let split = SplitPayees {
@@ -2335,7 +2337,7 @@ impl SubscriptionVault {
                     let mut salt_buf = [0u8; 20];
                     salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
                     salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
-                    salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                    salt_buf[12..20].copy_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
                     let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
                     env.crypto().sha256(&salt_input).into()
                 },
@@ -2507,6 +2509,39 @@ impl SubscriptionVault {
     /// Returns `true` if the merchant is currently within a vacation window.
     pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
         merchant::is_merchant_in_vacation(&env, &merchant, now)
+    }
+
+    // ── Merchant allowlist mode ────────────────────────────────────────────────
+
+    /// Enable or disable merchant allowlist mode (admin only).
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Returns `true` if merchant allowlist mode is enabled.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Approve a merchant under allowlist mode (admin only).
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a merchant approval under allowlist mode (admin only).
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
+    /// Returns `true` if the merchant is approved under allowlist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Set the consecutive-failure auto-pause threshold (admin only).
+    /// `0` disables auto-pause.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
     }
 
     /// direct merchant refund to subscriber.

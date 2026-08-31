@@ -68,7 +68,8 @@ use crate::types::{
     AutoRenewToggledEvent, BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS,
     CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, EmergencyWithdrawIntent, Error,
     FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
+    LifetimeCapReachedEvent,
+    LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
     PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent,
     ReferralAttributedEvent, SubscriberCreateWindow, SubscriberEmergencyWithdrawEvent,
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
@@ -228,7 +229,7 @@ pub(crate) fn maybe_extend_ttl(env: &Env, key: &DataKey, threshold: u32, extend_
         .extend_ttl(key, threshold, extend_to);
 }
 
-pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
+pub fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
@@ -1127,7 +1128,7 @@ pub fn do_grace_buyout(
                 let mut salt_buf = [0u8; 20];
                 salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
                 salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
-                salt_buf[12..20].copy_from_slice(&env.ledger().sequence().to_be_bytes());
+                salt_buf[12..20].copy_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
                 let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
                 env.crypto().sha256(&salt_input).into()
             },
@@ -3304,20 +3305,19 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&token_key, &token_ids);
 
     env.events().publish(
-        (TOPIC_CREATED, id),
-        SubscriptionCreatedEvent {
-            subscription_id: id,
-            subscriber: subscriber.clone(),
-            merchant: plan.merchant.clone(),
-            token: plan.token.clone(),
-            amount: plan.amount,
-            interval_seconds: plan.interval_seconds,
-            lifetime_cap: plan.lifetime_cap,
-            expires_at: None,
-            expires_at_ledger: None,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
+        (TOPIC_CREATED, id),            SubscriptionCreatedEvent {
+                subscription_id: id,
+                subscriber: subscriber.clone(),
+                merchant: plan.merchant.clone(),
+                token: plan.token.clone(),
+                amount: plan.amount,
+                interval_seconds: plan.interval_seconds,
+                lifetime_cap: plan.lifetime_cap,
+                expires_at: None,
+                expires_at_ledger: None,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
     );
 
     Ok(id)

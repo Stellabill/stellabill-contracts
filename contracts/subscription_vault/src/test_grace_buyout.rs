@@ -148,8 +148,7 @@ fn test_grace_buyout_rejects_active_subscription() {
 
     // Subscription is still Active — buyout should be rejected.
     let res = client.try_grace_buyout(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
-    assert!(res.is_ok(), "try_grace_buyout should not fail at host level");
-    assert!(res.unwrap().is_err(), "buyout of Active subscription must fail");
+    assert_eq!(res, Err(Ok(Error::NotInGracePeriod)));
 }
 
 // ── Reject: insufficient deposit ────────────────────────────────────────────
@@ -169,8 +168,7 @@ fn test_grace_buyout_rejects_insufficient_deposit() {
     token_admin.mint(&subscriber, &deposit);
 
     let res = client.try_grace_buyout(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
-    assert!(res.is_ok(), "try_grace_buyout should not fail at host level");
-    assert!(res.unwrap().is_err(), "buyout with insufficient deposit must fail");
+    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
 }
 
 // ── Edge: deposit exactly equal to charge (premium bps = 0) ─────────────────
@@ -241,8 +239,7 @@ fn test_grace_buyout_premium_overflow() {
     // Deposit a large amount — the premium calculation should overflow.
     let deposit = i128::MAX;
     let res = client.try_grace_buyout(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
-    assert!(res.is_ok(), "try_grace_buyout should not fail at host level");
-    assert!(res.unwrap().is_err(), "buyout with overflow must fail");
+    assert_eq!(res, Err(Ok(Error::Overflow)));
 }
 
 // ── Edge: rejected buyout does not mutate state ─────────────────────────────

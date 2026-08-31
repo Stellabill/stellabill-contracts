@@ -471,7 +471,7 @@ pub fn charge_one(
         let mut salt_buf = [0u8; 20];
         salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
         salt_buf[4..12].copy_from_slice(&sub.last_payment_timestamp.to_be_bytes());
-        salt_buf[12..20].copy_from_slice(&seq.to_be_bytes());
+        salt_buf[12..20].copy_from_slice(&(seq as u64).to_be_bytes());
         let salt_input = soroban_sdk::Bytes::from_slice(env, &salt_buf);
         let hash: soroban_sdk::BytesN<32> = env.crypto().sha256(&salt_input).into();
         hash
