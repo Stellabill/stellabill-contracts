@@ -114,6 +114,32 @@ pub enum KycKey {
 pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
     MerchantSubs(Address),
+
+    /// Global flag: when true, merchants must have an active KYC attestation
+    /// (see `MerchantKyc`) to withdraw merchant funds.
+    KycRequired,
+
+    /// Per-merchant KYC attestation record.
+    ///
+    /// Status semantics: `status == true` means active/valid KYC; `status == false`
+    /// means revoked/inactive.
+    MerchantKyc(Address),
+}
+
+/// Per-merchant KYC attestation record (issued by an off-chain compliance provider).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantKyc {
+    /// Opaque attestation hash (provider-issued).
+    pub attestation_hash: Vec<u8>,
+    /// Timestamp when the attestation was issued (ledger seconds).
+    pub issued_at: u64,
+    /// When true, KYC is active/valid. When false, it is revoked/inactive.
+    pub status: bool,
+}
+
+
+
     /// USDC token contract address. Discriminant 1.
     Token,
     /// Authorized admin address.
