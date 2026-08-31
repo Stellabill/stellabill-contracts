@@ -720,8 +720,8 @@ pub fn charge_one(
                 BillingPeriodSnapshot {
                     subscription_id,
                     period_index,
-                    period_start: next_allowed.saturating_sub(sub.interval_seconds),
-                    period_end: now,
+                    period_start,
+                    period_end,
                     total_charged: charge_amount,
                     total_usage_units: 0,
                     status_flags: SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_INTERVAL_CHARGED,
