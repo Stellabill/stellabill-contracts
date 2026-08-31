@@ -728,6 +728,12 @@ pub struct Subscription {
     /// enforce the one-interval renewal window. `None` when auto-renewal is
     /// enabled or has never been disabled.
     pub auto_renew_disabled_at: Option<u64>,
+    /// Outstanding arrears (unpaid shortfall) accumulated when a partial payment
+    /// drained the prepaid balance but did not cover the full charge amount.
+    ///
+    /// Arrears are always `>= 0`. Any deposit is applied to arrears *before*
+    /// it tops up the prepaid balance (see `do_deposit_funds`).
+    pub arrears: i128,
 }
 
 impl Subscription {
@@ -2152,6 +2158,37 @@ pub struct SubscriptionRecoveryReadyEvent {
     pub schema_version: u32,
 }
 
+/// Emitted when an underfunded interval charge is settled as a partial payment.
+///
+/// The merchant's `allow_partial_payment` policy is enabled, the subscription
+/// had some prepaid balance but less than the full charge, so the available
+/// balance was drained and the uncovered shortfall was added to
+/// `Subscription::arrears`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ArrearsAccruedEvent {
+    pub subscription_id: u32,
+    pub partial_amount: i128,
+    pub shortfall: i128,
+    pub total_arrears: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a deposit is first applied to outstanding arrears before
+/// topping up the prepaid balance.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ArrearsSettledEvent {
+    pub subscription_id: u32,
+    /// Amount of the deposit applied to clear arrears.
+    pub arrears_paid: i128,
+    /// Remaining arrears after this deposit.
+    pub remaining_arrears: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
 /// Event emitted when a subscription is cancelled.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2776,6 +2813,14 @@ pub struct MerchantConfig {
     pub redirect_url: String,
     pub is_paused: bool,
     pub last_updated: u64,
+    /// Per-merchant policy controlling whether underfunded interval charges may
+    /// be settled as a partial payment (draining whatever prepaid balance is
+    /// available and accumulating the shortfall as `Subscription::arrears`).
+    ///
+    /// When `false` (the default), charging preserves the legacy behaviour:
+    /// an underfunded charge moves the subscription into
+    /// `InsufficientBalance`/`GracePeriod` without debiting the prepaid balance.
+    pub allow_partial_payment: bool,
 }
 
 #[contracttype]

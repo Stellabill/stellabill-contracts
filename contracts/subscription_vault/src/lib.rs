@@ -852,6 +852,7 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::{
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
+    ArrearsAccruedEvent, ArrearsSettledEvent,
     BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
     BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
@@ -897,7 +898,11 @@ pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
 /// field. Existing live `DataKey::Sub(id)` records were serialized without this
 /// trailing field; the `v3 → v4` step in [`admin::do_migrate`] walks every
 /// subscription record and rewrites it so the new field deserializes cleanly.
-const STORAGE_VERSION: u32 = 5;
+///
+/// Bumped to **6** when [`Subscription`] gained the trailing `arrears: i128`
+/// field (issue #942); the `v5 → v6` step in [`admin::do_migrate`] rewrites
+/// every subscription record so the new field deserializes cleanly.
+const STORAGE_VERSION: u32 = 6;
 
 /// Hard upper bound on the number of subscriptions that may be exported in a single call.
 const MAX_EXPORT_LIMIT: u32 = 100;
@@ -1581,6 +1586,7 @@ impl SubscriptionVault {
                     sub_account_label: None,
                     auto_renew: true,
                     auto_renew_disabled_at: None,
+                    arrears: 0,
                 };
                 env.storage()
                     .persistent()
@@ -3656,6 +3662,7 @@ impl SubscriptionVault {
         new_fee_address: Option<Option<Address>>,
         new_redirect_url: Option<String>,
         new_is_paused: Option<bool>,
+        new_allow_partial_payment: Option<bool>,
     ) -> Result<MerchantConfig, Error> {
         merchant::update_merchant_config(
             &env,
@@ -3667,6 +3674,7 @@ impl SubscriptionVault {
             new_fee_address,
             new_redirect_url,
             new_is_paused,
+            new_allow_partial_payment,
         )
     }
 
