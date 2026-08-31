@@ -74,6 +74,11 @@
 //! | `revoke_coupon` | [`crate::coupon::revoke_coupon`] |
 //! | `apply_coupon` | [`crate::coupon::apply_coupon`] |
 //! | `get_coupon` | [`crate::coupon::get_coupon`] |
+//! Coupons are token-bound discount codes with optional `percent_off_bps` and/or
+//! `fixed_off`, a global `max_redemptions` cap, an `expires_at` deadline, and
+//! per-subscription redemption tracking. Discounts are applied before protocol
+//! fees so that `gross == discount + merchant_net + treasury_fee` remains
+//! balanced.
 //!
 //! ## Charging
 //! | Entrypoint | Delegate |
@@ -141,6 +146,17 @@
 // Re-export delegate functions so IDE navigation and `cargo doc` surface them
 // under this feature group. No new ABI symbols are introduced; all public
 // contract entrypoints remain in `lib.rs` under `#[contractimpl]`.
+
+//! # Subscription State Machine
+//!
+//! The canonical `SubscriptionStatus` transition matrix is defined in
+//! `docs/subscription_state_machine.md`. `transition_to` is the only allowed
+//! status mutator and rejects invalid transitions with
+//! `Error::InvalidStatusTransition`, keeping `Cancelled` terminal.
+
+pub use crate::state_machine::{
+    can_transition, transition_to, validate_status_transition,
+};
 
 pub use crate::charge_core::{charge_one, charge_usage_one};
 pub use crate::coupon::{apply_coupon, create_coupon, get_coupon, revoke_coupon};

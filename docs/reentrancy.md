@@ -114,44 +114,89 @@ if amount_to_refund > 0 {
 
 ## Secondary Protection: Reentrancy Guards
 
-While CEI is the primary defense, the contract includes an optional **reentrancy guard** module for additional protection on critical paths.
+While CEI is the primary defense, the contract includes a **reentrancy guard** module as defense-in-depth on every public fund-moving entrypoint. The guard is a strict per-entrypoint mutex — it rejects any reentrant call (same or different function) for the duration of the top-level call, then releases automatically via `Drop`.
 
 ### Reentrancy Guard Pattern
 
 **Location**: `contracts/subscription_vault/src/reentrancy.rs`
 
-The guard uses a locking mechanism to detect if a function is already executing:
+The guard uses a namespaced locking mechanism to detect if an entrypoint is already executing:
 
 ```rust
 pub fn some_protected_function(env: &Env) -> Result<(), Error> {
     let _guard = crate::reentrancy::ReentrancyGuard::lock(env, "some_protected_function")?;
-    
+
     // Critical operations here
     // Even if callback occurs, lock prevents reentry
-    
-    // Guard automatically unlocks when dropped
+
+    // Guard automatically unlocks when dropped (all control-flow paths:
+    // success, `?` early-return, panic-converted-to-error, unwind)
 }
 ```
 
 **Implementation Details**:
-- Each critical section has a unique lock key stored in contract storage
-- On entry, the function checks if lock exists (Err(Reentrancy) if it does)
-- Lock is acquired by setting a flag in storage
-- When the function exits, the guard's Drop implementation removes the lock
+- Each protected entrypoint has a unique lock key stored in **instance** storage under
+  `DataKey::ReentrancyLock(Symbol::new(env, entrypoint_name))` (discriminant 81).
+- Namespacing under `DataKey::ReentrancyLock` guarantees no key collisions with other
+  storage entries (coupon symbols, metadata keys, oracle ring buffers, etc.).
+- On entry, `lock()` checks if the key already exists in instance storage and returns
+  `Err(Error::Reentrancy)` if so.
+- Lock is acquired by writing `true` to the namespaced key.
+- When the guard goes out of scope, the `Drop` impl calls
+  `env.storage().instance().remove(&key)` to release the lock unconditionally.
+- Storage tier: **instance** storage is used because reentrancy only matters within a
+  single transaction; locks must not persist across ledger boundaries.
+- Minimal overhead: one `has()` check + one `set()` on acquire, one `remove()` on release.
 
-**Current Usage**: Guards are available for use but not currently applied to the critical paths because CEI pattern provides sufficient protection.
+**Current Deployment (defense-in-depth on all public fund-moving entrypoints in `lib.rs`)**:
+
+| Entrypoint | Lock Name |
+|------------|-----------|
+| `deposit_funds` | `deposit_funds` |
+| `deposit_funds_on_behalf` | `deposit_funds_on_behalf` |
+| `grace_buyout` | `grace_buyout` |
+| `withdraw_subscriber_funds` | `withdraw_subscriber_funds` |
+| `partial_refund` | `partial_refund` |
+| `schedule_cancel` | `schedule_cancel` |
+| `unschedule_cancel` | `unschedule_cancel` |
+| `initiate_transfer` | `initiate_transfer` |
+| `accept_transfer` | `accept_transfer` |
+| `veto_transfer` | `veto_transfer` |
+| `charge_one_off` | `charge_one_off` |
+| `charge_subscription` | `charge_subscription` |
+| `charge_usage` | `charge_usage` |
+| `charge_usage_with_reference` | `charge_usage_with_reference` |
+| `withdraw_merchant_funds` | `withdraw_merchant_funds` |
+| `withdraw_merchant_token_funds` | `withdraw_merchant_token_funds` |
+| `withdraw_sub_account_funds` | `withdraw_sub_account_funds` |
+| `merchant_refund` | `merchant_refund` |
+| `flush_payouts` | `flush_payouts` |
+| `finalize_emergency_withdraw` | `finalize_emergency_withdraw` |
+| `claim_cancellation_escrow` | `claim_cancellation_escrow` |
+| `operator_charge_subscription` | `operator_charge_subscription` |
+| `operator_charge_usage` | `operator_charge_usage` |
+| `operator_charge_usage_with_ref` | `operator_charge_usage_with_ref` |
+| `bulk_cancel_subscriptions` | `bulk_cancel_subscriptions` |
+| `bulk_deposit_funds` | `bulk_deposit_funds` |
+
+Because each entrypoint uses its own distinct lock name, cross-function reentrancy is
+*also* prevented: e.g. if `deposit_funds` triggers a token callback that tries to call
+`withdraw_subscriber_funds`, the second call hits `deposit_funds` still held and is
+rejected — the mutex covers the whole top-level call, not just the individual function.
 
 ## External Calls Summary
 
 The contract makes external calls **only** to the USDC token contract:
 
-| Function | External Call | CEI Applied |
-|----------|---------------|------------|
-| `do_deposit_funds` | `token.transfer(subscriber → contract)` | ✓ Yes |
-| `do_withdraw_subscriber_funds` | `token.transfer(contract → subscriber)` | ✓ Yes |
-| `withdraw_merchant_funds` | `token.transfer(contract → merchant)` | ✓ Yes |
-| `charge_subscription` | `credit_merchant_balance` (internal) | ✓ Yes |
-| `charge_usage` | Internal balance update only | ✓ Yes |
+| Function | External Call | CEI Applied | Guard Applied |
+|----------|---------------|------------|----------------|
+| `do_deposit_funds` | `token.transfer(subscriber → contract)` | ✓ Yes | ✓ Yes (`deposit_funds`) |
+| `do_withdraw_subscriber_funds` | `token.transfer(contract → subscriber)` | ✓ Yes | ✓ Yes (`withdraw_subscriber_funds`) |
+| `withdraw_merchant_funds` | `token.transfer(contract → merchant)` | ✓ Yes | ✓ Yes (`withdraw_merchant_funds`) |
+| `charge_subscription` | `credit_merchant_balance` (internal) | ✓ Yes | ✓ Yes (`charge_subscription`) |
+| `charge_usage` | Internal balance update only | ✓ Yes | ✓ Yes (`charge_usage`) |
+| `partial_refund` | `token.transfer(contract → subscriber)` | ✓ Yes | ✓ Yes (`partial_refund`) |
+| `merchant_refund` | `token.transfer(contract → merchant)` | ✓ Yes | ✓ Yes (`merchant_refund`) |
 
 ## Residual Risks and Assumptions
 

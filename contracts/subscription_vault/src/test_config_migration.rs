@@ -149,7 +149,9 @@ fn test_upgrade_via_migrate() {
 
     env.as_contract(&contract_id, || {
         let storage = env.storage();
-        assert_eq!(storage.persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(3u32));
+        // After do_migrate runs the full ladder (v2->v3->v4->v5), the final
+        // stored version is STORAGE_VERSION, not 3.
+        assert_eq!(storage.persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(crate::STORAGE_VERSION));
         assert_eq!(storage.persistent().get::<_, Address>(&DataKey::Token), Some(token));
         assert_eq!(storage.persistent().get::<_, Address>(&DataKey::Admin), Some(admin));
         assert_eq!(storage.persistent().get::<_, i128>(&DataKey::MinTopup), Some(min_topup));
@@ -218,19 +220,20 @@ fn test_rejection_of_schema_downgrades() {
     let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    // Simulate version 4
+    // Simulate a version above the binary's STORAGE_VERSION to trigger downgrade rejection.
+    let too_high = crate::STORAGE_VERSION.saturating_add(1);
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(&DataKey::SchemaVersion, &4u32);
+        env.storage().persistent().set(&DataKey::SchemaVersion, &too_high);
         env.storage().persistent().set(&DataKey::Admin, &admin);
     });
 
     env.mock_all_auths();
     
-    // migrate_config_to_persistent should fail
+    // migrate_config_to_persistent should fail (stored > 3)
     let err1 = client.try_migrate_config_to_persistent(&admin);
     assert_eq!(err1, Err(Ok(Error::SchemaMigrationDowngrade)));
 
-    // migrate to version 3 should also fail (with SchemaVersionMismatch)
+    // migrate should also fail with SchemaVersionMismatch (stored > binary)
     let err2 = client.try_migrate(&admin);
     assert_eq!(err2, Err(Ok(Error::SchemaVersionMismatch)));
 }
