@@ -70,7 +70,7 @@ pub fn write_period_snapshot(env: &Env, mut snapshot: BillingPeriodSnapshot) -> 
         }
     }
 
-    if (snapshot.status_flags & SNAPSHOT_FLAG_EMPTY) == 0 && snapshot.total_charged <= 0 {
+    if (snapshot.status_flags & SNAPSHOT_FLAG_EMPTY) == 0 && snapshot.total_charged < 0 {
         return Err(Error::InvalidInput);
     }
 

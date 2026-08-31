@@ -63,6 +63,7 @@ fn test_expiration_timing_and_charging() {
         &None::<i128>,
         &Some(expires_at),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(&sub_id, &subscriber, &(amount * 5, &None::<soroban_sdk::BytesN<32>>));
 
@@ -113,6 +114,7 @@ fn test_cleanup_and_archival() {
         &None::<i128>,
         &Some(T0 + INTERVAL),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Try cleanup before expiry — should fail
@@ -194,6 +196,7 @@ fn test_expiration_vs_cancellation() {
         &None::<i128>,
         &Some(expires_at),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     
     // Trigger expiration
@@ -226,6 +229,7 @@ fn test_deposit_rejected_when_expired() {
         &None::<i128>,
         &Some(T0 + INTERVAL),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Advance past expiry
@@ -261,6 +265,7 @@ fn test_reject_expiration_equal_to_now() {
         &None::<i128>,
         &Some(expires_at),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 }
@@ -288,6 +293,7 @@ fn test_reject_expiration_in_the_past() {
         &None::<i128>,
         &Some(expires_at),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 }
@@ -312,6 +318,7 @@ fn test_none_expiration_accepted() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert!(res.is_ok(), "None expiration must be accepted");
 
@@ -343,6 +350,7 @@ fn test_future_expiration_one_second_ahead_accepted() {
         &None::<i128>,
         &Some(expires_at),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert!(res.is_ok(), "future expiration must be accepted");
 
@@ -374,6 +382,7 @@ fn test_rejected_expiration_writes_no_storage() {
         &None::<i128>,
         &Some(T0), // equal to now → rejected
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let _ = client.try_create_subscription_with_token(
@@ -386,6 +395,7 @@ fn test_rejected_expiration_writes_no_storage() {
         &None::<i128>,
         &Some(T0 - 1), // in the past → rejected
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Now create a valid subscription — it should get id 0 (first ever).
@@ -399,6 +409,7 @@ fn test_rejected_expiration_writes_no_storage() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert!(res.is_ok(), "valid subscription must succeed");
     assert_eq!(res.unwrap(), 0, "first subscription should have id 0");
@@ -411,7 +422,7 @@ fn test_rejected_expiration_writes_no_storage() {
 // These tests cover the second expiration bound (`expires_at_ledger: Option<u32>`)
 // added in addition to the wall-clock `expires_at`. Either bound being met is
 // sufficient to reject charges, deposits, and state transitions. The setter
-// (`set_subscription_expiration_ledger`) authorizes by subscriber-or-merchant.
+// (`set_sub_exp_ledger`) authorizes by subscriber-or-merchant.
 
 /// `None` ledger bound is accepted and behaves as a no-op (subscription never
 /// expires on ledger sequence alone).
@@ -433,6 +444,7 @@ fn test_ledger_expiration_none_accepted() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let sub = client.get_subscription(&sub_id);
@@ -481,6 +493,7 @@ fn test_ledger_expiration_future_bound_accepted() {
         &None::<u64>,
         &Some(bound_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.expires_at_ledger, Some(bound_seq));
@@ -508,6 +521,7 @@ fn test_reject_ledger_expiration_equal_to_now() {
         &None::<u64>,
         &Some(current_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 }
@@ -532,6 +546,7 @@ fn test_reject_ledger_expiration_in_the_past() {
         &None::<u64>,
         &Some(past_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 }
@@ -560,6 +575,7 @@ fn test_charge_rejected_when_ledger_bound_met() {
         &None::<u64>,
         &Some(bound_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(
         &sub_id,
@@ -606,6 +622,7 @@ fn test_deposit_rejected_when_ledger_bound_met() {
         &None::<u64>,
         &Some(bound_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Advance sequence past the bound; trigger the transition by attempting
@@ -648,6 +665,7 @@ fn test_both_bounds_set_ledger_fires_first() {
         &Some(wall_bound),
         &Some(bound_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(
         &sub_id,
@@ -692,6 +710,7 @@ fn test_both_bounds_set_wall_clock_fires_first() {
         &Some(wall_bound),
         &Some(bound_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(
         &sub_id,
@@ -728,6 +747,7 @@ fn test_set_ledger_expiration_by_subscriber() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let current_seq = env.ledger().sequence();
@@ -758,6 +778,7 @@ fn test_set_ledger_expiration_by_merchant() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let current_seq = env.ledger().sequence();
@@ -788,6 +809,7 @@ fn test_set_ledger_expiration_unauthorized_rejected() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let res = client.try_set_sub_expiration_ledger(&sub_id, &stranger, &Some(100u32));
@@ -811,6 +833,7 @@ fn test_set_ledger_expiration_rejects_past_or_equal() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let current_seq = env.ledger().sequence();
@@ -821,6 +844,7 @@ fn test_set_ledger_expiration_rejects_past_or_equal() {
         &subscriber,
         &Some(current_seq),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(res, Err(Ok(Error::InvalidExpiration)));
 
@@ -852,6 +876,7 @@ fn test_set_ledger_expiration_none_clears_bound() {
         &None::<u64>,
         &Some(current_seq + 100),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(
         client.get_subscription(&sub_id).expires_at_ledger,
@@ -887,6 +912,7 @@ fn test_set_ledger_expiration_rejects_cancelled() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     client.cancel_subscription(&sub_id, &subscriber);
@@ -920,6 +946,7 @@ fn test_set_ledger_expiration_emits_event() {
         &None::<u64>,
         &Some(initial_bound),
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let new_bound = current_seq + 200;
@@ -965,6 +992,7 @@ fn test_set_ledger_expiration_emits_event() {
         &None::<i128>,
         &Some(T0), // equal to now → rejected
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     let _ = client.try_create_subscription_with_token(
@@ -977,6 +1005,7 @@ fn test_set_ledger_expiration_emits_event() {
         &None::<i128>,
         &Some(T0 - 1), // in the past → rejected
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     // Now create a valid subscription — it should get id 0 (first ever).
@@ -990,6 +1019,7 @@ fn test_set_ledger_expiration_emits_event() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert!(res.is_ok(), "valid subscription must succeed");
     assert_eq!(res.unwrap(), 0, "first subscription should have id 0");
@@ -1022,6 +1052,7 @@ fn test_export_subscription_summary_preserves_ledger_bound() {
         &None::<u64>,
         &Some(bound_seq),
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     let summary = client.export_subscription_summary(&admin, &sub_id);
@@ -1062,6 +1093,7 @@ fn test_restore_snapshot_page_preserves_ledger_bound() {
         &None::<u64>,
         &Some(bound_seq),
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     // Seed a merchant balance so the full-snapshot restoration is exercised.
@@ -1139,6 +1171,7 @@ fn test_restore_snapshot_page_preserves_ledger_bound() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     assert_eq!(
         src_client.get_subscription(&sub_id_none).expires_at_ledger,

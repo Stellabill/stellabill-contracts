@@ -74,6 +74,7 @@ fn create_and_fund(
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Fund enough for many charges.
@@ -288,6 +289,7 @@ fn test_last_payment_timestamp_zero() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     token_admin.mint(&subscriber, &1_000_000_000i128);

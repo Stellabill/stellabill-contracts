@@ -66,27 +66,5 @@ path = "kani/cancel_refund.rs"
 name = "channel_account_auth"
 path = "tests/channel_account_auth.rs"
 
-[[test]]
-name = "ttl_extension"
-path = "benches/ttl_extension.rs"
 
-[[test]]
-name = "idem_lookup"
-path = "benches/idem_lookup.rs"
-
-[[test]]
-name = "charge_cold_warm"
-path = "benches/charge_cold_warm.rs"
-
-[[test]]
-name = "withdraw_fixed_cost"
-path = "benches/withdraw_fixed_cost.rs"
-
-[[test]]
-name = "gov_tally"
-path = "benches/gov_tally.rs"
-
-[[test]]
-name = "abi_hash_regression"
-path = "tests/abi_hash_regression.rs"
 

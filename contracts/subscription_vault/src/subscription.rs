@@ -63,7 +63,6 @@
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
-use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
     AutoRenewToggledEvent, BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS,
@@ -80,6 +79,52 @@ use crate::types::{
     TOPIC_ONE_OFF_CHARGED, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
+
+/// Documented subscription state machine transitions.
+///
+/// `Cancelled` and `Archived` are terminal: they have no outgoing
+/// transitions. `Expired` may only transition to `Cancelled`.
+const ALLOWED_TRANSITIONS: &[(SubscriptionStatus, SubscriptionStatus)] = &[
+    (SubscriptionStatus::Active, SubscriptionStatus::Paused),
+    (SubscriptionStatus::Active, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::Active, SubscriptionStatus::Expired),
+    (SubscriptionStatus::Active, SubscriptionStatus::InsufficientBalance),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Active),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Expired),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Active),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Expired),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::GracePeriod),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Active),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Expired),
+    (SubscriptionStatus::Expired, SubscriptionStatus::Cancelled),
+];
+
+/// Returns `true` when `from -> to` is a documented subscription transition.
+fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
+    ALLOWED_TRANSITIONS.contains(&(from, to))
+}
+
+/// Validates a subscription status transition against the documented matrix.
+fn validate_status_transition(
+    from: SubscriptionStatus,
+    to: SubscriptionStatus,
+) -> Result<(), Error> {
+    if can_transition(from, to) {
+        Ok(())
+    } else {
+        Err(Error::InvalidStatusTransition)
+    }
+}
+
+/// Applies `next` to `current` only if the transition is documented.
+fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+    validate_status_transition(*current, next)?;
+    *current = next;
+    Ok(())
+}
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// Hard upper bound on billing interval: 365 days (31 536 000 s).
@@ -189,6 +234,23 @@ pub fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
+    // Update total-accounted ledger on any change in subscriber prepaid balance.
+    if let Some(prev) = env
+        .storage()
+        .persistent()
+        .get::<_, Subscription>(&DataKey::Sub(subscription_id))
+    {
+        let delta: i128 = sub.prepaid_balance - prev.prepaid_balance;
+        if delta > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, delta);
+        } else if delta < 0 {
+            let _ = crate::accounting::sub_total_accounted(env, &sub.token, -delta);
+        }
+    } else {
+        if sub.prepaid_balance > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, sub.prepaid_balance);
+        }
+    }
     env.storage()
         .persistent()
         .set(&DataKey::Sub(subscription_id), sub);
@@ -658,6 +720,7 @@ pub fn do_create_subscription_with_token(
         sub_account_label,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     };
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
@@ -837,7 +900,16 @@ pub fn do_deposit_funds(
     enforce_deposit_cap(&sub, amount)?;
 
     // EFFECTS
-    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Apply the deposit to outstanding arrears before topping up the prepaid
+    // balance (issue #942). Only the portion of the deposit that exceeds the
+    // arrears increases the prepaid balance.
+    let mut arrears_paid = 0i128;
+    if sub.arrears > 0 {
+        arrears_paid = sub.arrears.min(amount);
+        sub.arrears = crate::safe_math::safe_sub(sub.arrears, arrears_paid)?;
+    }
+    let topup = crate::safe_math::safe_sub(amount, arrears_paid)?;
+    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, topup)?;
     // Reset consecutive failure counter on fresh deposit so the clock starts
     // clean if the subscriber tops up before the next charge attempt.
     env.storage()
@@ -845,11 +917,22 @@ pub fn do_deposit_funds(
         .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
 
+    if arrears_paid > 0 {
+        env.events().publish(
+            (Symbol::new(env, "arrears_settled"), subscription_id),
+            crate::types::ArrearsSettledEvent {
+                subscription_id,
+                arrears_paid,
+                remaining_arrears: sub.arrears,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
+
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
-    crate::accounting::add_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (TOPIC_DEPOSITED, subscription_id),
@@ -868,7 +951,8 @@ pub fn do_deposit_funds(
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance >= sub.amount
     {
-        sub.status = SubscriptionStatus::Active;
+        let previous_status = sub.status;
+        transition_to(&mut sub.status, SubscriptionStatus::Active)?;
         sub.grace_start_timestamp = None;
         write_subscription(env, subscription_id, &sub);
 
@@ -891,7 +975,7 @@ pub fn do_deposit_funds(
                 subscriber: sub.subscriber.clone(),
                 merchant: sub.merchant.clone(),
                 authorizer: sub.subscriber.clone(),
-                previous_status: SubscriptionStatus::Paused,
+                previous_status,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1097,6 +1181,12 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
+    // Block self-cancel for blocklisted subscribers. Merchant/admin-initiated
+    // cancel remains allowed — the blocklist is preventive, not punitive.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
+    }
+
     // Reject double-cancellation of an already Cancelled subscription.
     if sub.status == SubscriptionStatus::Cancelled {
         return Err(Error::InvalidStatusTransition);
@@ -1157,11 +1247,13 @@ fn apply_cancellation(
 
         let escrow = CancellationEscrow {
             subscription_id,
-            amount: refund_amount,
-            token: token_addr.clone(),
             subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
+            token: token_addr.clone(),
+            amount: refund_amount,
+            opened_at: now,
             released_at,
+            released: false,
         };
 
         env.storage()
@@ -1333,7 +1425,7 @@ pub fn do_schedule_cancel(
 ///
 /// # Reentrancy
 /// Safe: only updates contract storage, no external calls.
-pub fn do_set_subscription_expiration_ledger(
+pub fn do_set_sub_exp_ledger(
     env: &Env,
     subscription_id: u32,
     authorizer: Address,
@@ -1451,6 +1543,12 @@ pub fn do_pause_subscription(
 
     if authorizer != sub.subscriber && authorizer != sub.merchant {
         return Err(Error::Forbidden);
+    }
+
+    // Block self-pause for blocklisted subscribers. Merchant/admin-initiated
+    // pause remains allowed — the blocklist is preventive, not punitive.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
     // Idempotent: already paused — nothing to do, no event.
@@ -1889,6 +1987,7 @@ fn bulk_deposit_one(
     crate::blocklist::require_not_blocklisted(env, &sub.merchant).unwrap_or(());
 
     let now = env.ledger().timestamp();
+    let ledger = env.ledger().sequence();
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
         return crate::types::BulkDepositResult {
@@ -1930,6 +2029,13 @@ fn bulk_deposit_one(
         }
     };
     sub.prepaid_balance = new_balance;
+    if let Err(e) = crate::accounting::add_total_accounted(env, &token_addr, amount) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: e.to_code(),
+        };
+    }
     env.storage()
         .instance()
         .remove(&DataKey::ChargeFailureCounter(subscription_id));
@@ -1938,8 +2044,6 @@ fn bulk_deposit_one(
     // INTERACTIONS: transfer tokens from caller to contract.
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(caller, &env.current_contract_address(), &amount);
-
-    let _ = crate::accounting::add_total_accounted(env, &token_addr, amount);
 
     // Emit per-subscription deposited event.
     env.events().publish(
@@ -2179,8 +2283,10 @@ pub fn do_charge_one_off(
 
     let fee_bps = crate::charge_core::route_fee_bps(env, &sub.merchant);
     let treasury_opt = crate::admin::get_treasury(env);
+    let treasury_split_config = crate::admin::get_treasury_split(env);
+    let treasury_configured = treasury_opt.is_some() || treasury_split_config.is_some();
     let (merchant_amount, fee_amount) =
-        crate::charge_core::split_protocol_fee(amount, fee_bps, treasury_opt.is_some());
+        crate::charge_core::split_protocol_fee(amount, fee_bps, treasury_configured);
     crate::charge_core::credit_charge_payees(
         env,
         subscription_id,
@@ -2197,22 +2303,31 @@ pub fn do_charge_one_off(
         crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
     }
 
-    let should_emit_fee_event = if fee_amount > 0 {
-        if let Some(ref treasury) = treasury_opt {
+    // Route fee to treasury split beneficiaries or single treasury.
+    if fee_amount > 0 {
+        let splits = crate::charge_core::distribute_treasury_split(env, fee_amount, &sub.token);
+        for i in 0..splits.len() {
+            let (beneficiary, split_amount) = splits.get(i).unwrap();
             crate::merchant::credit_merchant_balance_for_token(
                 env,
-                treasury,
+                &beneficiary,
                 &sub.token,
-                fee_amount,
+                split_amount,
                 BillingChargeKind::OneOff,
             )?;
-            Some((treasury.clone(), fee_amount))
-        } else {
-            None
+            env.events().publish(
+                (Symbol::new(env, "protocol_fee_routed"), subscription_id),
+                crate::types::ProtocolFeeRoutedEvent {
+                    subscription_id,
+                    beneficiary,
+                    token: sub.token.clone(),
+                    fee_amount: split_amount,
+                    timestamp: now,
+                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                },
+            );
         }
-    } else {
-        None
-    };
+    }
 
     if cap_reached {
         transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
@@ -2678,8 +2793,30 @@ pub fn do_deposit_funds_on_behalf(
     enforce_deposit_cap(&sub, amount)?;
 
     // EFFECTS
-    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
+    // Apply the deposit to outstanding arrears before topping up the prepaid
+    // balance (issue #942). Only the portion that exceeds the arrears tops up
+    // the prepaid balance.
+    let mut arrears_paid = 0i128;
+    if sub.arrears > 0 {
+        arrears_paid = sub.arrears.min(amount);
+        sub.arrears = crate::safe_math::safe_sub(sub.arrears, arrears_paid)?;
+    }
+    let topup = crate::safe_math::safe_sub(amount, arrears_paid)?;
+    sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, topup)?;
     write_subscription(env, subscription_id, &sub);
+
+    if arrears_paid > 0 {
+        env.events().publish(
+            (Symbol::new(env, "arrears_settled"), subscription_id),
+            crate::types::ArrearsSettledEvent {
+                subscription_id,
+                arrears_paid,
+                remaining_arrears: sub.arrears,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+    }
 
     // Consume the grant
     env.storage().persistent().remove(&grant_key);
@@ -2795,11 +2932,12 @@ pub fn do_partial_refund(
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
     write_subscription(env, subscription_id, &sub);
 
+    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
+
     // Interactions: transfer refund from vault to subscriber.
     let token_addr = sub.token.clone();
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "partial_refund"), subscription_id),
@@ -3148,6 +3286,7 @@ pub fn do_create_subscription_from_plan(
         sub_account_label,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     };
 
     write_subscription(env, id, &sub);
@@ -3487,6 +3626,66 @@ pub fn get_subscriber_exposure(
     compute_subscriber_exposure(env, &subscriber, &token)
 }
 
+/// Enable or disable automatic renewal for a subscription.
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    // Only subscriber or merchant may toggle auto-renew.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+    authorizer.require_auth();
+
+    if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
+        return Err(Error::InvalidStatusTransition);
+    }
+
+    let now = env.ledger().timestamp();
+
+    if !enabled {
+        // Disable: record timestamp only on the first disable.
+        if sub.auto_renew {
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        sub.auto_renew = false;
+    } else {
+        // Enable: check renewal window.
+        if !sub.auto_renew {
+            // Already disabled — check window.
+            if let Some(disabled_at) = sub.auto_renew_disabled_at {
+                let window_end = disabled_at.saturating_add(sub.interval_seconds);
+                if now >= window_end {
+                    return Err(Error::RenewalWindowClosed);
+                }
+            }
+            sub.auto_renew_disabled_at = None;
+        }
+        sub.auto_renew = true;
+    }
+
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        crate::types::AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber,
+            merchant: sub.merchant,
+            enabled: sub.auto_renew,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
 pub fn do_configure_usage_limits(
     env: &Env,
 
@@ -3582,9 +3781,12 @@ pub fn do_initiate_transfer(
 
     let intent = crate::types::TransferIntent {
         subscription_id,
+        from_subscriber: from.clone(),
         from: from.clone(),
         to: to.clone(),
+        created_at: env.ledger().timestamp(),
         expires_at,
+        executed: false,
     };
 
     env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);

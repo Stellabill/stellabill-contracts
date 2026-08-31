@@ -8,14 +8,15 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TreasurySplitConfig,
+    TreasurySplitConfiguredEvent, TreasurySplitEntry, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
     SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
     ChargeExecutionResult,
 };
-use soroban_sdk::{token, Address, Bytes, Env, String, Symbol, Vec};
+use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
 pub fn get_schema_version(env: &Env) -> u32 {
     if let Some(v) = env
@@ -363,7 +364,7 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     let mut out = Vec::new(env);
     for token in tokens.iter() {
         if let Some(decimals) = storage.get::<_, u32>(&accepted_token_decimals_key(&token)) {
-            out.push_back(AcceptedToken { token, decimals });
+            out.push_back(AcceptedToken { token, decimals, added_at: 0 });
         }
     }
     out
@@ -455,6 +456,10 @@ pub fn do_batch_charge(
 }
 
 /// Performs a single interval-based charge. Admin only.
+///
+/// Loads the stored admin from `DataKey::Admin` and requires a valid
+/// authorization signature. Non-admin callers are rejected before any
+/// state mutation occurs.
 pub fn do_charge_subscription(
     env: &Env,
     subscription_id: u32,
@@ -720,7 +725,9 @@ pub fn set_fee_token(
         (Symbol::new(env, "fee_token_configured"),),
         FeeTokenConfiguredEvent {
             admin,
-            fee_token,
+            fee_token: fee_token.clone(),
+            old_token: None,
+            new_token: fee_token,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
@@ -736,6 +743,95 @@ pub fn get_fee_token(env: &Env) -> Option<Address> {
 /// Return the configured buyout premium in basis points, defaulting to 0.
 pub fn get_buyout_premium_bps(env: &Env) -> u32 {
     read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
+}
+
+/// Validate a treasury split configuration.
+///
+/// # Validation rules
+/// - Must contain at least one entry.
+/// - No duplicate beneficiary addresses.
+/// - Each `bps` must be > 0.
+/// - The sum of all `bps` values must equal exactly 10_000.
+///
+/// Returns [`Error::InvalidFeeBips`] on any validation failure.
+pub fn validate_treasury_split(entries: &Vec<TreasurySplitEntry>) -> Result<(), Error> {
+    if entries.is_empty() {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    let mut total_bps: u32 = 0;
+    for i in 0..entries.len() {
+        let entry = entries.get(i).unwrap();
+        if entry.bps == 0 {
+            return Err(Error::InvalidFeeBips);
+        }
+        total_bps = total_bps
+            .checked_add(entry.bps)
+            .ok_or(Error::Overflow)?;
+
+        // Check for duplicate beneficiaries
+        for j in (i + 1)..entries.len() {
+            let other = entries.get(j).unwrap();
+            if entry.beneficiary == other.beneficiary {
+                return Err(Error::InvalidFeeBips);
+            }
+        }
+    }
+
+    if total_bps != 10_000 {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    Ok(())
+}
+
+/// Set the multi-beneficiary treasury split. Admin only.
+///
+/// When a treasury split is configured, protocol fees are distributed across
+/// the listed beneficiaries according to their basis-point allocation instead
+/// of being sent to the single `DataKey::Treasury` address.
+///
+/// The sum of all `bps` values must equal exactly 10_000. Duplicate
+/// beneficiaries are rejected.
+pub fn set_treasury_split(
+    env: &Env,
+    admin: Address,
+    entries: Vec<TreasurySplitEntry>,
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "TreasurySplit")?;
+
+    validate_treasury_split(&entries)?;
+
+    let config = TreasurySplitConfig {
+        entries: entries.clone(),
+    };
+    write_config(env, &DataKey::TreasurySplit, &config);
+
+    env.events().publish(
+        (Symbol::new(env, "treasury_split_configured"),),
+        TreasurySplitConfiguredEvent {
+            admin,
+            entries,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+/// Return the configured treasury split, or `None` if not set.
+pub fn get_treasury_split(env: &Env) -> Option<TreasurySplitConfig> {
+    read_config(env, &DataKey::TreasurySplit)
+}
+
+/// Clear the treasury split, reverting protocol fees to the single-treasury
+/// address stored in `DataKey::Treasury`. Admin only.
+pub fn clear_treasury_split(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "TreasurySplit")?;
+    remove_config(env, &DataKey::TreasurySplit);
+    Ok(())
 }
 
 /// Set the auto-pause threshold (number of consecutive InsufficientBalance failures
@@ -915,6 +1011,33 @@ pub fn rewrite_subscriptions_for_sub_account_label(env: &Env) -> u32 {
     touched
 }
 
+/// v5 → v6 migration: rewrite every `DataKey::Sub(id)` record so the new
+/// trailing `arrears: i128` field deserializes cleanly for subscriptions
+/// created before STORAGE_VERSION 6. The in-memory struct already carries
+/// `arrears: 0` after the deserialization round-trip, so a read-write of each
+/// record is sufficient to persist the new field in the XDR encoding.
+pub fn rewrite_subscriptions_for_arrears(env: &Env) -> u32 {
+    let next_id: u32 = read_config(env, &DataKey::NextId).unwrap_or(0);
+    let mut touched = 0u32;
+    for id in 0..next_id {
+        let key = DataKey::Sub(id);
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::types::Subscription>(&key)
+        {
+            env.storage().persistent().set(&key, &sub);
+            env.storage().persistent().extend_ttl(
+                &key,
+                SUB_TTL_THRESHOLD,
+                SUB_TTL_EXTEND_TO,
+            );
+            touched = touched.saturating_add(1);
+        }
+    }
+    touched
+}
+
 pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> {
     let instance = env.storage().instance();
     let persistent = env.storage().persistent();
@@ -1079,6 +1202,13 @@ pub fn do_migrate(
             (4, _) => {
                 rewrite_subscriptions_for_sub_account_label(env);
                 current = 5;
+            }
+            // v5 → v6: rewrite every `DataKey::Sub(id)` record so the new
+            // trailing `arrears: i128` field deserializes cleanly for
+            // subscriptions created before STORAGE_VERSION 6.
+            (5, _) => {
+                rewrite_subscriptions_for_arrears(env);
+                current = 6;
             }
             _ => {
                 current += 1;

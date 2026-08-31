@@ -172,16 +172,20 @@ Off-chain systems can cross-check statements against:
 
 ## Relationship to per-charge audit log
 
-`statements.rs` maintains an **append-only per-charge row** for each
-`charge_subscription`, `charge_usage`, and `charge_one_off` call. Those rows are
-queryable via `get_sub_statements_offset` and `get_sub_statements_cursor`, and can
-be compacted via `compact_billing_statements`.
+`contracts/subscription_vault/src/statements.rs` maintains an **append-only per-charge row**
+for each successful `charge_subscription` (Interval), `charge_usage` (Usage), and `charge_one_off` (OneOff) call:
+- Backed by persistent storage key `DataKey::BillingStatement(subscription_id, seq)`
+- Sequential counter tracked in `DataKey::BillingStatementSequence(subscription_id)`
+- Indexed via `DataKey::BillingStatementsBySubscription(subscription_id)` as a vector of sequence IDs
+- Queried via `get_sub_statements_offset` and `get_sub_statements_cursor`
+- Pruned/compacted via `compact_billing_statements` (or inline retention pruning) into `BillingStatementAggregate`
 
-`billing_statements.rs` maintains **one period summary per billing interval**, written
-by the caller after one or more charges close a period.  Compaction of per-charge rows
+`PeriodBillingStatement` (period summary) maintains **one period summary per billing interval**, written
+by the caller/indexer after one or more charges close a period. Compaction of per-charge rows
 does **not** affect period statements.
 
 Both systems share `subscription_id` as the primary join key.
+
 
 ---
 

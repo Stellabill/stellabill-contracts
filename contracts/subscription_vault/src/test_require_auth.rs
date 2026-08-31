@@ -60,6 +60,7 @@ fn make_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Addre
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     (id, subscriber, merchant)
 }
@@ -99,6 +100,7 @@ fn create_subscription_missing_auth() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 }
 
@@ -116,6 +118,7 @@ fn create_subscription_correct_auth() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     let sub = client.get_subscription(&id);
     assert_eq!(sub.subscriber, subscriber);

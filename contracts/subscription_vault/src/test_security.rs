@@ -44,6 +44,7 @@ fn create_security_subscription(
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     (id, subscriber, merchant)
 }
