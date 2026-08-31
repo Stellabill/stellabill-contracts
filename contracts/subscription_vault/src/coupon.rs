@@ -197,6 +197,11 @@ pub fn apply_coupon(
 
     let coupon = read_coupon(env, &code).ok_or(Error::CouponNotFound)?;
 
+    // Coupon must be issued by the same merchant that owns the subscription.
+    if coupon.merchant != sub.merchant {
+        return Err(Error::Unauthorized);
+    }
+
     if coupon.revoked {
         return Err(Error::CouponRevoked);
     }
@@ -264,7 +269,7 @@ pub fn get_coupon(env: &Env, code: Symbol) -> Option<Coupon> {
 /// be skipped. Callers in `charge_one` catch these errors and skip the discount
 /// without failing the charge, to avoid billing outages.
 pub fn validate_coupon_for_charge(
-    env: &Env,
+    _env: &Env,
     now: u64,
     sub_token: &Address,
     coupon: &Coupon,

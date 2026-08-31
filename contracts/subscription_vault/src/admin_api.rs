@@ -168,6 +168,7 @@ pub use crate::admin::{
     remove_accepted_token, set_fee_token, set_protocol_fee, set_treasury_split,
     validate_treasury_split,
 };
+pub use crate::admin::{create_coupon, revoke_coupon};
 pub use crate::blocklist::{
     do_add_to_blocklist, do_remove_from_blocklist, get_blocklist_entry, is_blocklisted,
 };

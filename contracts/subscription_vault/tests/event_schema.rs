@@ -105,7 +105,7 @@ fn test_subscription_charged_event_emitted() {
 
     let token_admin = Address::generate(&env);
     let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-    let token = soroban_sdk::token::Client::new(&env, &token_address);
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
 
     let admin = Address::generate(&env);
     let subscriber = Address::generate(&env);
@@ -155,7 +155,7 @@ fn test_merchant_withdrawal_event_emitted() {
 
     let token_admin = Address::generate(&env);
     let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-    let token = soroban_sdk::token::Client::new(&env, &token_address);
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
 
     let admin = Address::generate(&env);
     let subscriber = Address::generate(&env);
