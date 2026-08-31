@@ -10,7 +10,7 @@
 //! All functions follow the **Checks-Effects-Interactions (CEI)** pattern:
 //!
 //! 1. **Checks**: Validate merchant authorization and sufficient balance
-//! 2. **Effects**: Update internal state (merchant balance, earnings) in storage
+//! 2. **Effects**: Update internal state (merchant balance, earnings) in storage, and call `sub_total_accounted` on outbound token transfers
 //! 3. **Interactions**: Call token.transfer() AFTER state is consistent and persisted
 //!
 //! **Guard layer**: Public entry-points in `lib.rs` acquire a `ReentrancyGuard` before
@@ -895,18 +895,13 @@ pub fn withdraw_merchant_funds_for_token(
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
-    earnings.refunds = earnings
-        .refunds
-        .checked_add(amount)
-        .ok_or(Error::Overflow)?;
-    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (

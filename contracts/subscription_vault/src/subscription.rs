@@ -232,6 +232,23 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 }
 
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
+    // Update total-accounted ledger on any change in subscriber prepaid balance.
+    if let Some(prev) = env
+        .storage()
+        .persistent()
+        .get::<_, Subscription>(&DataKey::Sub(subscription_id))
+    {
+        let delta: i128 = sub.prepaid_balance - prev.prepaid_balance;
+        if delta > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, delta);
+        } else if delta < 0 {
+            let _ = crate::accounting::sub_total_accounted(env, &sub.token, -delta);
+        }
+    } else {
+        if sub.prepaid_balance > 0 {
+            let _ = crate::accounting::add_total_accounted(env, &sub.token, sub.prepaid_balance);
+        }
+    }
     env.storage()
         .persistent()
         .set(&DataKey::Sub(subscription_id), sub);
@@ -888,11 +905,11 @@ pub fn do_deposit_funds(
         .remove(&crate::types::DataKey::ChargeFailureCounter(subscription_id));
     write_subscription(env, subscription_id, &sub);
 
+    crate::accounting::add_total_accounted(env, &token_addr, amount)?;
+
     // INTERACTIONS
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&subscriber, &env.current_contract_address(), &amount);
-
-    crate::accounting::add_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (TOPIC_DEPOSITED, subscription_id),
@@ -1977,6 +1994,13 @@ fn bulk_deposit_one(
         }
     };
     sub.prepaid_balance = new_balance;
+    if let Err(e) = crate::accounting::add_total_accounted(env, &token_addr, amount) {
+        return crate::types::BulkDepositResult {
+            subscription_id,
+            success: false,
+            error_code: e.to_code(),
+        };
+    }
     env.storage()
         .instance()
         .remove(&DataKey::ChargeFailureCounter(subscription_id));
@@ -1985,8 +2009,6 @@ fn bulk_deposit_one(
     // INTERACTIONS: transfer tokens from caller to contract.
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(caller, &env.current_contract_address(), &amount);
-
-    let _ = crate::accounting::add_total_accounted(env, &token_addr, amount);
 
     // Emit per-subscription deposited event.
     env.events().publish(
@@ -2842,11 +2864,12 @@ pub fn do_partial_refund(
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
     write_subscription(env, subscription_id, &sub);
 
+    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
+
     // Interactions: transfer refund from vault to subscriber.
     let token_addr = sub.token.clone();
     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "partial_refund"), subscription_id),
