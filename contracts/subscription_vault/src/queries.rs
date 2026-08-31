@@ -462,18 +462,20 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     // Compute total prepaid across all subscriptions
     let total_prepaid = compute_total_prepaid(env, &token);
 
+    // The total-accounted ledger tracks every accounted deposit/withdrawal.
+    let total_accounted = crate::accounting::get_total_accounted(env, &token);
+
     // Compute total merchant liabilities using precomputed total_prepaid
     let total_merchant_liabilities =
-        compute_total_merchant_liabilities(env, &token, total_prepaid);
+        compute_total_merchant_liabilities(total_prepaid, total_accounted);
 
-    // Recoverable is the difference between contract balance and accounted funds
-    let accounted = total_prepaid
+    // Recoverable is the balance not tracked by the total-accounted ledger.
+    let recoverable_amount = contract_balance.saturating_sub(total_accounted).max(0i128);
+
+    // Validate the accounting equation: prepaid + merchant liabilities + recoverable.
+    let computed_total = total_prepaid
         .checked_add(total_merchant_liabilities)
-        .unwrap_or(0i128);
-    let recoverable_amount = contract_balance.saturating_sub(accounted).max(0i128);
-
-    let computed_total = accounted
-        .checked_add(recoverable_amount)
+        .and_then(|sum| sum.checked_add(recoverable_amount))
         .unwrap_or(0i128);
 
     let is_balanced = contract_balance == computed_total;
@@ -588,18 +590,21 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
     // Get prepaid total with count
     let (total_prepaid, sub_count) = compute_total_prepaid_with_count(env, &token);
 
+    // The total-accounted ledger tracks every accounted deposit/withdrawal.
+    let total_accounted = crate::accounting::get_total_accounted(env, &token);
+
     // Get merchant liabilities with count
     let (total_merchant_liabilities, merchant_count) =
-        compute_total_merchant_liabilities_with_count(env, &token, total_prepaid);
+        compute_total_merchant_liabilities_with_count(total_prepaid, total_accounted);
 
-    // Compute recoverable
-    let accounted = total_prepaid
+    // Compute recoverable as the balance not tracked by the total-accounted ledger.
+    let computed_recoverable = contract_balance.saturating_sub(total_accounted).max(0i128);
+
+    // Validate accounting equation: prepaid + merchant liabilities + recoverable.
+    let computed_total = total_prepaid
         .checked_add(total_merchant_liabilities)
+        .and_then(|sum| sum.checked_add(computed_recoverable))
         .unwrap_or(0i128);
-    let computed_recoverable = contract_balance.saturating_sub(accounted).max(0i128);
-
-    // Validate accounting equation
-    let computed_total = accounted.checked_add(computed_recoverable).unwrap_or(0i128);
     let is_valid = contract_balance == computed_total;
 
     ReconciliationProof {
@@ -721,17 +726,14 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
     (total, count)
 }
 
-fn compute_total_merchant_liabilities(env: &Env, token: &Address, total_prepaid: i128) -> i128 {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
+fn compute_total_merchant_liabilities(total_prepaid: i128, total_accounted: i128) -> i128 {
     total_accounted.saturating_sub(total_prepaid).max(0i128)
 }
 
 fn compute_total_merchant_liabilities_with_count(
-    env: &Env,
-    token: &Address,
     total_prepaid: i128,
+    total_accounted: i128,
 ) -> (i128, u32) {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
     let total = total_accounted.saturating_sub(total_prepaid).max(0i128);
 
     let mut merchant_count: u32 = 0;

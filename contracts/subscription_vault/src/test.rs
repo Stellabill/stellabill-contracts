@@ -1485,7 +1485,7 @@ fn test_blocklist_rejects_duplicate_add_and_preserves_original_entry() {
 #[test]
 fn test_blocklist_add_and_remove_events_capture_reason_variants() {
     let test_env = TestEnv::default();
-    test_env.set_timestamp(T0);
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
     let subscriber = Address::generate(&test_env.env);
 
     let empty_reason = Some(String::from_str(&test_env.env, ""));
@@ -1680,6 +1680,509 @@ fn test_remove_from_blocklist_requires_admin_and_existing_entry() {
         .client
         .try_remove_from_blocklist(&merchant, &subscriber);
     assert_eq!(unauthorized, Err(Ok(Error::Forbidden)));
+}
+
+// -- Blocklist enforcement: pause / cancel / resume --------------------------
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_pause() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-pause is blocked.
+    assert_eq!(
+        test_env.client.try_pause_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_pause_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still pause a blocklisted subscriber's subscription.
+    test_env.client.pause_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
+}
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_cancel() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-cancel is blocked.
+    assert_eq!(
+        test_env.client.try_cancel_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_cancel_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still cancel a blocklisted subscriber's subscription.
+    test_env.client.cancel_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_blocklist_blocks_subscriber_self_resume() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // Pause first so resume is meaningful.
+    test_env.client.pause_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Subscriber self-resume is blocked.
+    assert_eq!(
+        test_env.client.try_resume_subscription(&id, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_allows_merchant_resume_on_blocklisted_subscriber() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.pause_subscription(&id, &merchant);
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Merchant can still resume a blocklisted subscriber's subscription.
+    test_env.client.resume_subscription(&id, &merchant);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist enforcement: deposit / charge ----------------------------------
+
+#[test]
+fn test_blocklist_blocks_subscriber_deposit() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Deposit is blocked for blocklisted subscriber.
+    assert_eq!(
+        test_env
+            .client
+            .try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+}
+
+#[test]
+fn test_blocklist_blocks_charge_when_subscriber_blocklisted() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // Seed enough balance for charging.
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Advance past interval so charge is eligible.
+    test_env.jump(INTERVAL + 1);
+
+    // Charge is blocked for blocklisted subscriber.
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
+}
+
+#[test]
+fn test_blocklist_blocks_charge_when_merchant_blocklisted() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    // Blocklist the merchant.
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &merchant, &None::<String>);
+
+    test_env.jump(INTERVAL + 1);
+
+    // Charge is blocked when merchant is blocklisted.
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
+}
+
+// -- Blocklist: subscriber retains withdrawal rights --------------------------
+
+#[test]
+fn test_blocklisted_subscriber_can_still_withdraw() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber,
+        &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    // Cancel first — withdrawal only works on cancelled subscriptions.
+    test_env.client.cancel_subscription(&id, &subscriber);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Withdrawal of remaining prepaid balance is allowed (preventive, not punitive).
+    let before = test_env.stellar_token_client().balance(&subscriber);
+    test_env.client.withdraw_subscriber_funds(&id, &subscriber);
+    let after = test_env.stellar_token_client().balance(&subscriber);
+    assert!(after > before);
+}
+
+// -- Blocklist: block-after-creation preserves existing subscription -----------
+
+#[test]
+fn test_blocklist_after_creation_preserves_subscription_balance() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.deposit_funds(
+        &id,
+        &subscriber, &50_000_000i128,
+        &None::<soroban_sdk::BytesN<32>>,
+    );
+    assertions::assert_prepaid_balance(&test_env.client, &id, 50_000_000i128);
+
+    // Blocklist after creation — balance is preserved.
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &Some(String::from_str(&test_env.env, "fraud")));
+
+    let sub = test_env.client.get_subscription(&id);
+    assert_eq!(sub.prepaid_balance, 50_000_000i128);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: entry metadata -----------------------------------------------
+
+#[test]
+fn test_blocklist_entry_stores_added_by_and_added_at() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let reason = Some(String::from_str(&test_env.env, "chargeback"));
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &reason);
+
+    let entry = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry.subscriber, subscriber);
+    assert_eq!(entry.added_by, test_env.admin);
+    assert_eq!(entry.added_at, T0);
+    assert_eq!(entry.reason, reason);
+}
+
+#[test]
+fn test_blocklist_entry_none_reason() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    let entry = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry.reason, None);
+    assert_eq!(entry.added_at, T0);
+}
+
+// -- Blocklist: unrelated addresses unaffected -------------------------------
+
+#[test]
+fn test_blocklist_unrelated_address_unaffected() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber_a = Address::generate(&test_env.env);
+    let subscriber_b = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber_a, &None::<String>);
+
+    assert_eq!(test_env.client.is_blocklisted(&subscriber_a), true);
+    assert_eq!(test_env.client.is_blocklisted(&subscriber_b), false);
+
+    // subscriber_b can still create, deposit, etc.
+    let id = test_env.client.create_subscription(
+        &subscriber_b,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: admin can unblock and restore full access --------------------
+
+#[test]
+fn test_blocklist_unblock_restores_full_access() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+
+    // Verify blocked.
+    assert_eq!(
+        test_env.client.try_create_subscription(
+            &subscriber,
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<u32>,
+        ),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+
+    // Unblock.
+    test_env
+        .client
+        .remove_from_blocklist(&test_env.admin, &subscriber);
+    assert_eq!(test_env.client.is_blocklisted(&subscriber), false);
+
+    // Full access restored.
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env
+        .client
+        .deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Active);
+}
+
+// -- Blocklist: duplicate-add preserves original entry ------------------------
+
+#[test]
+fn test_blocklist_duplicate_add_rejected_preserves_original() {
+    let test_env = TestEnv::default();
+    test_env.env.ledger().with_mut(|l| l.timestamp = T0);
+    let subscriber = Address::generate(&test_env.env);
+
+    let first_reason = Some(String::from_str(&test_env.env, "chargeback"));
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &first_reason);
+
+    let entry_before = test_env.client.get_blocklist_entry(&subscriber);
+
+    let duplicate_reason = Some(String::from_str(&test_env.env, "retry"));
+    let result = test_env
+        .client
+        .try_add_to_blocklist(&test_env.admin, &subscriber, &duplicate_reason);
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+
+    // Original entry is preserved.
+    let entry_after = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry_after.added_by, entry_before.added_by);
+    assert_eq!(entry_after.added_at, entry_before.added_at);
+    assert_eq!(entry_after.reason, entry_before.reason);
 }
 
 // -- Admin tests --------------------------------------------------------------
@@ -4827,7 +5330,226 @@ fn test_metadata_delete_on_cancelled_subscription_allowed() {
 }
 
 #[test]
-fn test_billing_statements_offset_pagination_newest_first() {
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn test_metadata_whitespace_value_rejected() {
+    // A value consisting entirely of whitespace is rejected at the ABI guard
+    // (Error::InvalidInput / code 3002) before reaching storage.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "tag");
+    let value = String::from_str(&test_env.env, "   "); // whitespace-only
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+}
+
+#[test]
+fn test_metadata_set_emits_event() {
+    // At least one event is emitted after a successful set_metadata call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "invoice_id");
+    let value = String::from_str(&test_env.env, "INV-9999");
+    let before_count = test_env.env.events().all().len();
+    test_env.client.set_metadata(&id, &subscriber, &key, &value);
+    let after_count = test_env.env.events().all().len();
+    // At least one new event (MetadataSetEvent) was appended
+    assert!(after_count > before_count);
+}
+
+#[test]
+fn test_metadata_delete_emits_event() {
+    // MetadataDeletedEvent is emitted on a successful delete_metadata call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "tag");
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key,
+        &String::from_str(&test_env.env, "v"),
+    );
+    let before_count = test_env.env.events().all().len();
+    test_env.client.delete_metadata(&id, &subscriber, &key);
+    let after_count = test_env.env.events().all().len();
+    // At least one new event was emitted
+    assert!(after_count > before_count);
+}
+
+#[test]
+fn test_metadata_32_byte_key_accepted_33_rejected() {
+    // Boundary test: key of exactly MAX_METADATA_KEY_LENGTH (32 bytes) is
+    // accepted; key of 33 bytes is rejected with MetadataKeyTooLong.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Exactly 32 bytes — accepted
+    let key32 = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(key32.len(), 32);
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key32,
+        &String::from_str(&test_env.env, "ok"),
+    );
+    assert_eq!(
+        test_env.client.get_metadata(&id, &key32),
+        String::from_str(&test_env.env, "ok")
+    );
+
+    // 33 bytes — rejected
+    let key33 = String::from_str(&test_env.env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(key33.len(), 33);
+    let res = test_env.client.try_set_metadata(
+        &id,
+        &subscriber,
+        &key33,
+        &String::from_str(&test_env.env, "bad"),
+    );
+    assert_eq!(res, Err(Ok(Error::MetadataKeyTooLong)));
+}
+
+#[test]
+fn test_metadata_256_byte_value_accepted_257_rejected() {
+    // Boundary test: value of exactly MAX_METADATA_VALUE_LENGTH (256 bytes) is
+    // accepted; value of 257 bytes is rejected with MetadataValueTooLong.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "val_boundary");
+
+    // Exactly 256 bytes — accepted
+    let v256_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 256]).unwrap();
+    let v256 = String::from_str(&test_env.env, &v256_str);
+    assert_eq!(v256.len(), 256);
+    test_env.client.set_metadata(&id, &subscriber, &key, &v256);
+    assert_eq!(test_env.client.get_metadata(&id, &key), v256);
+
+    // 257 bytes — rejected
+    let v257_str = alloc::string::String::from_utf8(alloc::vec![b'x'; 257]).unwrap();
+    let v257 = String::from_str(&test_env.env, &v257_str);
+    assert_eq!(v257.len(), 257);
+    let res = test_env
+        .client
+        .try_set_metadata(&id, &subscriber, &key, &v257);
+    assert_eq!(res, Err(Ok(Error::MetadataValueTooLong)));
+}
+
+#[test]
+fn test_metadata_delete_not_found_idempotency() {
+    // Deleting the same key twice returns NotFound on the second call.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let key = String::from_str(&test_env.env, "once");
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &key,
+        &String::from_str(&test_env.env, "v"),
+    );
+    // First delete: success
+    test_env.client.delete_metadata(&id, &subscriber, &key);
+    // Second delete: NotFound
+    let res = test_env.client.try_delete_metadata(&id, &subscriber, &key);
+    assert_eq!(res, Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn test_metadata_key_limit_delete_then_readd_cycles() {
+    // After filling to the cap, a delete-then-add cycle succeeds repeatedly.
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Fill to cap
+    for i in 0..10u32 {
+        let key = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env.client.set_metadata(
+            &id,
+            &subscriber,
+            &key,
+            &String::from_str(&test_env.env, "v"),
+        );
+    }
+    assert_eq!(test_env.client.list_metadata_keys(&id).len(), 10);
+
+    // Cycle: delete key_0, add new_key, repeat twice
+    for cycle in 0u32..2 {
+        let old_key = String::from_str(&test_env.env, &format!("k{cycle}"));
+        test_env.client.delete_metadata(&id, &subscriber, &old_key);
+        let new_key = String::from_str(&test_env.env, &format!("new{cycle}"));
+        test_env.client.set_metadata(
+            &id,
+            &subscriber,
+            &new_key,
+            &String::from_str(&test_env.env, "v2"),
+        );
+        assert_eq!(test_env.client.list_metadata_keys(&id).len(), 10);
+    }
+}
+
+#[test]
+fn test_metadata_set_multiple_subscriptions_independent_caps() {
+    // Each subscription has its own independent key cap; filling one does not
+    // affect another.
+    let test_env = TestEnv::default();
+    let (id1, sub1, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let (id2, sub2, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Fill id1 to cap
+    for i in 0..10u32 {
+        let k = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env
+            .client
+            .set_metadata(&id1, &sub1, &k, &String::from_str(&test_env.env, "v"));
+    }
+    // id2 should still accept keys
+    for i in 0..10u32 {
+        let k = String::from_str(&test_env.env, &format!("k{i}"));
+        test_env
+            .client
+            .set_metadata(&id2, &sub2, &k, &String::from_str(&test_env.env, "v"));
+    }
+    assert_eq!(test_env.client.list_metadata_keys(&id1).len(), 10);
+    assert_eq!(test_env.client.list_metadata_keys(&id2).len(), 10);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4002)")]
+fn test_metadata_set_on_paused_subscription_allowed_cancelled_blocked() {
+    // Paused is allowed; Cancelled is blocked (NotActive / code 4002).
+    let test_env = TestEnv::default();
+    let (id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    // Pause — should succeed
+    test_env.client.pause_subscription(&id, &subscriber);
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &String::from_str(&test_env.env, "note"),
+        &String::from_str(&test_env.env, "paused"),
+    );
+
+    // Resume then cancel
+    test_env.client.resume_subscription(&id, &subscriber);
+    test_env.client.cancel_subscription(&id, &subscriber);
+
+    // Now set should panic with NotActive
+    test_env.client.set_metadata(
+        &id,
+        &subscriber,
+        &String::from_str(&test_env.env, "after_cancel"),
+        &String::from_str(&test_env.env, "blocked"),
+    );
+}
+
+
     let test_env = TestEnv::default();
     test_env.env.ledger().set_timestamp(T0);
 
@@ -8490,18 +9212,10 @@ mod storage_layout {
     // 9. SchemaVersion key is readable after init
     //    Confirms the schema version is written during init and can be read
     //    back â€” a prerequisite for any future migration guard logic.
-    // -------------------------------------------------------------------------
-    #[test]
+    // -------------------------------------------------------------------------    #[test]
     fn test_schema_version_is_set_after_init() {
         let (env, client, _token, _admin) = setup_test_env();
-
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must be set after init")
-        });
-
+        let version = read_schema_version(&env, &client.address);
         assert_eq!(version, crate::STORAGE_VERSION);
     }
 
@@ -8510,69 +9224,47 @@ mod storage_layout {
         let (env, client, _token, admin) = setup_test_env();
         let before_events = env.events().all().len();
 
-        client.migrate_schema(&admin);
+        client.migrate(&admin);
 
         let after_events = env.events().all().len();
         assert_eq!(before_events, after_events, "same-version migration should not emit an event");
 
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must still be present")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
     }
 
     #[test]
     fn test_migrate_schema_rejects_downgrade() {
         let (env, client, _token, admin) = setup_test_env();
 
-        env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION.saturating_add(1));
-        });
+        write_schema_version(&env, &client.address, crate::STORAGE_VERSION.saturating_add(1));
 
-        let result = client.try_migrate_schema(&admin);
-        assert_eq!(result.unwrap_err(), Error::SchemaVersionTooHigh);
+        let result = client.try_migrate(&admin);
+        assert_eq!(result.unwrap_err(), Error::SchemaVersionMismatch);
     }
 
     #[test]
     fn test_migrate_schema_requires_admin() {
-        let (env, client, _token, admin) = setup_test_env();
+        let (env, client, _token, _admin) = setup_test_env();
         let stranger = Address::generate(&env);
 
-        let result = client.try_migrate_schema(&stranger);
+        let result = client.try_migrate(&stranger);
         assert_eq!(result.unwrap_err(), Error::Unauthorized);
 
         // Ensure the stored version is unchanged.
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must still be present")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
     }
 
     #[test]
     fn test_migrate_schema_upgrades_legacy_version() {
         let (env, client, _token, admin) = setup_test_env();
 
-        env.as_contract(&client.address, || {
-            env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
-        });
+        // Simulate a pre-v3 deployment by writing version 1 to persistent storage
+        // (the authoritative tier that get_schema_version checks first).
+        write_schema_version(&env, &client.address, 1u32);
 
-        client.migrate_schema(&admin);
+        client.migrate(&admin);
 
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must be present after migration")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
         let events = env.events().all();
         assert!(events.iter().any(|event| {
@@ -10067,22 +10759,19 @@ fn test_usage_no_limits_configured_is_passthrough() {
 //   - forward upgrade writes new version and emits SchemaMigratedEvent
 //   - non-admin caller is rejected
 
-/// Helper: read the on-chain SchemaVersion directly from instance storage.
+/// Helper: read the on-chain SchemaVersion (persistent first, then instance).
+/// Uses the same lookup order as `admin::get_schema_version` so tests
+/// observe the same version that `do_migrate` would see.
 fn read_schema_version(env: &Env, contract_id: &Address) -> u32 {
-    env.as_contract(contract_id, || {
-        env.storage()
-            .instance()
-            .get(&DataKey::SchemaVersion)
-            .unwrap_or(0)
-    })
+    env.as_contract(contract_id, || crate::admin::get_schema_version(env))
 }
 
-/// Helper: forcibly overwrite SchemaVersion in storage (for downgrade/upgrade tests).
+/// Helper: forcibly overwrite SchemaVersion in persistent storage
+/// (for downgrade/upgrade tests).  Persistent is the authoritative tier
+/// since `do_init` writes there and `get_schema_version` reads there first.
 fn write_schema_version(env: &Env, contract_id: &Address, version: u32) {
     env.as_contract(contract_id, || {
-        env.storage()
-            .instance()
-            .set(&DataKey::SchemaVersion, &version);
+        env.storage().persistent().set(&DataKey::SchemaVersion, &version);
     });
 }
 
@@ -10101,10 +10790,10 @@ fn has_event_with_symbol(env: &Env, events: &soroban_sdk::Vec<(Address, soroban_
 
 #[test]
 fn test_init_writes_schema_version() {
-    // After init, DataKey::SchemaVersion must equal STORAGE_VERSION (2).
+    // After init, DataKey::SchemaVersion must equal STORAGE_VERSION.
     let (env, client, _token, _admin) = setup_test_env();
     let version = read_schema_version(&env, &client.address);
-    assert_eq!(version, 2, "init must write SchemaVersion = STORAGE_VERSION");
+    assert_eq!(version, crate::STORAGE_VERSION, "init must write SchemaVersion = STORAGE_VERSION");
 }
 
 #[test]
@@ -10112,15 +10801,15 @@ fn test_migrate_same_version_is_noop_success() {
     // Calling migrate when stored == binary must return Ok and emit no event.
     let (env, client, _token, admin) = setup_test_env();
 
-    // Confirm version is already 2.
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    // Confirm version is already STORAGE_VERSION.
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
     // migrate should succeed silently.
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "same-version migrate must be Ok");
 
     // Version must remain unchanged.
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
     // No schema_migrated event should have been emitted (env.events().all()
     // returns only events from the most recent invocation).
@@ -10168,7 +10857,7 @@ fn test_migrate_non_admin_is_rejected() {
 #[test]
 fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
     // Simulate a contract deployed before init wrote SchemaVersion (stored = 0)
-    // being upgraded to binary version 2.
+    // being upgraded to the current binary version.
     let (env, client, _token, admin) = setup_test_env();
 
     // Patch stored version to 0 to simulate a pre-migration deployment.
@@ -10179,10 +10868,10 @@ fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "forward migration must succeed");
 
-    // Version must now equal STORAGE_VERSION (2).
+    // Version must now equal STORAGE_VERSION.
     assert_eq!(
         read_schema_version(&env, &client.address),
-        2,
+        crate::STORAGE_VERSION,
         "stored version must equal STORAGE_VERSION after migration"
     );
 
@@ -10195,7 +10884,7 @@ fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
 }
 
 #[test]
-fn test_migrate_forward_from_version_1_to_2() {
+fn test_migrate_forward_from_version_1_to_stored() {
     // Simulate upgrade from version 1 â†’ 2.
     let (env, client, _token, admin) = setup_test_env();
 
@@ -10203,8 +10892,8 @@ fn test_migrate_forward_from_version_1_to_2() {
     assert_eq!(read_schema_version(&env, &client.address), 1);
 
     let result = client.try_migrate(&admin);
-    assert!(result.is_ok(), "v1 â†’ v2 migration must succeed");
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert!(result.is_ok(), "v1 -> STORAGE_VERSION migration must succeed");
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 }
 
 #[test]
@@ -10215,12 +10904,12 @@ fn test_migrate_is_idempotent_after_forward_upgrade() {
     // First call: forward upgrade from 0 â†’ 2.
     write_schema_version(&env, &client.address, 0);
     client.migrate(&admin);
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
-    // Second call: already at version 2, must be a no-op.
+    // Second call: already at current version, must be a no-op.
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "second migrate call must be a no-op success");
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 }
 
 #[test]
@@ -10278,7 +10967,7 @@ fn test_migrate_event_fields_are_correct() {
             if Symbol::from_val(&env, &first) == Symbol::new(&env, "schema_migrated") {
                 let evt: crate::SchemaMigratedEvent = FromVal::from_val(&env, &data);
                 assert_eq!(evt.from_version, 1, "from_version must be 1");
-                assert_eq!(evt.to_version, 2, "to_version must be STORAGE_VERSION (2)");
+                assert_eq!(evt.to_version, crate::STORAGE_VERSION, "to_version must be STORAGE_VERSION");
                 assert_eq!(evt.admin, admin, "event admin must match caller");
                 assert_eq!(evt.timestamp, ts, "event timestamp must match ledger");
                 found = true;
