@@ -4,8 +4,7 @@ extern crate alloc;
 
 use soroban_sdk::{
     testutils::{Address as _, Events},
-    token::StellarAssetClient,
-    Address, Env, FromVal,
+    Address, Env, FromVal, TryFromVal,
 };
 use subscription_vault::{
     AdminRotatedEvent, SubscriptionCreatedEvent, SubscriptionVault, SubscriptionVaultClient,
@@ -75,7 +74,7 @@ fn test_subscription_created_event_emitted() {
         &None,
         &None::<u64>,
         &None::<u32>,
-            &None::<soroban_sdk::Symbol>,
+        &None::<soroban_sdk::Symbol>,
 );
 
     let events = env.events().all();
@@ -120,8 +119,7 @@ fn test_subscription_charged_event_emitted() {
 
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+        &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
@@ -170,8 +168,7 @@ fn test_merchant_withdrawal_event_emitted() {
 
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+        &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);

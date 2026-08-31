@@ -68,7 +68,8 @@ use crate::types::{
     AutoRenewToggledEvent, BillingChargeKind, CANCELLATION_ESCROW_WINDOW_SECS,
     CancellationEscrow, CancellationEscrowOpenedEvent, DataKey, EmergencyWithdrawIntent, Error,
     FundsDepositedEvent, GlobalCapDefaultUpdatedEvent, GraceBuyoutEvent,
-    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
+    LifetimeCapReachedEvent,
+    LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent, PartialRefundEvent,
     PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, RateLimitTrippedEvent,
     ReferralAttributedEvent, SubscriberCreateWindow, SubscriberEmergencyWithdrawEvent,
     SubscriberWithdrawalEvent, Subscription, SubscriptionCancelScheduledEvent,
@@ -3258,7 +3259,10 @@ pub fn do_create_subscription_from_plan(
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
-    let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+    if id == crate::MAX_SUBSCRIPTION_ID {
+        return Err(Error::SubscriptionLimitReached);
+    }
+    let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
     crate::admin::write_config(env, &DataKey::NextId, &next_id);
 
     let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
@@ -3315,20 +3319,19 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&token_key, &token_ids);
 
     env.events().publish(
-        (TOPIC_CREATED, id),
-        SubscriptionCreatedEvent {
-            subscription_id: id,
-            subscriber: subscriber.clone(),
-            merchant: plan.merchant.clone(),
-            token: plan.token.clone(),
-            amount: plan.amount,
-            interval_seconds: plan.interval_seconds,
-            lifetime_cap: plan.lifetime_cap,
-            expires_at: None,
-            expires_at_ledger: None,
-            timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
+        (TOPIC_CREATED, id),            SubscriptionCreatedEvent {
+                subscription_id: id,
+                subscriber: subscriber.clone(),
+                merchant: plan.merchant.clone(),
+                token: plan.token.clone(),
+                amount: plan.amount,
+                interval_seconds: plan.interval_seconds,
+                lifetime_cap: plan.lifetime_cap,
+                expires_at: None,
+                expires_at_ledger: None,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
     );
 
     Ok(id)

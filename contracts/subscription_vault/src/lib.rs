@@ -1495,8 +1495,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            None,
-            None,
+            None, // expires_at_ledger (not exposed on split-payee creation)
+            None, // sub_account_label (not exposed on split-payee creation)
         )?;
 
         let split = SplitPayees {
@@ -2314,7 +2314,36 @@ impl SubscriptionVault {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let timestamp = env.ledger().timestamp();
-        charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)
+        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
+        let new_sub = queries::get_subscription(&env, subscription_id)?;
+
+        let _period_start = old_sub.last_payment_timestamp;
+        let _period_end = timestamp;
+
+        env.events().publish(
+            (types::TOPIC_CHARGED,),
+            SubscriptionChargedEvent {
+                subscription_id,
+                subscriber: old_sub.subscriber,
+                merchant: old_sub.merchant,
+                token: old_sub.token,
+                amount: old_sub.amount,
+                lifetime_charged: new_sub.lifetime_charged,
+                timestamp,
+                period_start: old_sub.last_payment_timestamp,
+                period_end: timestamp,
+                salt: {
+                    let mut salt_buf = [0u8; 20];
+                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
+                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
+                    salt_buf[12..20].copy_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
+                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
+                    env.crypto().sha256(&salt_input).into()
+                },
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        Ok(result)
     }
 
     /// Charge metered usage. Admin only.
