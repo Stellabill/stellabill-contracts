@@ -3493,6 +3493,52 @@ impl SubscriptionVault {
             .unwrap_or(0u32)
     }
 
+    // ── Coupons ──────────────────────────────────────────────────────────────
+
+    /// Create or update a discount coupon. Admin only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_coupon(
+        env: Env,
+        admin: Address,
+        code: Symbol,
+        percent_off_bps: u32,
+        fixed_off: i128,
+        max_redemptions: u32,
+        expires_at: u64,
+        token: Address,
+    ) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        coupon::do_create_coupon(
+            &env,
+            admin,
+            code,
+            percent_off_bps,
+            fixed_off,
+            max_redemptions,
+            expires_at,
+            token,
+        )
+    }
+
+    /// Revoke a coupon so it can no longer be redeemed. Admin only.
+    pub fn revoke_coupon(env: Env, admin: Address, code: Symbol) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        coupon::do_revoke_coupon(&env, admin, code)
+    }
+
+    /// Bind a coupon to a subscription. Subscriber only.
+    pub fn apply_coupon(
+        env: Env,
+        subscription_id: u32,
+        subscriber: Address,
+        code: Symbol,
+    ) -> Result<(), Error> {
+        require_not_emergency_stop(&env)?;
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "apply_coupon")?;
+        subscriber.require_auth();
+        coupon::do_apply_coupon(&env, subscription_id, subscriber, code)
+    }
+
     /// Internal ID allocator.
     fn _next_id(env: &Env) -> Result<u32, Error> {
         let current: u32 = env

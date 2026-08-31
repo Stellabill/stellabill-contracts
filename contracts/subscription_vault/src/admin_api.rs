@@ -86,6 +86,11 @@
 //! | `queue_treasury_change` | [`crate::admin::queue_treasury_change`] |
 //! | `execute_treasury_change` | [`crate::admin::execute_treasury_change`] |
 //! | `cancel_treasury_change` | [`crate::admin::cancel_treasury_change`] |
+//! ## Coupons
+//! | Entrypoint | Delegate |
+//! |---|---|
+//! | `create_coupon` | [`crate::admin::create_coupon`] |
+//! | `revoke_coupon` | [`crate::admin::revoke_coupon`] |
 //!
 //! ## Auto-pause & Subscriber Create Cap
 //! | Entrypoint | Delegate |
@@ -164,6 +169,7 @@ pub use crate::admin::{
     migrate_config_to_persistent, queue_treasury_change, remove_accepted_token, set_fee_token,
     set_protocol_fee,
 };
+pub use crate::admin::{create_coupon, revoke_coupon};
 pub use crate::blocklist::{
     do_add_to_blocklist, do_remove_from_blocklist, get_blocklist_entry, is_blocklisted,
 };
