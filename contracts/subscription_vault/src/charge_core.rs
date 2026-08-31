@@ -1,5 +1,15 @@
 //! Single charge logic (no auth). Used by charge_subscription and batch_charge.
 //!
+//! # Authorization
+//!
+//! All public entrypoints that invoke this module (`charge_subscription`,
+//! `charge_usage`, `charge_usage_with_reference`, `batch_charge`) enforce
+//! admin-only authorization **before** calling into `charge_one` or
+//! `charge_usage_one`. This module intentionally does not perform auth checks
+//! so that operator-delegated charge paths can reuse the same core logic
+//! without duplicating it. The admin or operator auth is checked at the
+//! entrypoint layer in `lib.rs`.
+//!
 //! Charge runs only when status is Active or GracePeriod. On insufficient balance the
 //! subscription is moved to a recoverable non-active state and an explicit failure
 //! event is emitted without mutating financial accounting state.

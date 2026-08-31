@@ -92,7 +92,7 @@ pub const CONFIG_COOLDOWN_SECS: u64 = 6 * 60 * 60;
 /// collision-free `BytesN<32>` used as the persistent-storage key for the
 /// per-config-key cooldown timestamp.
 fn hash_key_label(env: &Env, key_label: &str) -> soroban_sdk::BytesN<32> {
-    let label_bytes = soroban_sdk::Bytes::from_slice(env, key_label.as_bytes());
+    let label_bytes = Bytes::from_slice(env, key_label.as_bytes());
     env.crypto().sha256(&label_bytes).into()
 }
 
@@ -455,6 +455,10 @@ pub fn do_batch_charge(
 }
 
 /// Performs a single interval-based charge. Admin only.
+///
+/// Loads the stored admin from `DataKey::Admin` and requires a valid
+/// authorization signature. Non-admin callers are rejected before any
+/// state mutation occurs.
 pub fn do_charge_subscription(
     env: &Env,
     subscription_id: u32,

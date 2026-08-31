@@ -160,7 +160,7 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -528,11 +528,16 @@ pub mod operator {
 
     pub fn do_operator_batch_charge(
         env: &Env,
-        _operator: Address,
-        _ids: &Vec<u32>,
-        _nonce: u64,
+        operator: Address,
+        ids: &Vec<u32>,
+        nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        Ok(Vec::new(env))
+        require_operator_auth(env, &operator)?;
+
+        // Nonce check must run before any state mutation to prevent replay.
+        crate::nonce::check_and_advance(env, &operator, crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE, nonce)?;
+
+        Ok(crate::admin::execute_batch_charge(env, ids))
     }
 
     pub fn do_operator_charge_subscription(
@@ -597,7 +602,7 @@ pub use types::{
     LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
-    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent,
+    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent, MerchantVacation,
     MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
     MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleLivenessEvent,
     OracleConfig, OracleKind, OraclePrice, OperatorRemovedEvent, OperatorSetEvent,
@@ -608,8 +613,8 @@ pub use types::{
     ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent,
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
     SplitChargeEvent, SplitPayees,
-    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     SubAccountCreatedEvent, SubAccountWithdrawEvent,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
@@ -1452,8 +1457,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            None,
-            None,
+            None, // expires_at_ledger
+            None, // sub_account_label
         )?;
 
         let split = SplitPayees {
@@ -1889,13 +1894,13 @@ impl SubscriptionVault {
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_sub_expiration_ledger(
+    pub fn set_sub_exp_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
         expires_at_ledger: Option<u32>,
     ) -> Result<(), Error> {
-        subscription::do_set_subscription_expiration_ledger(
+        subscription::do_set_sub_exp_ledger(
             &env,
             subscription_id,
             authorizer,
@@ -2265,6 +2270,9 @@ impl SubscriptionVault {
         subscription_id: u32,
         idem_key: Option<soroban_sdk::BytesN<32>>,
     ) -> Result<ChargeExecutionResult, Error> {
+        // Admin-only: only the stored admin (billing engine) may trigger charges
+        // that move funds from subscriber vaults to merchant earnings.
+        let _admin = admin::require_stored_admin_auth(&env)?;
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
@@ -2301,12 +2309,15 @@ impl SubscriptionVault {
         Ok(result)
     }
 
-    /// Charge metered usage.
+    /// Charge metered usage. Admin only.
     pub fn charge_usage(
         env: Env,
         subscription_id: u32,
         usage_amount: i128,
     ) -> Result<UsageChargeResult, Error> {
+        // Admin-only: only the stored admin (billing engine) may trigger charges
+        // that move funds from subscriber vaults to merchant earnings.
+        let _admin = admin::require_stored_admin_auth(&env)?;
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage")?;
         charge_core::charge_usage_one(
@@ -2317,13 +2328,16 @@ impl SubscriptionVault {
         )
     }
 
-    /// Charge usage with reference.
+    /// Charge usage with reference. Admin only.
     pub fn charge_usage_with_reference(
         env: Env,
         subscription_id: u32,
         usage_amount: i128,
         reference: String,
     ) -> Result<UsageChargeResult, Error> {
+        // Admin-only: only the stored admin (billing engine) may trigger charges
+        // that move funds from subscriber vaults to merchant earnings.
+        let _admin = admin::require_stored_admin_auth(&env)?;
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage_with_reference")?;
         charge_core::charge_usage_one(&env, subscription_id, usage_amount, reference)
@@ -3569,12 +3583,11 @@ mod test_merchant_whitelist;
 mod test_split_billing;
 
 #[cfg(test)]
-mod test_split_billing;
-
-#[cfg(test)]
 mod test_merchant_vacation;
 
 #[cfg(test)]
 mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
+#[cfg(test)]
+mod test_charge_auth;

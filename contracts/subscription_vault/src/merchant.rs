@@ -1734,8 +1734,9 @@ pub fn register_sub_account(
 ) -> Result<(), Error> {
     merchant.require_auth();
 
-    // Reject empty labels - use Symbol length check
-    if label.to_string() == "" {
+    // Reject empty labels
+    let label_str = Symbol::to_string(&label);
+    if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }
 
