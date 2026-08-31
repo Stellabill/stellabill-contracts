@@ -150,6 +150,7 @@ fn fund_merchant_balance(f: &Fixture, token: &Address, amount: i128) {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     f.client
         .deposit_funds(&id, &subscriber, &amount, &None::<soroban_sdk::BytesN<32>>);
@@ -253,6 +254,7 @@ fn withdraw_token_a_with_pending_token_b_dispute_isolates_balances() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     f.client.deposit_funds(
         &sub_b_id,

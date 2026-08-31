@@ -28,9 +28,10 @@ fn make_funded_subscription(te: &TestEnv, subscriber: &Address, merchant: &Addre
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
     sub_id
 }
 
@@ -234,6 +235,33 @@ fn operator_batch_charge_replay_rejected() {
 }
 
 #[test]
+fn operator_batch_charge_retry_with_correct_nonce_after_skip_ahead_succeeds() {
+    let te = TestEnv::default();
+    let subscriber = Address::generate(&te.env);
+    let merchant = Address::generate(&te.env);
+    let operator = Address::generate(&te.env);
+
+    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
+    te.client.set_operator(&te.admin, &operator);
+
+    te.jump(INTERVAL + 1);
+
+    let result = te
+        .client
+        .try_operator_batch_charge(&operator, &vec![&te.env, sub_id], &1u64);
+    assert!(result == Err(Ok(Error::NonceAlreadyUsed)));
+    assert_eq!(te.client.get_operator_nonce(&operator), 0u64);
+
+    // A rejected nonce must not consume the current nonce, so the correct
+    // nonce is still usable.
+    let results = te
+        .client
+        .operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
+    assert!(results.get(0).unwrap().success);
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
+}
+
+#[test]
 fn operator_batch_charge_without_operator_set_rejected() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
@@ -294,6 +322,24 @@ fn operator_nonce_independent_from_admin_nonce() {
     assert!(results.get(0).unwrap().success);
 }
 
+#[test]
+fn operator_nonce_is_independent_per_operator() {
+    let te = TestEnv::default();
+    let subscriber = Address::generate(&te.env);
+    let merchant = Address::generate(&te.env);
+    let operator = Address::generate(&te.env);
+    let other_operator = Address::generate(&te.env);
+
+    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
+    te.client.set_operator(&te.admin, &operator);
+
+    te.jump(INTERVAL + 1);
+    te.client.operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
+
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
+    assert_eq!(te.client.get_operator_nonce(&other_operator), 0u64);
+}
+
 // ── operator_charge_subscription ─────────────────────────────────────────────
 
 #[test]
@@ -351,6 +397,7 @@ fn operator_charge_usage_succeeds() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
@@ -381,6 +428,7 @@ fn operator_charge_usage_wrong_operator_rejected() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
@@ -693,6 +741,7 @@ fn operator_charge_usage_with_reference_succeeds() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
@@ -729,6 +778,7 @@ fn operator_batch_charge_paused_subscription_returns_not_active_error() {
 
     assert!(!results.get(0).unwrap().success);
     assert_eq!(results.get(0).unwrap().error_code, Error::NotActive as u32);
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
 }
 
 #[test]

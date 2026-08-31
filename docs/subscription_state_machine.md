@@ -16,7 +16,7 @@ All state transitions are:
 
 ## Core Transition Function
 
-The single authoritative function for all status changes is `transition_to()` in `state_machine.rs`:
+The single authoritative function for all status changes is `transition_to()` in `lib.rs` (within the `state_machine` module):
 
 ```rust
 pub fn transition_to(
@@ -32,7 +32,7 @@ pub fn transition_to(
 
 ## States
 
-The subscription can be in one of four states:
+The subscription can be in one of seven states:
 
 | State | Description | Entry Conditions |
 |-------|-------------|------------------|
@@ -41,6 +41,8 @@ The subscription can be in one of four states:
 | **Cancelled** | Subscription is permanently terminated | Cancelled from Active, Paused, or InsufficientBalance |
 | **InsufficientBalance** | Subscription cannot be charged until explicitly resumed | Can follow `GracePeriod` expiration, or be set by self-managed interface in test setup |
 | **GracePeriod** | Temporary window after an insufficient-balance charge during which a top-up and charge may recover to Active | Entered when `charge_subscription` on `Active` has insufficient funds and grace period is configured |
+| **Expired** | Subscription has reached its end date and can no longer be charged | Automatically set when validity period elapses |
+| **Archived** | Final terminal state after cleanup; no further transitions allowed | Set from Cancelled or Expired via `cleanup_subscription()` |
 
 ## State Diagram
 
@@ -58,6 +60,8 @@ The subscription can be in one of four states:
                     │         ┌──────────────────────┐  │
                     └────────▶│ INSUFFICIENT_BALANCE │──┘
                               └──────────────────────┘
+
+> **Note:** For simplicity, the diagram omits `GracePeriod`, `Expired`, and `Archived`. The complete transition matrix is defined in the tables below.
 ```
 
 ## Grace-period semantics
@@ -92,6 +96,7 @@ Grace period is managed by charge flow on `Active` subscriptions.
 | InsufficientBalance | Cancelled | `cancel_subscription()` | Cancel due to funding issues |
 | InsufficientBalance | Expired | Any entrypoint (auto) | Subscription expired |
 | Cancelled | Archived | `cleanup_subscription()` | Archive terminal subscription |
+| Expired | Cancelled | `cancel_subscription()` | Cancel an expired subscription before cleanup |
 | Expired | Archived | `cleanup_subscription()` | Archive expired subscription |
 | *any* | Same | (idempotent) | Setting same status is always allowed |
 
