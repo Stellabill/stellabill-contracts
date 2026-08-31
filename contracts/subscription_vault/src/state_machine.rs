@@ -1,13 +1,13 @@
 //! State machine: validates and applies subscription status transitions.
-//!
-//! Every status change MUST go through `transition_to`. The transition matrix
-//! is derived from `docs/subscription_state_machine.md`.
+//
+// Every status change MUST go through `transition_to`. The transition matrix
+// is derived from `docs/subscription_state_machine.md`.
 
-use soroban_sdk::{Env, Vec};
+use soroban_sdk:{Env, Vec};
 
 use crate::types::{Error, SubscriptionStatus};
 
-/// Returns `true` if transitioning from `from` to `to` is permitted.
+/// Returns `true`  if transitioning from `from` to `to` is permitted.
 ///
 /// Same-state (idempotent) transitions are always allowed.
 pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
@@ -28,6 +28,7 @@ pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> boo
             | (InsufficientBalance, Active)
             | (InsufficientBalance, Cancelled)
             | (InsufficientBalance, Expired)
+            | (InsufficientBalance, Paused)
             | (GracePeriod, Active)
             | (GracePeriod, Cancelled)
             | (GracePeriod, InsufficientBalance)
@@ -37,13 +38,13 @@ pub fn can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> boo
     )
 }
 
-/// Validates a transition, returning `Err(InvalidStatusTransition)` if not allowed.
+/// Validates a transition, returning `Err("InvalidStatusTransition)` if not allowed.
 pub fn validate_status_transition(
     from: &SubscriptionStatus,
     to: &SubscriptionStatus,
 ) -> Result<(), Error> {
     if can_transition(from, to) {
-        Ok(())
+        Ok()
     } else {
         Err(Error::InvalidStatusTransition)
     }
@@ -56,13 +57,13 @@ pub fn transition_to(
     current: &mut SubscriptionStatus,
     next: SubscriptionStatus,
 ) -> Result<(), Error> {
-    validate_status_transition(current, &next)?;
+    validate_status_transition(current, &next)?
     *current = next;
-    Ok(())
+    Ok()
 }
 
 /// Returns the set of valid target statuses from `from`, excluding self.
-///
+//?
 /// Used by tests and tooling to enumerate the transition matrix.
 pub fn get_allowed_transitions(from: &SubscriptionStatus) -> Vec<SubscriptionStatus> {
     let env = Env::default();
@@ -72,7 +73,7 @@ pub fn get_allowed_transitions(from: &SubscriptionStatus) -> Vec<SubscriptionSta
         Active => &[Paused, Cancelled, InsufficientBalance, GracePeriod, Expired],
         Paused => &[Active, Cancelled, Expired],
         Cancelled => &[Archived],
-        InsufficientBalance => &[Active, Cancelled, Expired],
+        InsufficientBalance => &[Active, Paused, Cancelled, Expired],
         GracePeriod => &[Active, Cancelled, InsufficientBalance, Expired],
         Expired => &[Archived],
         Archived => &[],

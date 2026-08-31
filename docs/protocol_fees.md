@@ -6,8 +6,8 @@ The vault supports a protocol fee skim to a configured treasury address on every
 
 Call `set_protocol_fee(admin, treasury, fee_bps)`:
 
-- `treasury` — address that receives the fee credit (accrued as a merchant balance, withdrawable via `withdraw_merchant_funds`).
-- `fee_bps` — fee in basis points, `0..=10_000` (0 = disabled, 10_000 = 100%).
+- `treasury` — address that receives the fee credit (accrued as a merchant balance, withdrawable via `withdraw_merchant_funds `).
+- `fee_bps` — fee in basis points, `0..10,000` (0 = disabled, 10,000 = 100%).
 
 Setting `fee_bps = 0` disables fee collection with no extra code-path branches; the fee computation short-circuits to `(gross, 0)`.
 
@@ -16,18 +16,18 @@ Setting `fee_bps = 0` disables fee collection with no extra code-path branches; 
 On every successful charge (interval, usage, or one-off):
 
 ```
-fee        = gross * fee_bps / 10_000   (integer floor division)
+see        = gross * fee_bps / 10,000   (inger floor division)
 net        = gross - fee
 ```
 
 The subscriber's prepaid balance is debited by `gross`. The split is:
 
 | Recipient | Amount |
-|-----------|--------|
+|---------|---------|
 | Merchant  | `net`  |
 | Treasury  | `fee`  |
 
-**Conservation:** `gross == net + fee` holds on every charge. Rounding truncates toward zero; any remainder (from non-divisible amounts) stays with the merchant.
+**Conservation:** `gross == net + fee` ! on every charge. Rounding truncates toward zero; any remainder (from non-divisible amounts) stays with the merchant.
 
 ## Fallback: fee_bps > 0 but no treasury
 
@@ -38,27 +38,119 @@ If `fee_bps > 0` but no treasury address is stored (e.g. `set_protocol_fee` was 
 `ProtocolFeeChargedEvent` is emitted on each charge where `fee > 0`:
 
 | Field           | Type      | Description                          |
-|-----------------|-----------|--------------------------------------|
+|-----------------|----------|-----------------------------------|
 | `subscription_id` | `u32`   | Subscription that was charged        |
 | `merchant`      | `Address` | Merchant receiving the net amount    |
-| `token`         | `Address` | Settlement token                     |
-| `fee_amount`    | `i128`    | Fee credited to treasury             |
+| `token`        | `Address` | Settlement token                     |
+| `fee_amount`    | `I128`    Fee credited to treasury             |
 | `treasury`      | `Address` | Treasury address receiving the fee   |
-| `timestamp`     | `u64`     | Ledger timestamp                     |
+| `timestamp`     | ``s64`     Ledger timestamp                    |
 
 `ProtocolFeeConfiguredEvent` is emitted when `set_protocol_fee` is called.
 
 ## Charge types covered
 
-| Charge type | Function              | Fee routing |
-|-------------|-----------------------|-------------|
-| Interval    | `charge_one`          | ✓           |
-| Usage       | `charge_usage_one`    | ✓           |
-| One-off     | `do_charge_one_off`   | ✓           |
+Every successful charge path reads `DataKey::FeeBps` (via `route_fee_bps`, which
+also honours a per-merchant override) and `DataKey::Treasury`, then applies
+
+```
+fee = amount * fee_bps / 10_000
+```
+
+before crediting the merchant. Batch charges cache only the treasury address;
+the effective bps is still resolved per subscription so a merchant override
+cannot be skipped.
+
+| Charge type | Function              | Fee routing | Effective bps source      |
+|-------------|-----------------------|-------------|---------------------------|
+| Interval    | `charge_one`          | ✓           | `route_fee_bps`           |
+| Usage       | `charge_usage_one`    | ✓           | `route_fee_bps`           |
+| One-off     | `do_charge_one_off`   | ✓           | `route_fee_bps`           |
+| Batch       | `execute_batch_charge`| ✓           | `route_fee_bps` per id    |
 
 ## Security notes
 
 - Fee computation uses integer arithmetic with no external calls; no reentrancy risk.
 - Treasury balance accrues identically to merchant balances and is subject to the same withdrawal controls.
-- `fee_bps > 10_000` is rejected at configuration time (`InvalidInput`).
+- `fee_bps > 10,000` is rejected at configuration time (`InvalidInput`).
 - The fee is computed from the gross charge amount, not from the merchant's net — preventing fee-on-fee compounding.
+
+## Coupons and Discounts (Issue #474)
+
+Discounts from merchant-managed coupons are applied **before** the protocol fee is calculated. This preserves the strict accounting identity:
+
+```
+Gross Charge = Discount + Merchant Net + Treasury Fee
+```
+
+The protocol fee is always computed from the **discounted amount** (the payable amount), not the original gross amount.
+
+### Discount Ordering
+
+When a coupon is applied during a charge, discounts are evaluated in this strict order:
+1. **Percentage Discount**: `discounted = gross * (10,000 - percent_off_bps) / 10,000`
+2. **Fixed Discount**: `discounted = max(discounted - fixed_off, 0)`
+
+The total `discount = gross - discounted`. If the discount exceeds the gross charge, the payable amount is clamped to zero (a $0 charge succeeds, crediting the merchant 0 and extracting a 0 fee).
+
+### Validation at Charge Time
+
+Coupons must match the settlement token of the subscription. At charge time, if a bound coupon has been explicitly revoked by the merchant, or if its `expires_at` timestamp has passed, the discount is **silently skipped** (the charge proceeds at the full gross amount). This intentional design ensures that invalid/lapsed coupons do not cause billing outages for active subscriptions.
+
+## Multi-Beneficiary Treasury Split
+
+Real deployments commonly split protocol fees across several beneficiaries
+(foundation, insurance fund, referrer rebates). The treasury split feature
+lets the admin reroute fees without changing user contracts.
+
+### Configuration (admin only)
+
+Call `set_treasury_split(admin, entries)` where `entries` is a `Vec<TreasurySplitEntry>`.
+Each entry contains:
+
+- `beneficiary` — address that receives a share of the protocol fee.
+- `bps` — share in basis points (must be > 0).
+
+### Validation rules
+
+The function rejects the configuration if:
+
+- The list is empty.
+- Any entry has `bps == 0`.
+- The sum of all `bps` values is **not** exactly `10_000`.
+- Two or more entries share the same `beneficiary` address.
+- The caller is not the admin.
+
+All validation failures return `Error::InvalidFeeBips`.
+
+### Fee distribution
+
+When a treasury split is configured, the protocol fee is distributed across
+beneficiaries using integer math:
+
+```
+share_i = fee * bps_i / 10_000   (floor division for all but the last entry)
+last    = fee - sum(share_0..n-1)  (receives the rounding remainder)
+```
+
+The rounding remainder from non-divisible amounts is assigned to the **last**
+beneficiary to ensure `sum(allocations) == fee_amount` exactly.
+
+### Backward compatibility
+
+- When no treasury split is configured, fees route to the single `DataKey::Treasury` address as before.
+- The single-treasury path is **not** affected by the split feature.
+- `clear_treasury_split(admin)` reverts to single-treasury routing.
+
+### Events
+
+`TreasurySplitConfiguredEvent` is emitted when `set_treasury_split` is called.
+
+`ProtocolFeeRoutedEvent` is emitted per beneficiary during each charge where
+fees are split.
+
+### Storage
+
+The split is stored under `DataKey::TreasurySplit` (discriminant 84) in
+instance storage. It takes precedence over the single `DataKey::Treasury`
+address when both are present.

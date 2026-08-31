@@ -77,6 +77,22 @@ pub enum SubscriptionStatus {
 
 **TTL behavior:** Subscription entries are kept alive on every read and write. Billing statement secondary index entries and billing period snapshots also carry their own TTL thresholds (`BILLING_STATEMENT_TTL_THRESHOLD`, `BILLING_STATEMENT_TTL_EXTEND_TO`, `BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD`, `BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO`) and are extended when the corresponding storage operations execute.
 
+### Billing Statement TTL thresholds and extension policy
+
+All three persistent keys used for billing statements are extended on every write (`append_statement`) and on every read (`get_statements_by_subscription_offset`):
+
+| Storage key | Extended on | Threshold constant | Extend-to constant |
+|---|---|---|---|
+| `DataKey::BillingStatementSequence(sub_id)` | write (`append_statement`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+| `DataKey::BillingStatement(sub_id, seq)` | write (`append_statement`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+| `DataKey::BillingStatementsBySubscription(sub_id)` | write (`append_statement`), read (`get_statements_by_subscription_offset`) | `BILLING_STATEMENT_TTL_THRESHOLD` (30 days) | `BILLING_STATEMENT_TTL_EXTEND_TO` (365 days) |
+
+**Extension semantics**: `env.storage().persistent().extend_ttl(key, threshold, extend_to)` is a conditional call — the host only extends when the entry's remaining TTL is strictly below `threshold`. When the remaining TTL is already at or above the threshold, the call is a no-op with no ledger fee. The helper `extend_statement_ttl` (in `lib.rs::statements`) encapsulates this call.
+
+**Absent-key safety**: If the key does not exist (e.g., a subscription that has not yet been charged), the `extend_ttl` call is a silent no-op. The host does not error for absent keys.
+
+**Rationale**: Billing statement entries accumulate over a subscription's lifetime. Without TTL extension on writes, a statement written during an early charge would expire after Soroban's default persistent TTL (~120 days) and become unreadable by later queries. Extending to 365 days on every append keeps all retained statements reachable as long as the subscription is actively used. The read-path extension (`get_statements_by_subscription_offset`) further refreshes statement bodies on each pagination query, matching the same "touched entries stay alive" contract that subscription records use.
+
 #### TTL exhaustion semantics
 
 A `DataKey::Sub(id)` entry is readable while `live_until_ledger >= current_ledger`. The contract refreshes this window on every `get_subscription`/`write_subscription` via `extend_ttl(SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO)`, so an entry that is touched at least once per `SUB_TTL_EXTEND_TO` window (365 days) never expires.
@@ -88,6 +104,48 @@ This behavior is pinned by `contracts/subscription_vault/tests/ttl_exhaustion.rs
 - one ledger later the access raises the host error (no stale read);
 - a read at the last live ledger re-extends the TTL and restores access past the original window;
 - a second full TTL cycle preserves the record byte-for-byte, then expires again once unrefreshed.
+
+---
+
+## Known-Instance-Key Allowlist (defensive write guard)
+
+Instance storage holds the contract's global invariant-bearing config (admin,
+token, fees, balances, merchant state). A future PR that adds a new `DataKey`
+variant — or revives a legacy `Symbol`-keyed code path — could accidentally
+write an *unknown* key into instance storage and bypass these invariants. To
+catch that drift before it ships, the contract pins a canonical allowlist of the
+instance-tier keys.
+
+### Components (`contracts/subscription_vault/src/types.rs`)
+
+| Item | Role |
+|------|------|
+| `DataKey::canonical_discriminant(&self) -> u32` | Exhaustive, wildcard-free match mapping each variant to its frozen declaration-order discriminant. Adding a variant without an arm is a **compile error**. |
+| `KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32]` | The canonical, sorted set of instance-tier discriminants (mirrors the registry table). |
+| `is_known_instance_discriminant(u32) -> bool` / `DataKey::is_known_instance_key(&self) -> bool` | Membership checks. The raw-`u32` form can reject a *synthetic* unknown key without constructing one. |
+| `assert_known_data_key(&DataKey)` | `debug_assert!`-based guard. **No-op in release/wasm** (zero overhead); trips under `cfg(test)`/debug so CI catches drift. |
+| `debug_assert_known_key!(key)` | Macro wrapper for instance storage helpers. Expands to nothing in release builds. |
+
+### Two layers of protection
+
+1. **Compile time** — `canonical_discriminant` is exhaustive. A new `DataKey`
+   variant cannot compile until it is explicitly numbered, forcing a conscious
+   instance-vs-persistent classification.
+2. **Test/CI time** — `assert_known_data_key` (via `debug_assert_known_key!`)
+   trips if an unknown or persistent-tier key reaches instance storage, while
+   remaining a no-op in the deployed wasm.
+
+### Adding a new `DataKey` variant
+
+1. Append the variant to `DataKey` (never reorder existing variants).
+2. Append a row to the registry table on `DataKey` with its storage tier.
+3. Add a match arm to `canonical_discriminant` with the next number.
+4. If it is **instance**-tier, add its discriminant to
+   `KNOWN_INSTANCE_KEY_DISCRIMINANTS` and to the positive test enumeration.
+
+The allowlist tests (`types::known_keys_tests`) assert the registry stays
+contiguous (`0..=44`), duplicate-free, and exactly consistent with the
+classification table, so any of the steps above being skipped fails CI.
 
 ---
 

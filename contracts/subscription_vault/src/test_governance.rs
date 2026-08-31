@@ -1,6 +1,276 @@
-use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE};
+#![cfg(test)]
+
+use crate::types::{ProposalKind, OP_REFUND, OP_WITHDRAW};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env, String,
+};
+
+// ── Governance Proposal Tests ──────────────────────────────────────────────
+
+/// Helper to initialize contract with admin and token
+fn init_vault<'a>(env: &'a Env, admin: &Address) -> (Address, SubscriptionVaultClient<'a>) {
+    let token_admin = Address::generate(env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(env, &contract_id);
+
+    client.init(
+        &token_address,
+        &6, // decimals
+        admin,
+        &10_000_000, // min_topup
+        &86400,      // grace period
+    );
+
+    (token_address, client)
+}
+
+#[test]
+fn test_add_and_remove_guardians() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Add guardians
+    client.add_guardian(&admin, &guardian1, &100);
+    client.add_guardian(&admin, &guardian2, &50);
+
+    // Verify weights
+    assert_eq!(client.get_guardian_weight(&guardian1), 100);
+    assert_eq!(client.get_guardian_weight(&guardian2), 50);
+
+    // Remove guardian1
+    client.remove_guardian(&admin, &guardian1);
+    assert_eq!(client.get_guardian_weight(&guardian1), 0);
+    assert_eq!(client.get_guardian_weight(&guardian2), 50);
+}
+
+#[test]
+fn test_submit_proposal_rotate_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600; // 1 hour from now
+
+    // Submit proposal
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000, // 50% quorum
+        &eta,
+    );
+
+    assert_eq!(proposal_id, 0);
+
+    // Verify proposal exists
+    let proposal = client.get_proposal(&0).unwrap();
+    assert_eq!(proposal.kind, ProposalKind::RotateAdmin);
+    assert_eq!(proposal.target, new_admin);
+    assert_eq!(proposal.quorum_bps, 5000);
+    assert_eq!(proposal.executed, false);
+}
+
+#[test]
+fn test_submit_proposal_set_protocol_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+
+    // Submit protocol fee proposal
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::SetProtocolFee,
+        &treasury,
+        &None,
+        &250,  // 2.5% fee
+        &7500, // 75% quorum
+        &eta,
+    );
+
+    assert_eq!(proposal_id, 0);
+
+    let proposal = client.get_proposal(&0).unwrap();
+    assert_eq!(proposal.kind, ProposalKind::SetProtocolFee);
+    assert_eq!(proposal.target3, 250);
+}
+
+#[test]
+fn test_invalid_quorum_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+
+    // Try to submit with invalid quorum (> 10000)
+    let result = client.try_submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &10001, // Invalid: > 10000
+        &eta,
+    );
+
+    assert!(
+        result.is_err(),
+        "proposal with quorum > 10000 must be rejected"
+    );
+}
+
+#[test]
+fn test_eta_in_past_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    env.ledger().set_timestamp(1_000_000);
+    let current_time = env.ledger().timestamp();
+    let eta_in_past = current_time - 3600; // 1 hour ago
+
+    // Try to submit with ETA in the past
+    let result = client.try_submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000,
+        &eta_in_past,
+    );
+
+    assert!(result.is_err(), "proposal with past ETA must be rejected");
+}
+
+#[test]
+fn test_cancel_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Submit proposal
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+    let proposal_id = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    );
+
+    // Cancel it
+    let reason = String::from_str(&env, "Superseded by newer proposal");
+    client.cancel_proposal(&proposal_id, &reason);
+
+    // Verify it's marked as executed (and thus immutable)
+    let proposal = client.get_proposal(&proposal_id);
+    assert_eq!(proposal.unwrap().executed, true);
+}
+
+#[test]
+fn test_list_guardians() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Add guardians
+    client.add_guardian(&admin, &guardian1, &100);
+    client.add_guardian(&admin, &guardian2, &50);
+
+    // List guardians
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 2);
+
+    // Verify weights are present (order may vary)
+    let has_guardian1 = guardians.iter().any(|(g, w)| g == guardian1 && w == 100);
+    let has_guardian2 = guardians.iter().any(|(g, w)| g == guardian2 && w == 50);
+    assert!(has_guardian1);
+    assert!(has_guardian2);
+}
+
+#[test]
+fn test_current_proposal_id_counter() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin1 = Address::generate(&env);
+    let new_admin2 = Address::generate(&env);
+
+    let (_, client) = init_vault(&env, &admin);
+
+    // Initially 0
+    assert_eq!(client.get_current_proposal_id(), 0);
+
+    // Submit first proposal
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+    let id1 = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin1,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    );
+
+    assert_eq!(id1, 0);
+    assert_eq!(client.get_current_proposal_id(), 1);
+
+    // Submit second proposal
+    let id2 = client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &new_admin2,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    );
+
+    assert_eq!(id2, 1);
+    assert_eq!(client.get_current_proposal_id(), 2);
+}
+
+// ── Legacy Merchant Config Tests ────────────────────────────────────────────
 
 #[test]
 fn test_merchant_config_initialization() {
@@ -18,7 +288,7 @@ fn test_merchant_config_initialization() {
     let config = client.initialize_merchant_config(
         &merchant_a,
         &payout_address,
-        &500, // 5% fee in bips
+        &500,  // 5% fee in bips
         &0x1F, // all operations enabled
         &None,
         &redirect_url,
@@ -54,17 +324,20 @@ fn test_merchant_config_governance_enforced() {
     // Partial update — update_merchant_config also returns MerchantConfig directly
     let updated = client.update_merchant_config(
         &merchant_a,
-        &None,                                                   // payout unchanged
-        &Some(1000),                                             // new fee: 10%
-        &None,                                                   // ops unchanged
-        &None,                                                   // active unchanged
-        &None,                                                   // fee_address unchanged
-        &Some(String::from_str(&env, "https://new-url.com")),   // new redirect
-        &None,                                                   // paused unchanged
+        &None,                                                // payout unchanged
+        &Some(1000),                                          // new fee: 10%
+        &None,                                                // ops unchanged
+        &None,                                                // active unchanged
+        &None,                                                // fee_address unchanged
+        &Some(String::from_str(&env, "https://new-url.com")), // new redirect
+        &None,                                                // paused unchanged
     );
 
     assert_eq!(updated.fee_bips, 1000);
-    assert_eq!(updated.redirect_url, String::from_str(&env, "https://new-url.com"));
+    assert_eq!(
+        updated.redirect_url,
+        String::from_str(&env, "https://new-url.com")
+    );
 }
 
 #[test]
@@ -236,8 +509,8 @@ fn test_partial_update_preserves_other_fields() {
     let initial = client.initialize_merchant_config(
         &merchant,
         &payout,
-        &500,   // 5%
-        &0x0F,  // no OP_AUTO_RENEWAL
+        &500,  // 5%
+        &0x0F, // no OP_AUTO_RENEWAL
         &None,
         &String::from_str(&env, "https://initial.com"),
     );
@@ -259,7 +532,10 @@ fn test_partial_update_preserves_other_fields() {
 
     assert_eq!(updated.fee_bips, 1000);
     assert_eq!(updated.allowed_operations, 0x0F);
-    assert_eq!(updated.redirect_url, String::from_str(&env, "https://initial.com"));
+    assert_eq!(
+        updated.redirect_url,
+        String::from_str(&env, "https://initial.com")
+    );
 }
 
 #[test]
@@ -393,6 +669,256 @@ fn test_merchant_refund_uninitialized_merchant_fails() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Vote-lock during timelock window — audit #632
+//
+// Verifies that guardians cannot add or change votes once the proposal's
+// timelock (ETA) is reached. Before the fix, a guardian could vote YES to
+// appear supportive during the voting window, then flip their vote to NO
+// right at execution time to grief the proposal.
+// ══════════════════════════════════════════════════════════════════════════════
+
+mod vote_lock_during_timelock {
+    use crate::types::Error;
+    use crate::{SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        Address, Env, Symbol,
+    };
+
+    fn init_vault<'a>(env: &'a Env, admin: &Address) -> SubscriptionVaultClient<'a> {
+        let token_admin = Address::generate(env);
+        let token_address = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(env, &contract_id);
+        client.init(&token_address, &6, admin, &10_000_000, &86400);
+        client
+    }
+
+    /// Test: voting succeeds when `now < proposal.eta` (before timelock).
+    #[test]
+    fn vote_before_timelock_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock — must succeed
+        let result = client.try_vote_proposal(&proposal_id, &true);
+        assert!(result.is_ok(), "voting before ETA must succeed");
+    }
+
+    /// Test: voting is rejected when `now == proposal.eta` (exact timelock start).
+    #[test]
+    fn vote_at_exact_timelock_start_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Advance ledger to exactly the ETA
+        env.ledger().set_timestamp(eta);
+
+        // Vote at exact timelock — must be rejected
+        let result = client.try_vote_proposal(&proposal_id, &true);
+        assert_eq!(result, Err(Ok(Error::InvalidInput)), "voting at exact ETA must be rejected");
+    }
+
+    /// Test: voting is rejected when `now > proposal.eta` (after timelock).
+    #[test]
+    fn vote_after_timelock_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600; // 1 hour from now
+
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock — succeeds
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance ledger past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Try to flip vote after timelock — must be rejected
+        let result = client.try_vote_proposal(&proposal_id, &false);
+        assert_eq!(
+            result,
+            Err(Ok(Error::InvalidInput)),
+            "flipping vote after ETA must be rejected"
+        );
+    }
+
+    /// Test: execution still works after timelock passes (no regression).
+    #[test]
+    fn execute_proposal_after_timelock_still_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000, // 50% quorum needed
+            &eta,
+        );
+
+        // Vote before timelock
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance past ETA — votes are locked
+        env.ledger().set_timestamp(eta + 100);
+
+        // Execute — must still succeed (quorum was met before lock)
+        let result = client.try_execute_proposal(&proposal_id);
+        assert!(result.is_ok(), "execution after timelock must still succeed");
+    }
+
+    /// Test: cancel proposal still works even after timelock.
+    #[test]
+    fn cancel_proposal_after_timelock_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Advance past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Cancel — must still succeed (admin override not gated by timelock)
+        let reason = soroban_sdk::String::from_str(&env, "Timelock reached, but admin cancelled");
+        let result = client.try_cancel_proposal(&proposal_id, &reason);
+        assert!(result.is_ok(), "cancelling after timelock must still succeed");
+    }
+
+    /// Test: verify VoteLockedEvent is emitted on rejected vote.
+    #[test]
+    fn vote_locked_event_emitted_on_rejected_vote() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+
+        let client = init_vault(&env, &admin);
+        client.add_guardian(&admin, &guardian1, &100);
+
+        let current_time = env.ledger().timestamp();
+        let eta = current_time + 3600;
+        let target = Address::generate(&env);
+
+        let proposal_id = client.submit_proposal(
+            &crate::types::ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // Vote before timelock
+        client.vote_proposal(&proposal_id, &true);
+
+        // Advance past ETA
+        env.ledger().set_timestamp(eta + 100);
+
+        // Attempt vote — rejected
+        let _ = client.try_vote_proposal(&proposal_id, &false);
+
+        // Check events include vote_locked
+        let events = env.events().all();
+        let expected_symbol = Symbol::new(&env, "vote_locked");
+        let has_vote_locked = events.iter().any(|e| {
+            let topics = e.0;
+            topics.len() >= 1
+                && {
+                    let sym: Symbol = topics.get(0).unwrap();
+                    sym == expected_symbol
+                }
+        });
+        assert!(has_vote_locked, "VoteLockedEvent must be emitted");
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Admin rotation invariant tests
 //
 // Security model enforced by these tests:
@@ -411,7 +937,10 @@ fn test_merchant_refund_uninitialized_merchant_fails() {
 mod admin_rotation_invariants {
     use crate::test_utils::{fixtures, setup::TestEnv};
     use crate::{AdminRotatedEvent, Error, SubscriptionStatus};
-    use soroban_sdk::{testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, IntoVal, Vec};
+    use soroban_sdk::{
+        testutils::Address as _, testutils::Events as _, testutils::Ledger as _, Address, IntoVal,
+        Vec,
+    };
 
     const T0: u64 = 1_000;
     const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days
@@ -458,7 +987,9 @@ mod admin_rotation_invariants {
         // The contract cannot sign Soroban auth transactions, so rotating to it
         // would permanently lock all admin-only operations.
         let te = TestEnv::default();
-        let result = te.client.try_rotate_admin(&te.admin, &te.client.address, &0u64);
+        let result = te
+            .client
+            .try_rotate_admin(&te.admin, &te.client.address, &0u64);
         assert_eq!(result, Err(Ok(Error::InvalidNewAdmin)));
         assert_eq!(te.client.get_admin(), te.admin);
     }
@@ -506,6 +1037,9 @@ mod admin_rotation_invariants {
 
         te.client.enable_emergency_stop(&new_admin);
         assert!(te.client.get_emergency_stop_status());
+        te.env.ledger().with_mut(|li| {
+            li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+        });
         te.client.disable_emergency_stop(&new_admin);
         assert!(!te.client.get_emergency_stop_status());
     }
@@ -560,7 +1094,8 @@ mod admin_rotation_invariants {
             fixtures::create_subscription(&te.env, &te.client, SubscriptionStatus::Active);
         let before = te.client.get_subscription(&id);
 
-        te.client.rotate_admin(&te.admin, &Address::generate(&te.env), &0u64);
+        te.client
+            .rotate_admin(&te.admin, &Address::generate(&te.env), &0u64);
 
         let after = te.client.get_subscription(&id);
         assert_eq!(before.subscriber, after.subscriber);
@@ -585,7 +1120,9 @@ mod admin_rotation_invariants {
         fixtures::seed_balance(&te.env, &te.client, id, PREPAID);
 
         // Advance time past the billing interval so a charge is due.
-        te.env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+        te.env
+            .ledger()
+            .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
 
         let new_admin = Address::generate(&te.env);
         te.client.rotate_admin(&te.admin, &new_admin, &0u64);
@@ -621,6 +1158,9 @@ mod admin_rotation_invariants {
         let new_admin = Address::generate(&te.env);
         te.client.rotate_admin(&te.admin, &new_admin, &0u64);
 
+        te.env.ledger().with_mut(|li| {
+            li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+        });
         te.client.disable_emergency_stop(&new_admin);
         assert!(!te.client.get_emergency_stop_status());
 

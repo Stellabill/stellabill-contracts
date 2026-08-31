@@ -27,9 +27,11 @@ fn make_funded_subscription(te: &TestEnv, subscriber: &Address, merchant: &Addre
         &false,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
+);
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
     sub_id
 }
 
@@ -60,6 +62,9 @@ fn set_operator_replaces_previous_operator() {
     let op2 = Address::generate(&te.env);
 
     te.client.set_operator(&te.admin, &op1);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.set_operator(&te.admin, &op2);
 
     assert_eq!(te.client.get_operator(), Some(op2));
@@ -108,6 +113,9 @@ fn remove_operator_clears_address_and_emits_event() {
 
     te.env.ledger().with_mut(|li| li.timestamp = 2_000);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
 
     let events = te.env.events().all();
@@ -227,6 +235,33 @@ fn operator_batch_charge_replay_rejected() {
 }
 
 #[test]
+fn operator_batch_charge_retry_with_correct_nonce_after_skip_ahead_succeeds() {
+    let te = TestEnv::default();
+    let subscriber = Address::generate(&te.env);
+    let merchant = Address::generate(&te.env);
+    let operator = Address::generate(&te.env);
+
+    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
+    te.client.set_operator(&te.admin, &operator);
+
+    te.jump(INTERVAL + 1);
+
+    let result = te
+        .client
+        .try_operator_batch_charge(&operator, &vec![&te.env, sub_id], &1u64);
+    assert!(result == Err(Ok(Error::NonceAlreadyUsed)));
+    assert_eq!(te.client.get_operator_nonce(&operator), 0u64);
+
+    // A rejected nonce must not consume the current nonce, so the correct
+    // nonce is still usable.
+    let results = te
+        .client
+        .operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
+    assert!(results.get(0).unwrap().success);
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
+}
+
+#[test]
 fn operator_batch_charge_without_operator_set_rejected() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
@@ -287,6 +322,24 @@ fn operator_nonce_independent_from_admin_nonce() {
     assert!(results.get(0).unwrap().success);
 }
 
+#[test]
+fn operator_nonce_is_independent_per_operator() {
+    let te = TestEnv::default();
+    let subscriber = Address::generate(&te.env);
+    let merchant = Address::generate(&te.env);
+    let operator = Address::generate(&te.env);
+    let other_operator = Address::generate(&te.env);
+
+    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
+    te.client.set_operator(&te.admin, &operator);
+
+    te.jump(INTERVAL + 1);
+    te.client.operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
+
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
+    assert_eq!(te.client.get_operator_nonce(&other_operator), 0u64);
+}
+
 // ── operator_charge_subscription ─────────────────────────────────────────────
 
 #[test]
@@ -343,7 +396,9 @@ fn operator_charge_usage_succeeds() {
         &true, // usage_enabled
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
+);
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
@@ -372,7 +427,9 @@ fn operator_charge_usage_wrong_operator_rejected() {
         &true,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
+);
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
@@ -393,6 +450,9 @@ fn remove_operator_revokes_batch_charge_immediately() {
 
     let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
 
     te.jump(INTERVAL + 1);
@@ -414,6 +474,9 @@ fn remove_operator_revokes_single_charge_immediately() {
 
     let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.remove_operator(&te.admin);
 
     te.jump(INTERVAL + 1);
@@ -565,7 +628,13 @@ fn new_admin_can_replace_operator_after_rotation() {
     let new_op = Address::generate(&te.env);
 
     te.client.set_operator(&te.admin, &operator);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.rotate_admin(&te.admin, &new_admin, &0u64);
+    te.env.ledger().with_mut(|li| {
+        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
+    });
     te.client.set_operator(&new_admin, &new_op);
 
     assert_eq!(te.client.get_operator(), Some(new_op));
@@ -671,7 +740,9 @@ fn operator_charge_usage_with_reference_succeeds() {
         &true,
         &None,
         &None::<u64>,
-    );
+        &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
+);
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
 
@@ -707,6 +778,7 @@ fn operator_batch_charge_paused_subscription_returns_not_active_error() {
 
     assert!(!results.get(0).unwrap().success);
     assert_eq!(results.get(0).unwrap().error_code, Error::NotActive as u32);
+    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
 }
 
 #[test]

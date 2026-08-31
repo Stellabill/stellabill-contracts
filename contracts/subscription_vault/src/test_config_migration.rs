@@ -149,7 +149,9 @@ fn test_upgrade_via_migrate() {
 
     env.as_contract(&contract_id, || {
         let storage = env.storage();
-        assert_eq!(storage.persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(3u32));
+        // After do_migrate runs the full ladder (v2->v3->v4->v5), the final
+        // stored version is STORAGE_VERSION, not 3.
+        assert_eq!(storage.persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(crate::STORAGE_VERSION));
         assert_eq!(storage.persistent().get::<_, Address>(&DataKey::Token), Some(token));
         assert_eq!(storage.persistent().get::<_, Address>(&DataKey::Admin), Some(admin));
         assert_eq!(storage.persistent().get::<_, i128>(&DataKey::MinTopup), Some(min_topup));
@@ -218,19 +220,136 @@ fn test_rejection_of_schema_downgrades() {
     let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    // Simulate version 4
+    // Simulate a version above the binary's STORAGE_VERSION to trigger downgrade rejection.
+    let too_high = crate::STORAGE_VERSION.saturating_add(1);
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(&DataKey::SchemaVersion, &4u32);
+        env.storage().persistent().set(&DataKey::SchemaVersion, &too_high);
         env.storage().persistent().set(&DataKey::Admin, &admin);
     });
 
     env.mock_all_auths();
     
-    // migrate_config_to_persistent should fail
+    // migrate_config_to_persistent should fail (stored > 3)
     let err1 = client.try_migrate_config_to_persistent(&admin);
     assert_eq!(err1, Err(Ok(Error::SchemaMigrationDowngrade)));
 
-    // migrate to version 3 should also fail
+    // migrate should also fail with SchemaVersionMismatch (stored > binary)
     let err2 = client.try_migrate(&admin);
-    assert_eq!(err2, Err(Ok(Error::SchemaMigrationDowngrade)));
+    assert_eq!(err2, Err(Ok(Error::SchemaVersionMismatch)));
+}
+
+#[test]
+fn test_migrate_state_unchanged_on_version_far_above_expected() {
+    let env = Env::default();
+    let contract_id = env.register(crate::SubscriptionVault, ());
+    let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // Seed an expected stored version far above the binary version (e.g. 99)
+    env.as_contract(&contract_id, || {
+        let storage = env.storage();
+        storage.persistent().set(&DataKey::SchemaVersion, &99u32);
+        storage.persistent().set(&DataKey::Admin, &admin);
+        storage.persistent().set(&DataKey::Token, &token);
+    });
+    env.mock_all_auths();
+
+    // Verify initial state: version is 99
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+            Some(99u32)
+        );
+    });
+
+    // Attempt to migrate — should fail with SchemaVersionMismatch
+    let err = client.try_migrate(&admin);
+    assert_eq!(err, Err(Ok(Error::SchemaVersionMismatch)));
+
+    // State must remain untouched
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+            Some(99u32)
+        );
+        assert_eq!(
+            env.storage().persistent().get::<_, Address>(&DataKey::Admin),
+            Some(admin)
+        );
+        assert_eq!(
+            env.storage().persistent().get::<_, Address>(&DataKey::Token),
+            Some(token)
+        );
+    });
+}
+
+#[test]
+fn test_migrate_config_to_persistent_rejects_far_above_version() {
+    let env = Env::default();
+    let contract_id = env.register(crate::SubscriptionVault, ());
+    let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    // Seed a version far above 3
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(&DataKey::SchemaVersion, &99u32);
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+    });
+    env.mock_all_auths();
+
+    // migrate_config_to_persistent should fail with SchemaMigrationDowngrade
+    let err = client.try_migrate_config_to_persistent(&admin);
+    assert_eq!(err, Err(Ok(Error::SchemaMigrationDowngrade)));
+
+    // State must remain unchanged
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+            Some(99u32)
+        );
+    });
+}
+
+#[test]
+fn test_migrate_from_version_zero_proceeds() {
+    let env = Env::default();
+    let contract_id = env.register(crate::SubscriptionVault, ());
+    let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // No schema version stored → get_schema_version returns 0
+    env.as_contract(&contract_id, || {
+        let storage = env.storage();
+        storage.instance().set(&DataKey::Token, &token);
+        storage.instance().set(&DataKey::Admin, &admin);
+    });
+    env.mock_all_auths();
+
+    // Verify schema version is 0
+    env.as_contract(&contract_id, || {
+        assert!(!env.storage().instance().has(&DataKey::SchemaVersion));
+        assert!(!env.storage().persistent().has(&DataKey::SchemaVersion));
+    });
+
+    // Migrate should succeed (upgrade ladder from v0 → v2 → v3)
+    client.migrate(&admin);
+
+    // Verify final state
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+            Some(3u32)
+        );
+        assert_eq!(
+            env.storage().persistent().get::<_, Address>(&DataKey::Token),
+            Some(token)
+        );
+        assert_eq!(
+            env.storage().persistent().get::<_, Address>(&DataKey::Admin),
+            Some(admin)
+        );
+        assert!(!env.storage().instance().has(&DataKey::SchemaVersion));
+    });
 }

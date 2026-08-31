@@ -18,13 +18,13 @@ use crate::types::{
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
-// ── constants ────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ constants Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const T0: u64 = 1_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
 const AMOUNT: i128 = 10_000_000;
 const PREPAID: i128 = 50_000_000;
 
-// ── setup helper ─────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ setup helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
@@ -59,6 +59,8 @@ fn create_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     (id, subscriber, merchant)
 }
@@ -88,7 +90,7 @@ fn seed_merchant_balance(
 }
 
 // =============================================================================
-// 1. DEPOSIT — CEI invariants
+// 1. DEPOSIT Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance updated in storage BEFORE token transfer.
@@ -147,7 +149,7 @@ fn test_deposit_failure_leaves_state_unchanged() {
 }
 
 /// Invariant: deposit on a cancelled subscription is rejected.
-/// Ensures the lock lifecycle is clean — no partial state on rejected ops.
+/// Ensures the lock lifecycle is clean Ã¢â‚¬â€ no partial state on rejected ops.
 #[test]
 fn test_deposit_on_cancelled_subscription_rejected_cleanly() {
     let (env, client, token, _) = setup();
@@ -162,7 +164,7 @@ fn test_deposit_on_cancelled_subscription_rejected_cleanly() {
 }
 
 // =============================================================================
-// 2. CHARGE — CEI invariants
+// 2. CHARGE Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance debited and merchant balance credited BEFORE any
@@ -278,7 +280,7 @@ fn test_charge_lifetime_charged_monotonically_increases() {
 }
 
 // =============================================================================
-// 3. WITHDRAW (subscriber) — CEI invariants
+// 3. WITHDRAW (subscriber) Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance zeroed in storage BEFORE token transfer to subscriber.
@@ -328,7 +330,7 @@ fn test_withdraw_subscriber_requires_cancelled_status() {
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
     client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
-    // Not cancelled — Active status
+    // Not cancelled Ã¢â‚¬â€ Active status
     let result = client.try_withdraw_subscriber_funds(&id, &subscriber);
     assert!(result.is_err());
     // Balance untouched
@@ -356,7 +358,7 @@ fn test_withdraw_subscriber_exact_amount_transferred() {
 }
 
 // =============================================================================
-// 4. WITHDRAW (merchant) — CEI invariants
+// 4. WITHDRAW (merchant) Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: merchant balance reduced in storage BEFORE token transfer.
@@ -443,7 +445,7 @@ fn test_merchant_cannot_withdraw_other_merchant() {
 }
 
 // =============================================================================
-// 5. REFUND — CEI invariants
+// 5. REFUND Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance debited in storage BEFORE token transfer back to subscriber.
@@ -507,7 +509,7 @@ fn test_refund_cumulative_cannot_exceed_deposit() {
 }
 
 // =============================================================================
-// 6. REENTRANCY GUARD — lock lifecycle
+// 6. REENTRANCY GUARD Ã¢â‚¬â€ lock lifecycle
 // =============================================================================
 
 /// Guard invariant: ReentrancyGuard::lock sets a key and removes it on drop.
@@ -520,10 +522,10 @@ fn test_reentrancy_guard_lock_is_released_after_operation() {
     client.deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // After a successful deposit, no lock key should remain in storage.
-    // We verify this by running a second deposit — if the lock were stuck,
+    // We verify this by running a second deposit Ã¢â‚¬â€ if the lock were stuck,
     // it would return Reentrancy error.
     let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
-    assert!(result.is_ok(), "second deposit must succeed — lock must be released");
+    assert!(result.is_ok(), "second deposit must succeed Ã¢â‚¬â€ lock must be released");
 }
 
 /// Guard invariant: withdrawal lock is released after merchant withdrawal.
@@ -561,8 +563,53 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
     assert!(result.is_ok(), "valid refund must work after a rejected one");
 }
 
+/// Guard invariant: after a rejected deposit in a guarded entrypoint, the
+/// lock must be released so a later valid deposit is not blocked by stale state.
+#[test]
+fn test_reentrancy_guard_released_after_deposit_unauthorized_rejection() {
+    let (env, client, token, _) = setup();
+    let (id, subscriber, _) = create_sub(&env, &client, &token);
+    let attacker = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&attacker, &5_000_000i128);
+
+    let result = client.try_deposit_funds(&id, &attacker, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+
+    let success = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert!(success.is_ok(), "valid deposit must succeed after rejected deposit");
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 5_000_000i128);
+}
+
+/// Guard invariant: an expired charge rejection must not leave the lock stuck.
+#[test]
+fn test_reentrancy_guard_released_after_expired_charge_rejection() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    mint(&env, &token, &subscriber, PREPAID);
+
+    let expires_at = T0 + 1;
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+        &None::<Address>,
+    );
+    env.ledger().set_timestamp(T0 + 2);
+
+    let first = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(first, Err(Ok(Error::SubscriptionExpired)));
+
+    let second = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(second, Err(Ok(Error::SubscriptionExpired)));
+}
+
 // =============================================================================
-// 7. NESTED CALL ATTEMPTS — panic path coverage
+// 7. NESTED CALL ATTEMPTS Ã¢â‚¬â€ panic path coverage
 // =============================================================================
 
 /// Invariant: charge on a non-existent subscription panics / errors cleanly.
@@ -648,7 +695,7 @@ fn test_withdraw_subscriber_blocked_by_emergency_stop_no_mutation() {
 }
 
 // =============================================================================
-// 8. LOCK RELEASE / RECOVERY — edge cases
+// 8. LOCK RELEASE / RECOVERY Ã¢â‚¬â€ edge cases
 // =============================================================================
 
 /// Invariant: after charge failure (insufficient balance), subsequent
@@ -658,7 +705,7 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    // Zero balance — charge will fail
+    // Zero balance Ã¢â‚¬â€ charge will fail
     seed_balance(&env, &client, id, 0);
     let grace = 7 * 24 * 60 * 60u64;
     env.ledger().set_timestamp(T0 + INTERVAL + grace + 1);
@@ -677,7 +724,7 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
         SubscriptionStatus::Active
     );
 
-    // Next interval — charge must succeed cleanly
+    // Next interval Ã¢â‚¬â€ charge must succeed cleanly
     env.ledger().set_timestamp(T0 + INTERVAL + grace + 1 + INTERVAL);
     let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_ok());

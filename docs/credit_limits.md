@@ -69,42 +69,29 @@ limit is reached; only new subscriptions and additional prepaid exposure are blo
     explain why the operation failed and what adjustments are needed (e.g. lower amount, cancel
     other subscriptions, or raise the limit).
 
-## Per-merchant maximum active subscriptions cap
+### Invariants and testing
 
-To prevent storage exhaustion by buggy or malicious merchants, the contract admin can set a maximum active subscriptions limit per merchant.
+Exposure is summed with `safe_math::safe_add` (checked addition), so a malicious merchant
+cannot wrap the `i128` exposure counter: a sum that would exceed `i128::MAX` returns
+`Error::Overflow` instead of silently overflowing.
 
-### Data model
+The following invariants are locked by
+[`tests/credit_limit_invariant.rs`](../contracts/subscription_vault/tests/credit_limit_invariant.rs):
 
-The limit is defined per merchant:
-- `max_subs` – maximum allowed active (non-cancelled) subscriptions.
-- `max_subs = u32::MAX` – no limit is enforced (default).
+1. **No-overflow summation** — `get_subscriber_exposure` equals the sum of prepaid balances
+   plus active-subscription amounts, and returns `Error::Overflow` rather than a wrapped value
+   at the `i128` boundary.
+2. **No over-extension** — an exposure-increasing operation is rejected with
+   `Error::CreditLimitExceeded` exactly when it would push exposure above a configured non-zero
+   limit; after any accepted increase, `exposure <= limit`.
+3. **No claw-back** — lowering a limit below current exposure succeeds and never mutates
+   existing exposure; it only blocks *future* increases.
+4. **Per-token isolation** — exposure and limits for one settlement token are independent of
+   subscriptions denominated in another token.
 
-Active subscription count is the count of non-cancelled subscriptions for a given merchant.
-
-### Configuration entrypoints
-
-- `set_merchant_max_subs(admin, merchant, max_subs)`  
-  Sets or updates the limit for a merchant. Only the contract admin may call this. Passing `u32::MAX` clears the cap (no limit).
-
-- `get_merchant_max_subs(merchant) -> u32`  
-  Returns the configured limit, or `u32::MAX` if none is set.
-
-### Enforcement points
-
-- **Subscription creation**
-  Both direct subscription creation (`create_subscription`, `create_subscription_with_token`) and plan template-based creation (`create_subscription_from_plan`) check that the merchant's current active subscription count is less than `max_subs`.
-  If the cap is reached, the transaction is rejected with `Error::MaxConcurrentSubscriptionsReached`.
-
-- **Cancellations**
-  When a subscription is cancelled, it is removed from the merchant index, freeing up a subscription slot for the merchant.
-
-### Interaction with PlanMaxActive
-
-When a subscription is created from a plan template, two caps are evaluated:
-1. `PlanMaxActive`: The maximum active subscriptions a single subscriber is allowed to have on that plan template.
-2. `MerchantMaxSubs`: The global active subscriptions a merchant is allowed to have across all plans.
-
-These two limits interact additively, and **whichever cap is lower/stricter wins**:
-- If `PlanMaxActive` is met for a subscriber, they cannot subscribe to that plan even if the merchant has global capacity remaining under `MerchantMaxSubs`.
-- If the merchant has reached `MerchantMaxSubs` globally, no user can create any new subscriptions under that merchant, even if the subscriber has not reached their individual `PlanMaxActive` limit.
+The headline test drives a randomized 500-step sequence of create / cancel / set-limit
+operations against an independently-tracked model. Sequences are deterministic in a `u64` seed;
+seeds are pinned under
+[`tests/fixtures/credit_limit/`](../contracts/subscription_vault/tests/fixtures/credit_limit/)
+so any discovered failure is replayed as a permanent regression guard.
 

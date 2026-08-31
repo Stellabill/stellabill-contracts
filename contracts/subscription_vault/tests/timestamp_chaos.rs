@@ -45,11 +45,11 @@
 
 #![cfg(test)]
 
-use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     Address, Env,
 };
+use subscription_vault::{SubscriptionVault, SubscriptionVaultClient};
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -92,12 +92,12 @@ fn xorshift64(state: &mut u64) -> u64 {
 fn next_timestamp(rng: &mut u64, anchor: u64) -> u64 {
     let raw = xorshift64(rng);
     match raw % 8 {
-        0 => 0,                                                    // epoch minimum
-        1 => u64::MAX,                                             // epoch maximum
-        2 => anchor.saturating_sub(1),                             // -1 s (backward by 1)
-        3 => anchor.saturating_sub(INTERVAL),                      // -1 interval
-        4 => anchor.saturating_sub(INTERVAL + GRACE + 1),          // past grace window
-        _ => anchor.saturating_add(raw % (INTERVAL * 4)),          // forward 0..4 intervals
+        0 => 0,                                           // epoch minimum
+        1 => u64::MAX,                                    // epoch maximum
+        2 => anchor.saturating_sub(1),                    // -1 s (backward by 1)
+        3 => anchor.saturating_sub(INTERVAL),             // -1 interval
+        4 => anchor.saturating_sub(INTERVAL + GRACE + 1), // past grace window
+        _ => anchor.saturating_add(raw % (INTERVAL * 4)), // forward 0..4 intervals
     }
 }
 
@@ -107,6 +107,7 @@ struct ChaosEnv {
     env: Env,
     client: SubscriptionVaultClient<'static>,
     token: Address,
+    #[allow(dead_code)]
     admin: Address,
 }
 
@@ -127,7 +128,12 @@ impl ChaosEnv {
         // fee_bps=0, admin, min_deposit=1, grace=GRACE
         client.init(&token, &0u32, &admin, &1i128, &GRACE);
 
-        ChaosEnv { env, client, token, admin }
+        ChaosEnv {
+            env,
+            client,
+            token,
+            admin,
+        }
     }
 
     /// Mint tokens to `to` using the stellar-asset-contract admin.
@@ -153,11 +159,13 @@ impl ChaosEnv {
             &merchant,
             &AMOUNT,
             &INTERVAL,
-            &false,           // usage_enabled = false
-            &None::<i128>,    // lifetime_cap
-            &None::<u64>,     // expires_at
-        );
-        self.client.deposit_funds(&id, &subscriber, &PREPAID);
+            &false,        // usage_enabled = false
+            &None::<i128>, // lifetime_cap
+            &None::<u64>,  // expires_at
+                &None::<u32>,
+                &None::<soroban_sdk::Symbol>, // sub_account_label
+);
+        self.client.deposit_funds(&id, &subscriber, &PREPAID, &None);
         (id, subscriber, merchant)
     }
 }
@@ -198,12 +206,12 @@ fn test_backward_jump_by_one_second() {
     // Advance past the first billing boundary and charge
     let charge_ts = T0 + INTERVAL + 1;
     ce.set_ts(charge_ts);
-    let r1 = ce.client.try_charge_subscription(&id);
+    let r1 = ce.client.try_charge_subscription(&id, &None);
     assert!(r1.is_ok(), "charge at interval+1 must succeed: {r1:?}");
 
     // Step backward by 1 — simulates a reorg / ledger rewind
     ce.set_ts(charge_ts - 1);
-    let r2 = ce.client.try_charge_subscription(&id);
+    let r2 = ce.client.try_charge_subscription(&id, &None);
 
     // Must be an error (interval has not elapsed from last_payment = charge_ts)
     assert!(
@@ -234,9 +242,12 @@ fn test_timestamp_jump_to_u64_max() {
 
     // Jump to u64::MAX — the interval has elapsed since T0
     ce.set_ts(u64::MAX);
-    let result = ce.client.try_charge_subscription(&id);
+    let result = ce.client.try_charge_subscription(&id, &None);
 
-    assert!(result.is_ok(), "charge at u64::MAX must not panic: {result:?}");
+    assert!(
+        result.is_ok(),
+        "charge at u64::MAX must not panic: {result:?}"
+    );
 
     // last_payment_timestamp must be exactly u64::MAX (no arithmetic wrap)
     let sub = ce.client.get_subscription(&id);
@@ -261,17 +272,13 @@ fn test_repeated_identical_timestamps_no_double_charge() {
 
     // First charge at the exact interval boundary
     ce.set_ts(T0 + INTERVAL);
-    let r1 = ce
-        .client
-        .try_charge_subscription(&id);
+    let r1 = ce.client.try_charge_subscription(&id, &None);
     assert!(r1.is_ok(), "first charge at boundary must succeed: {r1:?}");
 
     let balance_after_first = ce.client.get_subscription(&id).prepaid_balance;
 
     // Second call at the *identical* timestamp — must fail
-    let r2 = ce
-        .client
-        .try_charge_subscription(&id);
+    let r2 = ce.client.try_charge_subscription(&id, &None);
     assert!(
         r2.is_err(),
         "second charge at same timestamp must return error: {r2:?}"
@@ -311,22 +318,20 @@ fn test_backward_jump_across_grace_boundary_no_panic() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    );
-    ce.client.deposit_funds(&id, &subscriber, &AMOUNT);
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
+);
+    ce.client.deposit_funds(&id, &subscriber, &AMOUNT, &None);
 
     // First charge — exhausts the prepaid balance
     ce.set_ts(T0 + INTERVAL);
-    let r1 = ce
-        .client
-        .try_charge_subscription(&id);
+    let r1 = ce.client.try_charge_subscription(&id, &None);
     assert!(r1.is_ok(), "first charge must succeed: {r1:?}");
 
     // Second charge — no funds → enters GracePeriod
     let grace_entry_ts = T0 + 2 * INTERVAL;
     ce.set_ts(grace_entry_ts);
-    let _r2 = ce
-        .client
-        .try_charge_subscription(&id);
+    let _r2 = ce.client.try_charge_subscription(&id, &None);
     // Result is Ok (GracePeriod entered) or Err — both valid, neither panics
 
     // Jump backward to before grace started
@@ -345,9 +350,7 @@ fn test_backward_jump_across_grace_boundary_no_panic() {
     }
 
     // Another charge attempt must not panic
-    let _r3 = ce
-        .client
-        .try_charge_subscription(&id);
+    let _r3 = ce.client.try_charge_subscription(&id, &None);
 }
 
 // =============================================================================
@@ -367,7 +370,8 @@ fn test_chaos_200_random_timestamp_jumps() {
 
     // Deposit extra so balance is sufficient for many charges
     ce.mint(&subscriber, PREPAID * 50);
-    ce.client.deposit_funds(&id, &subscriber, &(PREPAID * 20));
+    ce.client
+        .deposit_funds(&id, &subscriber, &(PREPAID * 20), &None);
 
     let mut rng_state: u64 = 0xDEAD_BEEF_CAFE_1337;
     let mut anchor = T0;
@@ -378,9 +382,7 @@ fn test_chaos_200_random_timestamp_jumps() {
 
         let prev_lpt = ce.client.get_subscription(&id).last_payment_timestamp;
 
-        let result = ce
-            .client
-            .try_charge_subscription(&id);
+        let result = ce.client.try_charge_subscription(&id, &None);
 
         let lpt_after = ce.client.get_subscription(&id).last_payment_timestamp;
 
@@ -427,7 +429,8 @@ fn test_monotonic_forward_sequence_all_charges_succeed() {
     let (id, subscriber, _) = ce.create_funded_subscription();
 
     ce.mint(&subscriber, PREPAID * 20);
-    ce.client.deposit_funds(&id, &subscriber, &(PREPAID * 10));
+    ce.client
+        .deposit_funds(&id, &subscriber, &(PREPAID * 10), &None);
 
     let mut current = T0;
 
@@ -435,9 +438,7 @@ fn test_monotonic_forward_sequence_all_charges_succeed() {
         current += INTERVAL + 1; // strictly forward
         ce.set_ts(current);
 
-        let result = ce
-            .client
-            .try_charge_subscription(&id);
+        let result = ce.client.try_charge_subscription(&id, &None);
 
         assert!(
             result.is_ok(),
@@ -461,17 +462,18 @@ fn test_backward_jump_then_forward_recovery() {
     ce.set_ts(T0);
     let (id, subscriber, _) = ce.create_funded_subscription();
     ce.mint(&subscriber, PREPAID * 5);
-    ce.client.deposit_funds(&id, &subscriber, &(PREPAID * 2));
+    ce.client
+        .deposit_funds(&id, &subscriber, &(PREPAID * 2), &None);
 
     // First charge succeeds
     let first_charge_ts = T0 + INTERVAL + 1;
     ce.set_ts(first_charge_ts);
-    let r1 = ce.client.try_charge_subscription(&id);
+    let r1 = ce.client.try_charge_subscription(&id, &None);
     assert!(r1.is_ok(), "first charge must succeed: {r1:?}");
 
     // Backward jump — well before the next interval
     ce.set_ts(T0);
-    let r_back = ce.client.try_charge_subscription(&id);
+    let r_back = ce.client.try_charge_subscription(&id, &None);
     assert!(
         r_back.is_err(),
         "charge during backward jump must fail: {r_back:?}"
@@ -487,7 +489,7 @@ fn test_backward_jump_then_forward_recovery() {
     // Forward recovery — advance past next interval
     let recovery_ts = first_charge_ts + INTERVAL + 1;
     ce.set_ts(recovery_ts);
-    let r2 = ce.client.try_charge_subscription(&id);
+    let r2 = ce.client.try_charge_subscription(&id, &None);
     assert!(
         r2.is_ok(),
         "charge after forward recovery must succeed: {r2:?}"
@@ -515,12 +517,12 @@ fn test_u64_max_then_backward_to_zero() {
 
     // Charge at u64::MAX — should succeed (interval elapsed since T0)
     ce.set_ts(u64::MAX);
-    let r1 = ce.client.try_charge_subscription(&id);
+    let r1 = ce.client.try_charge_subscription(&id, &None);
     assert!(r1.is_ok(), "charge at u64::MAX must succeed: {r1:?}");
 
     // Jump all the way back to 0
     ce.set_ts(0);
-    let r2 = ce.client.try_charge_subscription(&id);
+    let r2 = ce.client.try_charge_subscription(&id, &None);
 
     // next_charge_time = u64::MAX + INTERVAL which saturates to u64::MAX;
     // now = 0 < u64::MAX → IntervalNotElapsed
@@ -594,7 +596,8 @@ fn test_period_index_saturates_to_zero_when_now_before_start() {
     ce.set_ts(T0);
     let (id, subscriber, _) = ce.create_funded_subscription();
     ce.mint(&subscriber, PREPAID * 3);
-    ce.client.deposit_funds(&id, &subscriber, &(PREPAID * 2));
+    ce.client
+        .deposit_funds(&id, &subscriber, &(PREPAID * 2), &None);
 
     // Record subscription start
     let sub_start = ce.client.get_subscription(&id).start_time;
@@ -603,9 +606,7 @@ fn test_period_index_saturates_to_zero_when_now_before_start() {
     let before_start = sub_start.saturating_sub(1);
     if before_start < sub_start {
         ce.set_ts(before_start);
-        let result = ce
-            .client
-            .try_charge_subscription(&id);
+        let result = ce.client.try_charge_subscription(&id, &None);
 
         // Must fail (interval from start has not elapsed) — not panic, not succeed
         assert!(
@@ -624,9 +625,7 @@ fn test_period_index_saturates_to_zero_when_now_before_start() {
     // Forward charge at exactly start + interval should succeed
     let valid_ts = sub_start + INTERVAL;
     ce.set_ts(valid_ts);
-    let r_valid = ce
-        .client
-        .try_charge_subscription(&id);
+    let r_valid = ce.client.try_charge_subscription(&id, &None);
     assert!(
         r_valid.is_ok(),
         "charge at start + interval must succeed: {r_valid:?}"

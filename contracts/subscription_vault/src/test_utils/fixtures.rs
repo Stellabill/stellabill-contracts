@@ -1,5 +1,5 @@
-use crate::{SubscriptionStatus, SubscriptionVaultClient, types::DataKey};
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use crate::{types::DataKey, SubscriptionStatus, SubscriptionVaultClient};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 const DEFAULT_AMOUNT: i128 = 10_000_000;
 const DEFAULT_INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -26,6 +26,16 @@ pub fn create_subscription_detailed(
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
 
+    use soroban_sdk::String;
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(env, "https://example.com"),
+    );
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,
@@ -34,6 +44,8 @@ pub fn create_subscription_detailed(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     if status != SubscriptionStatus::Active {
@@ -44,6 +56,7 @@ pub fn create_subscription_detailed(
 }
 
 /// Create a test subscription with a specific merchant.
+#[allow(dead_code)]
 pub fn create_subscription_with_merchant(
     env: &Env,
     client: &SubscriptionVaultClient,
@@ -51,6 +64,21 @@ pub fn create_subscription_with_merchant(
     merchant: Address,
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
+    use soroban_sdk::String;
+    // We try to initialize merchant, but it might already be initialized.
+    // However, initialize_merchant_config overwrites or we can just ignore failure.
+    // Better: let's only init if we generated it, but since `merchant` is passed in,
+    // it might be cleaner to just call it and ignore error, or expect the caller to init it.
+    // Wait, let's just initialize it.
+    let _ = client.try_initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None,
+        &String::from_str(env, "https://example.com"),
+    );
+
     let id = client.create_subscription(
         &subscriber,
         &merchant,
@@ -59,6 +87,8 @@ pub fn create_subscription_with_merchant(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     if status != SubscriptionStatus::Active {
@@ -77,7 +107,42 @@ pub fn create_test_subscription(
     create_subscription_detailed(env, client, status, DEFAULT_AMOUNT, DEFAULT_INTERVAL)
 }
 
+/// Create an active subscription with explicit timing and funding.
+pub fn create_active_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    start_time: u64,
+    interval: u64,
+    amount: i128,
+    prepaid: i128,
+) -> (u32, Address, Address, Address) {
+    let subscriber = Address::generate(env);
+    let merchant = Address::generate(env);
+
+    env.ledger().with_mut(|l| l.timestamp = start_time);
+
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &amount,
+        &interval,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
+    );
+
+    if prepaid > 0 {
+        seed_balance(env, client, id, prepaid);
+    }
+
+    let sub = client.get_subscription(&id);
+    (id, subscriber, merchant, sub.token)
+}
+
 /// Test subscription helper with specific merchant (4 args).
+#[allow(dead_code)]
 pub fn create_test_subscription_with_merchant(
     env: &Env,
     client: &SubscriptionVaultClient,
@@ -111,6 +176,7 @@ pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balanc
 }
 
 /// Seed the `next_id` counter to an arbitrary value.
+#[allow(dead_code)]
 pub fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
     env.as_contract(contract_id, || {
         crate::admin::write_config(env, &DataKey::NextId, &value);

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+#
+# Runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
+# against the workspace whenever Rust source files are staged.
+#
+# Install once with:
+#   ./scripts/install_git_hooks.sh
+#
+# Bypass options (in order of preference):
+#   git commit --no-verify          # standard Git flag, no logging
+#   SKIP_PRE_COMMIT=1 git commit    # env-variable bypass, warning is logged
+#
+# The env-variable bypass exists for automated tooling (e.g. release scripts)
+# that need to commit without running the full check suite. It intentionally
+# prints a warning to stderr so the bypass is visible in CI logs.
+#
+# Clippy config drift: the hook honours clippy.toml / .clippy.toml when
+# present, and the workspace-level [lints.clippy] table in Cargo.toml.
+# Any lint configuration change is therefore automatically picked up on
+# the next commit — no hook update required.
+
+set -euo pipefail
+
+# ── Bypass: SKIP_PRE_COMMIT env-var ─────────────────────────────────────────
+if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
+    echo "[pre-commit] WARNING: checks bypassed via SKIP_PRE_COMMIT=1." >&2
+    exit 0
+fi
+
+# ── Detect staged Rust files ─────────────────────────────────────────────────
+# diff-filter ACMR: Added, Copied, Modified, Renamed — excludes Deleted (D)
+# so we never try to check files that no longer exist on disk.
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.rs$' || true)
+
+if [ -z "$STAGED_RS" ]; then
+    # No Rust files staged — nothing to check.
+    exit 0
+fi
+
+echo "[pre-commit] Staged Rust files:"
+echo "$STAGED_RS" | sed 's/^/  /'
+
+# Resolve the repo root so cargo commands work regardless of where the user
+# ran `git commit` from (e.g. a subdirectory).
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# ── 1. cargo fmt --check ─────────────────────────────────────────────────────
+# Passes the list of staged files so only those files are checked. This is
+# faster than a full workspace fmt and avoids failing on pre-existing
+# formatting issues in files the commit does not touch.
+echo "[pre-commit] cargo fmt --check ..."
+
+# Build the file list as an array to handle paths with spaces safely.
+mapfile -t STAGED_ARRAY <<< "$STAGED_RS"
+# Prefix each path with the repo root so paths are absolute.
+ABS_FILES=()
+for f in "${STAGED_ARRAY[@]}"; do
+    ABS_FILES+=("$REPO_ROOT/$f")
+done
+
+if ! cargo fmt --manifest-path "$REPO_ROOT/Cargo.toml" --check -- "${ABS_FILES[@]}" 2>&1; then
+    echo ""
+    echo "[pre-commit] ❌ Formatting check failed." >&2
+    echo "[pre-commit]    Run \`cargo fmt\` to fix, then re-stage and commit." >&2
+    echo "[pre-commit]    To bypass (not recommended): git commit --no-verify" >&2
+    exit 1
+fi
+echo "[pre-commit] ✅ fmt OK"
+
+# ── 2. cargo clippy --all-targets ────────────────────────────────────────────
+# We run clippy across all targets (lib, tests, benches, examples) rather than
+# only the staged files because:
+#   a) Clippy cannot accept individual file paths — it works at crate granularity.
+#   b) A change in one file can introduce a lint in a test that imports it.
+#
+# -D warnings turns all warnings into errors, matching the CI gate.
+# The workspace [lints.clippy] table and any clippy.toml are honoured automatically.
+echo "[pre-commit] cargo clippy --all-targets -- -D warnings ..."
+
+if ! cargo clippy \
+    --manifest-path "$REPO_ROOT/Cargo.toml" \
+    --all-targets \
+    -- -D warnings 2>&1; then
+    echo ""
+    echo "[pre-commit] ❌ Clippy check failed." >&2
+    echo "[pre-commit]    Fix the warnings above, re-stage, and commit." >&2
+    echo "[pre-commit]    To bypass (not recommended): git commit --no-verify" >&2
+    exit 1
+fi
+echo "[pre-commit] ✅ clippy OK"
+
+echo "[pre-commit] All checks passed."
+exit 0

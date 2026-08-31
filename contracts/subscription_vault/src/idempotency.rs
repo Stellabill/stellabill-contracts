@@ -7,8 +7,19 @@
 //!
 //! Storage key: `DataKey::IdemKey(subscription_id)` stores `IdemRingBuffer`.
 
-use crate::types::{DataKey, IdemRingBuffer, IDEM_HISTORY};
-use soroban_sdk::{BytesN, Env, Vec};
+use crate::types::DataKey;
+use soroban_sdk::{contracttype, BytesN, Env, Vec};
+
+/// Maximum number of idempotency keys retained per subscription.
+pub(crate) const IDEM_HISTORY: u32 = 10;
+
+/// Ring buffer of recently seen idempotency-key hashes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub(crate) struct IdemRingBuffer {
+    pub entries: Vec<BytesN<32>>,
+    pub cursor: u32,
+}
 
 /// Return the raw byte representation of a 32-byte idempotency key.
 fn key_bytes(key: &BytesN<32>) -> [u8; 32] {
@@ -61,11 +72,7 @@ fn save_buffer(env: &Env, subscription_id: u32, buf: &IdemRingBuffer) {
 /// Check whether `hashed` already exists in the ring buffer.
 ///
 /// Returns `true` when the key is a duplicate (replay).
-pub fn check_key(
-    env: &Env,
-    subscription_id: u32,
-    hashed: &BytesN<32>,
-) -> bool {
+pub fn check_key(env: &Env, subscription_id: u32, hashed: &BytesN<32>) -> bool {
     let buf = load_buffer(env, subscription_id);
     for entry in buf.entries.iter() {
         if entry == *hashed {
@@ -79,11 +86,7 @@ pub fn check_key(
 ///
 /// When the buffer is full the oldest entry (at `cursor`) is silently
 /// overwritten.
-pub fn push_key(
-    env: &Env,
-    subscription_id: u32,
-    hashed: &BytesN<32>,
-) {
+pub fn push_key(env: &Env, subscription_id: u32, hashed: &BytesN<32>) {
     let mut buf = load_buffer(env, subscription_id);
     if buf.entries.len() < IDEM_HISTORY {
         buf.entries.push_back(hashed.clone());

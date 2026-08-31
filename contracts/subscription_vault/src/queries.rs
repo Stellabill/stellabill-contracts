@@ -2,6 +2,63 @@
 //!
 //! **PRs that only add or change read-only/query behavior should edit this file only.**
 //!
+//! ## Security classification: emergency_stop view surface (#847)
+//!
+//! All functions in this module are **deliberately unauthenticated and unguarded**
+//! by the emergency-stop circuit breaker. This is intentional: read-only views
+//! carry no financial risk and must remain available during an incident so that
+//! auditors, subscribers, and merchants can inspect state without interruption.
+//!
+//! The table below documents the safety classification of every view function:
+//!
+//! | Function | Returns | Emergency-stop safe? | Bypass risk |
+//! |---|---|---|---|
+//! | `get_subscription` | Subscription record (subscriber, merchant, balance, status, …) | ✅ Yes | None — no admin secret or timelock exposed |
+//! | `estimate_topup_for_intervals` | Required top-up amount (pure math on subscription.amount) | ✅ Yes | None |
+//! | `get_subscriptions_by_merchant` | Slice of subscription records | ✅ Yes | None |
+//! | `get_merchant_subscription_count` | Index length (u32) | ✅ Yes | None |
+//! | `get_token_subscription_count` | Index length (u32) | ✅ Yes | None |
+//! | `get_subscriptions_by_token` | Slice of subscription records | ✅ Yes | None |
+//! | `get_next_charge_info` | Projected next-charge timestamp and status | ✅ Yes | None |
+//! | `compute_next_charge_info` | Pure computation on a Subscription value | ✅ Yes | None |
+//! | `get_cap_info` | Lifetime cap / charged totals | ✅ Yes | None |
+//! | `get_plan_max_active_subs` | Per-plan active-subscription limit | ✅ Yes | None |
+//! | `get_merchant_max_subs` | Per-merchant active-subscription limit | ✅ Yes | None |
+//! | `list_subscriptions_by_subscriber` | Paginated subscription IDs | ✅ Yes | None |
+//! | `get_token_reconciliation` | Accounting totals for a token (no secrets) | ✅ Yes | None — balance totals are public; no admin credential exposed |
+//! | `get_contract_reconciliation_summary` | Multi-token accounting summaries | ✅ Yes | None |
+//! | `generate_reconciliation_proof` | Auditable accounting snapshot | ✅ Yes | None |
+//! | `query_prepaid_balances_paginated` | Partial prepaid totals (paginated) | ✅ Yes | None |
+//!
+//! ### Why no view function can bypass the emergency stop
+//!
+//! The emergency-stop flag (`DataKey::EmergencyStop`) is checked via
+//! `require_not_emergency_stop` on **every mutating** entry-point before any
+//! state change occurs. Read-only functions never call `write_config`, never
+//! transfer tokens, and never advance any nonce or counter. An attacker who
+//! calls any view during an active emergency stop gains only data that is already
+//! publicly visible on the ledger; they cannot trigger a blocked mutation or
+//! extract a signing key.
+//!
+//! `get_admin()` (in `lib.rs`) returns the admin address by design. Knowing the
+//! admin address does **not** allow bypassing the stop: the stop check runs before
+//! any admin-gated write, and the emergency-stop doc explicitly lists `get_admin`
+//! as safe during an active stop.
+//!
+//! ### Pre-init behaviour
+//!
+//! Before `init` is called, views that depend on a stored subscription
+//! (`get_subscription`, `estimate_topup_for_intervals`, `get_next_charge_info`,
+//! `get_cap_info`) return `Error::NotFound` because no subscription exists at
+//! ID 0.  Count / index views (`get_merchant_subscription_count`,
+//! `get_token_subscription_count`, `get_plan_max_active_subs`,
+//! `get_merchant_max_subs`) return `0` or `u32::MAX` (the "no limit" sentinel).
+//! Reconciliation views (`get_token_reconciliation`, `generate_reconciliation_proof`)
+//! require a valid token address with a deployed token contract; calling them
+//! before init with an arbitrary address will trap on the cross-contract call.
+//! `list_subscriptions_by_subscriber` and `query_prepaid_balances_paginated`
+//! return empty results safely because `DataKey::NextId` defaults to `0`.
+//!
 //! ## Pagination invariants (off-chain / indexers)
 //!
 //! - **`list_subscriptions_by_subscriber`**: Results are ordered by subscription id ascending.
@@ -45,9 +102,9 @@
 //! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
-use crate::subscription::{extend_subscription_ttl, next_charge_time};
+use crate::subscription::extend_subscription_ttl;
 use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
-use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 /// Maximum `limit` for [`get_subscriptions_by_merchant`] and [`get_subscriptions_by_token`]
 /// (aligned with [`list_subscriptions_by_subscriber`]).
@@ -72,12 +129,13 @@ pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
+    let key = DataKey::Sub(subscription_id);
     let sub = env
         .storage()
         .persistent()
-        .get(&DataKey::Sub(subscription_id))
+        .get(&key)
         .ok_or(Error::NotFound)?;
-    extend_subscription_ttl(env, &DataKey::Sub(subscription_id));
+    extend_subscription_ttl(env, &key);
     Ok(sub)
 }
 
@@ -130,13 +188,14 @@ pub fn get_subscriptions_by_merchant(
     };
 
     let mut result = Vec::new(env);
-    let mut i = start;
-    while i < end {
-        let sub_id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(sub_id)) {
+    for sub_id in ids.iter().skip(start as usize).take((end - start) as usize) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(sub_id))
+        {
             result.push_back(sub);
         }
-        i += 1;
     }
     Ok(result)
 }
@@ -179,13 +238,14 @@ pub fn get_subscriptions_by_token(
         start + limit
     };
     let mut out = Vec::new(env);
-    let mut i = start;
-    while i < end {
-        let id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+    for id in ids.iter().skip(start as usize).take((end - start) as usize) {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             out.push_back(sub);
         }
-        i += 1;
     }
     Ok(out)
 }
@@ -221,7 +281,6 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Expired => soroban_sdk::symbol_short!("expired"),
         SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
     };
-
 
     let grace_deadline = if subscription.status == SubscriptionStatus::GracePeriod {
         subscription
@@ -329,9 +388,12 @@ pub fn list_subscriptions_by_subscriber(
     let mut subscription_ids = Vec::new(env);
     let mut next_start_id: Option<u32> = None;
 
-    let mut id = start_from_id;
-    while id < scan_end {
-        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+    for id in start_from_id..scan_end {
+        if let Some(sub) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::Sub(id))
+        {
             if sub.subscriber == subscriber {
                 if subscription_ids.len() < limit {
                     subscription_ids.push_back(id);
@@ -345,7 +407,6 @@ pub fn list_subscriptions_by_subscriber(
                 }
             }
         }
-        id += 1;
     }
 
     // Scan budget exhausted.  If more IDs remain beyond the window, signal the
@@ -364,7 +425,7 @@ pub fn list_subscriptions_by_subscriber(
 
 use crate::types::{
     PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
-    TokenEarnings, TokenLiabilities,
+    TokenLiabilities,
 };
 
 /// Maximum number of subscriptions to scan in a single prepaid balance query.
@@ -401,28 +462,34 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     // Compute total prepaid across all subscriptions
     let total_prepaid = compute_total_prepaid(env, &token);
 
-    // Compute total merchant liabilities
-    let total_merchant_liabilities = compute_total_merchant_liabilities(env, &token);
+    // The total-accounted ledger tracks every accounted deposit/withdrawal.
+    let total_accounted = crate::accounting::get_total_accounted(env, &token);
 
-    // Recoverable is the difference between contract balance and accounted funds
-    let accounted = total_prepaid
-        .checked_add(total_merchant_liabilities)
-        .unwrap_or(0i128);
-    let recoverable_amount = contract_balance.saturating_sub(accounted).max(0i128);
+    // Compute total merchant liabilities using precomputed total_prepaid
+    let total_merchant_liabilities =
+        compute_total_merchant_liabilities(total_prepaid, total_accounted);
 
+    // Recoverable is the balance not tracked by the total-accounted ledger.
+    let recoverable_amount = contract_balance.saturating_sub(total_accounted).max(0i128);
+
+    // Validate the accounting equation: prepaid + merchant liabilities + recoverable.
     let computed_total = total_prepaid
         .checked_add(total_merchant_liabilities)
-        .unwrap_or(0i128)
-        .checked_add(recoverable_amount)
+        .and_then(|sum| sum.checked_add(recoverable_amount))
         .unwrap_or(0i128);
 
     let is_balanced = contract_balance == computed_total;
 
-    let normalized_prepaid = crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
-    let normalized_merchant_liab = crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
-    let normalized_recoverable = crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
-    let normalized_contract_balance = crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
-    let normalized_computed_total = crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
+    let normalized_prepaid =
+        crate::types::normalize_amount(env, &token, total_prepaid).unwrap_or(0);
+    let normalized_merchant_liab =
+        crate::types::normalize_amount(env, &token, total_merchant_liabilities).unwrap_or(0);
+    let normalized_recoverable =
+        crate::types::normalize_amount(env, &token, recoverable_amount).unwrap_or(0);
+    let normalized_contract_balance =
+        crate::types::normalize_amount(env, &token, contract_balance).unwrap_or(0);
+    let normalized_computed_total =
+        crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
 
     TokenLiabilities {
         token,
@@ -476,11 +543,13 @@ pub fn get_contract_reconciliation_summary(
     let end_index = (start_token_index + limit).min(total_tokens);
     let mut token_summaries = Vec::new(env);
 
-    for i in start_token_index..end_index {
-        if let Some(token) = accepted_tokens.get(i) {
-            let summary = get_token_reconciliation(env, token);
-            token_summaries.push_back(summary);
-        }
+    for token in accepted_tokens
+        .iter()
+        .skip(start_token_index as usize)
+        .take((end_index - start_token_index) as usize)
+    {
+        let summary = get_token_reconciliation(env, token);
+        token_summaries.push_back(summary);
     }
 
     let next_token_index = if end_index < total_tokens {
@@ -521,18 +590,21 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
     // Get prepaid total with count
     let (total_prepaid, sub_count) = compute_total_prepaid_with_count(env, &token);
 
+    // The total-accounted ledger tracks every accounted deposit/withdrawal.
+    let total_accounted = crate::accounting::get_total_accounted(env, &token);
+
     // Get merchant liabilities with count
     let (total_merchant_liabilities, merchant_count) =
-        compute_total_merchant_liabilities_with_count(env, &token);
+        compute_total_merchant_liabilities_with_count(total_prepaid, total_accounted);
 
-    // Compute recoverable
-    let accounted = total_prepaid
+    // Compute recoverable as the balance not tracked by the total-accounted ledger.
+    let computed_recoverable = contract_balance.saturating_sub(total_accounted).max(0i128);
+
+    // Validate accounting equation: prepaid + merchant liabilities + recoverable.
+    let computed_total = total_prepaid
         .checked_add(total_merchant_liabilities)
+        .and_then(|sum| sum.checked_add(computed_recoverable))
         .unwrap_or(0i128);
-    let computed_recoverable = contract_balance.saturating_sub(accounted).max(0i128);
-
-    // Validate accounting equation
-    let computed_total = accounted.checked_add(computed_recoverable).unwrap_or(0i128);
     let is_valid = contract_balance == computed_total;
 
     ReconciliationProof {
@@ -577,7 +649,7 @@ pub fn query_prepaid_balances_paginated(
 
     if next_id == 0 || request.start_subscription_id >= next_id {
         return PrepaidQueryResult {
-            token: request.token.clone(),
+            token: request.token,
             partial_total: 0,
             subscriptions_count: 0,
             next_start_id: None,
@@ -654,15 +726,14 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
     (total, count)
 }
 
-fn compute_total_merchant_liabilities(env: &Env, token: &Address) -> i128 {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
-    let total_prepaid = compute_total_prepaid(env, token);
+fn compute_total_merchant_liabilities(total_prepaid: i128, total_accounted: i128) -> i128 {
     total_accounted.saturating_sub(total_prepaid).max(0i128)
 }
 
-fn compute_total_merchant_liabilities_with_count(env: &Env, token: &Address) -> (i128, u32) {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
-    let total_prepaid = compute_total_prepaid(env, token);
+fn compute_total_merchant_liabilities_with_count(
+    total_prepaid: i128,
+    total_accounted: i128,
+) -> (i128, u32) {
     let total = total_accounted.saturating_sub(total_prepaid).max(0i128);
 
     let mut merchant_count: u32 = 0;
