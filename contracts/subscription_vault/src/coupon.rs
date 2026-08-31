@@ -269,7 +269,7 @@ pub fn get_coupon(env: &Env, code: Symbol) -> Option<Coupon> {
 /// be skipped. Callers in `charge_one` catch these errors and skip the discount
 /// without failing the charge, to avoid billing outages.
 pub fn validate_coupon_for_charge(
-    env: &Env,
+    _env: &Env,
     now: u64,
     sub_token: &Address,
     coupon: &Coupon,

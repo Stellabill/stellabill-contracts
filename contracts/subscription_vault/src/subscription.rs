@@ -1155,11 +1155,13 @@ fn apply_cancellation(
 
         let escrow = CancellationEscrow {
             subscription_id,
-            amount: refund_amount,
-            token: token_addr.clone(),
             subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
+            token: token_addr.clone(),
+            amount: refund_amount,
+            opened_at: now,
             released_at,
+            released: false,
         };
 
         env.storage()
@@ -1887,8 +1889,9 @@ fn bulk_deposit_one(
     crate::blocklist::require_not_blocklisted(env, &sub.merchant).unwrap_or(());
 
     let now = env.ledger().timestamp();
+    let ledger = env.ledger().sequence();
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, ledger) {
         return crate::types::BulkDepositResult {
             subscription_id,
             success: false,
@@ -2195,7 +2198,7 @@ pub fn do_charge_one_off(
         crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
     }
 
-    let should_emit_fee_event = if fee_amount > 0 {
+    let _should_emit_fee_event = if fee_amount > 0 {
         if let Some(ref treasury) = treasury_opt {
             crate::merchant::credit_merchant_balance_for_token(
                 env,
@@ -2640,7 +2643,7 @@ pub fn do_deposit_funds_on_behalf(
     }
 
     // Expiration guard
-    if sub.is_expired(now) {
+    if sub.is_expired(now, env.ledger().sequence()) {
         if sub.status != SubscriptionStatus::Expired {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
@@ -3185,6 +3188,7 @@ pub fn do_create_subscription_from_plan(
             interval_seconds: plan.interval_seconds,
             lifetime_cap: plan.lifetime_cap,
             expires_at: None,
+            expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
@@ -3482,6 +3486,66 @@ pub fn get_subscriber_exposure(
     compute_subscriber_exposure(env, &subscriber, &token)
 }
 
+/// Enable or disable automatic renewal for a subscription.
+pub fn do_set_auto_renew(
+    env: &Env,
+    subscription_id: u32,
+    authorizer: Address,
+    enabled: bool,
+) -> Result<(), Error> {
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    // Only subscriber or merchant may toggle auto-renew.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+    authorizer.require_auth();
+
+    if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
+        return Err(Error::InvalidStatusTransition);
+    }
+
+    let now = env.ledger().timestamp();
+
+    if !enabled {
+        // Disable: record timestamp only on the first disable.
+        if sub.auto_renew {
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        sub.auto_renew = false;
+    } else {
+        // Enable: check renewal window.
+        if !sub.auto_renew {
+            // Already disabled — check window.
+            if let Some(disabled_at) = sub.auto_renew_disabled_at {
+                let window_end = disabled_at.saturating_add(sub.interval_seconds);
+                if now >= window_end {
+                    return Err(Error::RenewalWindowClosed);
+                }
+            }
+            sub.auto_renew_disabled_at = None;
+        }
+        sub.auto_renew = true;
+    }
+
+    write_subscription(env, subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
+        crate::types::AutoRenewToggledEvent {
+            subscription_id,
+            subscriber: sub.subscriber,
+            merchant: sub.merchant,
+            enabled: sub.auto_renew,
+            authorizer,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
 pub fn do_configure_usage_limits(
     env: &Env,
 
@@ -3577,9 +3641,12 @@ pub fn do_initiate_transfer(
 
     let intent = crate::types::TransferIntent {
         subscription_id,
+        from_subscriber: from.clone(),
         from: from.clone(),
         to: to.clone(),
+        created_at: env.ledger().timestamp(),
         expires_at,
+        executed: false,
     };
 
     env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);
