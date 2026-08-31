@@ -257,7 +257,7 @@ fn merchant_earnings_invariant_256_seeded_sequences() {
 
         if let Err(payload) = result {
             let path = format!(
-                "{}/tests/fixtures/merchant_invariant_failures.txt",
+                "{}/../../tests/fixtures/merchant_invariant_failures.txt",
                 env!("CARGO_MANIFEST_DIR")
             );
             let mut file = OpenOptions::new()
