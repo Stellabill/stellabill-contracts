@@ -43,7 +43,106 @@ mod idempotency;
 mod invariants;
 mod merchant;
 mod metadata;
-mod nonce;
+mod nonce {
+    use crate::types::{DataKey, Error, EVENT_SCHEMA_VERSION};
+    use soroban_sdk::{Address, Env, Symbol};
+
+    pub(crate) const DOMAIN_BATCH_CHARGE: u32 = 0;
+    pub(crate) const DOMAIN_ADMIN_ROTATION: u32 = 1;
+    pub(crate) const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
+    pub(crate) const DOMAIN_MERCHANT_ROTATION: u32 = 3;
+    pub(crate) const DOMAIN_METADATA_SIGNED: u32 = 4;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct NonceConsumedEvent {
+        pub signer: Address,
+        pub domain: u32,
+        pub nonce: u64,
+        pub timestamp: u64,
+        pub schema_version: u32,
+    }
+
+    pub(crate) fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AdminNonce(signer.clone(), domain))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn consume_nonce(
+        env: &Env,
+        signer: &Address,
+        domain: u32,
+        expected: u64,
+    ) -> Result<(), Error> {
+        let key = DataKey::AdminNonce(signer.clone(), domain);
+        let stored: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        if expected != stored {
+            return Err(Error::NonceAlreadyUsed);
+        }
+        let next = stored.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&key, &next);
+        env.events().publish(
+            (Symbol::new(env, "nonce_consumed"), signer.clone(), domain),
+            NonceConsumedEvent {
+                signer: signer.clone(),
+                domain,
+                nonce: expected,
+                timestamp: env.ledger().timestamp(),
+                schema_version: EVENT_SCHEMA_VERSION,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn check_and_advance(
+        env: &Env,
+        signer: &Address,
+        domain: u32,
+        expected: u64,
+    ) -> Result<(), Error> {
+        consume_nonce(env, signer, domain, expected)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use soroban_sdk::testutils::Address as _;
+
+        #[test]
+        fn nonce_advances_and_rejects_reuse_skip_and_overflow() {
+            let env = Env::default();
+            let signer = Address::generate(&env);
+            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 0);
+            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
+            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 1);
+            assert_eq!(
+                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0),
+                Err(crate::types::Error::NonceAlreadyUsed)
+            );
+            assert_eq!(
+                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 2),
+                Err(crate::types::Error::NonceAlreadyUsed)
+            );
+            let key = crate::types::DataKey::AdminNonce(signer.clone(), DOMAIN_BATCH_CHARGE);
+            env.storage().persistent().set(&key, &u64::MAX);
+            assert_eq!(
+                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, u64::MAX),
+                Err(crate::types::Error::Overflow)
+            );
+        }
+
+        #[test]
+        fn domains_and_signers_are_independent() {
+            let env = Env::default();
+            let signer = Address::generate(&env);
+            let other = Address::generate(&env);
+            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
+            assert_eq!(get_nonce(&env, &other, DOMAIN_BATCH_CHARGE), 0);
+            assert_eq!(get_nonce(&env, &signer, DOMAIN_ADMIN_ROTATION), 0);
+        }
+    }
+}
 pub mod queries;
 mod safe_math;
 pub mod subscription;
@@ -54,6 +153,7 @@ mod validation;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
+pub use nonce::NonceConsumedEvent;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
     CancellationEscrowReleasedEvent,

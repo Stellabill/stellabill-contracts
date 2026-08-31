@@ -366,8 +366,41 @@ fn test_old_rotate_admin_still_works() {
     let (env, client, _token, admin) = setup();
     let new_admin = Address::generate(&env);
 
-    client.rotate_admin(&admin, &new_admin);
+    client.rotate_admin(&admin, &new_admin, &0);
     assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_rotate_admin_rejects_skipped_nonce() {
+    let (env, client, _token, admin) = setup();
+    let new_admin = Address::generate(&env);
+
+    let result = client.try_rotate_admin(&admin, &new_admin, &1);
+    assert_eq!(result, Err(Ok(Error::NonceAlreadyUsed)));
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_rotate_admin_accepts_current_nonce_after_rejected_skip() {
+    let (env, client, _token, admin) = setup();
+    let new_admin = Address::generate(&env);
+
+    let result = client.try_rotate_admin(&admin, &new_admin, &1);
+    assert_eq!(result, Err(Ok(Error::NonceAlreadyUsed)));
+
+    client.rotate_admin(&admin, &new_admin, &0);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_rotate_admin_nonce_is_per_signer() {
+    let (env, client, _token, admin) = setup();
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+
+    client.rotate_admin(&admin, &admin2, &0);
+    client.rotate_admin(&admin2, &admin3, &0);
+    assert_eq!(client.get_admin(), admin3);
 }
 
 #[test]
@@ -377,7 +410,7 @@ fn test_proposal_cannot_be_claimed_by_old_admin_after_immediate_rotation() {
 
     client.propose_admin(&admin, &new_admin);
     // Use old single-step to rotate directly instead
-    client.rotate_admin(&admin, &new_admin);
+    client.rotate_admin(&admin, &new_admin, &0);
     // Claim is no longer needed; proposal is stale
     // However, the proposal still exists since we didn't cancel it.
     // But admin is already new_admin, and the proposal was for them.
