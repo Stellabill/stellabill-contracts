@@ -282,12 +282,8 @@ pub enum DataKey {
     OraclePriceHistoryMeta(Address),
     /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
     OraclePriceHistoryEntry(Address, u32),
-    /// Per-merchant sub-account configuration. Discriminant 79.
-    MerchantSubAccount(Address, Symbol),
-    /// List of sub-account labels for a merchant. Discriminant 80.
-    MerchantSubAccountList(Address),
-    /// Emergency withdraw intent keyed by subscription ID. Discriminant 81.
-    EmergencyWithdrawIntent(u32),
+    /// Per-entrypoint reentrancy lock flag (instance). Discriminant 81.
+    ReentrancyLock(Symbol),
 }
 
 impl DataKey {
@@ -377,10 +373,7 @@ impl DataKey {
             DataKey::MerchantFeeBps(_) => 76,
             DataKey::OraclePriceHistoryMeta(_) => 77,
             DataKey::OraclePriceHistoryEntry(_, _) => 78,
-            DataKey::MerchantSubAccount(_, _) => 79,
-            DataKey::MerchantSubAccountList(_) => 80,
-            DataKey::EmergencyWithdrawIntent(_) => 81,
-            DataKey::DelegatedPayerGrant(_, _) => 80,
+            DataKey::ReentrancyLock(_) => 81,
         }
     }
 
@@ -452,9 +445,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     76, // MerchantFeeBps(Address)
     77, // OraclePriceHistoryMeta(Address)
     78, // OraclePriceHistoryEntry(Address, u32)
-    79, // MerchantSubAccount(Address, Symbol)
-    80, // MerchantSubAccountList(Address)
-    81, // EmergencyWithdrawIntent(u32)
+    81, // ReentrancyLock(Symbol)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
