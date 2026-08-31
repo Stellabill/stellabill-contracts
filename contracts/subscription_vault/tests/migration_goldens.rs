@@ -183,7 +183,7 @@ fn test_golden_subscription_summary_determinism() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     // Export the same subscription twice.
@@ -230,7 +230,7 @@ fn test_golden_paginated_export_determinism() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
         ids.push(id);
     }
@@ -303,7 +303,7 @@ fn update_goldens_subscription_summary() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     let summary = client.export_subscription_summary(&admin, &sub_id);
@@ -334,7 +334,7 @@ fn update_goldens_paginated_export() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     }
 

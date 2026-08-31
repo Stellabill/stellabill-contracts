@@ -163,7 +163,7 @@ impl ChaosEnv {
             &None::<i128>, // lifetime_cap
             &None::<u64>,  // expires_at
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>, // sub_account_label
+            &None::<soroban_sdk::Symbol>,
 );
         self.client.deposit_funds(&id, &subscriber, &PREPAID, &None);
         (id, subscriber, merchant)
@@ -319,7 +319,7 @@ fn test_backward_jump_across_grace_boundary_no_panic() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     ce.client.deposit_funds(&id, &subscriber, &AMOUNT, &None);
 

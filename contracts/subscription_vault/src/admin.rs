@@ -8,7 +8,8 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent, RecoveryReason,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
+    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, TreasurySplitConfig,
+    TreasurySplitConfiguredEvent, TreasurySplitEntry, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO,
     SUB_TTL_THRESHOLD,
 };
 use crate::{
@@ -742,6 +743,95 @@ pub fn get_fee_token(env: &Env) -> Option<Address> {
 /// Return the configured buyout premium in basis points, defaulting to 0.
 pub fn get_buyout_premium_bps(env: &Env) -> u32 {
     read_config(env, &DataKey::BuyoutPremiumBps).unwrap_or(0u32)
+}
+
+/// Validate a treasury split configuration.
+///
+/// # Validation rules
+/// - Must contain at least one entry.
+/// - No duplicate beneficiary addresses.
+/// - Each `bps` must be > 0.
+/// - The sum of all `bps` values must equal exactly 10_000.
+///
+/// Returns [`Error::InvalidFeeBips`] on any validation failure.
+pub fn validate_treasury_split(entries: &Vec<TreasurySplitEntry>) -> Result<(), Error> {
+    if entries.is_empty() {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    let mut total_bps: u32 = 0;
+    for i in 0..entries.len() {
+        let entry = entries.get(i).unwrap();
+        if entry.bps == 0 {
+            return Err(Error::InvalidFeeBips);
+        }
+        total_bps = total_bps
+            .checked_add(entry.bps)
+            .ok_or(Error::Overflow)?;
+
+        // Check for duplicate beneficiaries
+        for j in (i + 1)..entries.len() {
+            let other = entries.get(j).unwrap();
+            if entry.beneficiary == other.beneficiary {
+                return Err(Error::InvalidFeeBips);
+            }
+        }
+    }
+
+    if total_bps != 10_000 {
+        return Err(Error::InvalidFeeBips);
+    }
+
+    Ok(())
+}
+
+/// Set the multi-beneficiary treasury split. Admin only.
+///
+/// When a treasury split is configured, protocol fees are distributed across
+/// the listed beneficiaries according to their basis-point allocation instead
+/// of being sent to the single `DataKey::Treasury` address.
+///
+/// The sum of all `bps` values must equal exactly 10_000. Duplicate
+/// beneficiaries are rejected.
+pub fn set_treasury_split(
+    env: &Env,
+    admin: Address,
+    entries: Vec<TreasurySplitEntry>,
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "TreasurySplit")?;
+
+    validate_treasury_split(&entries)?;
+
+    let config = TreasurySplitConfig {
+        entries: entries.clone(),
+    };
+    write_config(env, &DataKey::TreasurySplit, &config);
+
+    env.events().publish(
+        (Symbol::new(env, "treasury_split_configured"),),
+        TreasurySplitConfiguredEvent {
+            admin,
+            entries,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
+/// Return the configured treasury split, or `None` if not set.
+pub fn get_treasury_split(env: &Env) -> Option<TreasurySplitConfig> {
+    read_config(env, &DataKey::TreasurySplit)
+}
+
+/// Clear the treasury split, reverting protocol fees to the single-treasury
+/// address stored in `DataKey::Treasury`. Admin only.
+pub fn clear_treasury_split(env: &Env, admin: Address) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "TreasurySplit")?;
+    remove_config(env, &DataKey::TreasurySplit);
+    Ok(())
 }
 
 /// Set the auto-pause threshold (number of consecutive InsufficientBalance failures

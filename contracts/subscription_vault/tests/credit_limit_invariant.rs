@@ -194,7 +194,7 @@ fn run_sequence(seed: u64) {
                         &None::<i128>,
                         &None::<u64>,
                                         &None::<u32>,
-                                        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
                     assert_eq!(
                         res,
@@ -220,7 +220,7 @@ fn run_sequence(seed: u64) {
                         &None::<i128>,
                         &None::<u64>,
                                         &None::<u32>,
-                                        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
                     model.active.push((id, amount));
 
@@ -345,7 +345,7 @@ fn overflow_at_i128_boundary_yields_error() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     assert_eq!(
         h.client.get_subscriber_exposure(&h.subscriber, &h.token),
@@ -363,7 +363,7 @@ fn overflow_at_i128_boundary_yields_error() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     assert_eq!(
         h.client
@@ -388,7 +388,7 @@ fn limit_shrink_below_exposure_has_no_clawback() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     let exposure = h.client.get_subscriber_exposure(&h.subscriber, &h.token);
     assert_eq!(exposure, 10_000);
@@ -419,7 +419,7 @@ fn limit_shrink_below_exposure_has_no_clawback() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     assert_eq!(
         res,
@@ -459,7 +459,7 @@ fn exposure_is_isolated_per_token() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     h.client.create_subscription_with_token(
         &h.subscriber,
@@ -471,7 +471,7 @@ fn exposure_is_isolated_per_token() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     // Each token reports only its own exposure.
@@ -500,7 +500,7 @@ fn exposure_is_isolated_per_token() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     assert_eq!(
         blocked,
@@ -519,7 +519,7 @@ fn exposure_is_isolated_per_token() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 );
     assert!(
         ok.is_ok(),

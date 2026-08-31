@@ -89,7 +89,7 @@ fn create_subscription(
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
-    &None::<soroban_sdk::Symbol>,
+        &None::<soroban_sdk::Symbol>,
     );
     let _ = token; // touch unused param to silence the lint without complaining
     (id, subscriber, merchant)
@@ -223,7 +223,7 @@ fn subscriber_signed_set_succeeds() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
-    &None::<soroban_sdk::Symbol>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let payload = payload_for(
@@ -268,7 +268,7 @@ fn merchant_signed_set_succeeds() {
         &None::<i128>,
         &None::<u64>,
     &None::<u32>,
-    &None::<soroban_sdk::Symbol>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let payload = payload_for(
@@ -305,7 +305,7 @@ fn sequential_nonces_advance() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let signer = pubkey_to_address(&env, &bytes32(&env, &sub_key.pub_bytes));
@@ -351,7 +351,7 @@ fn replayed_nonce_is_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
 
@@ -383,7 +383,7 @@ fn skipped_nonce_is_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
 
@@ -415,7 +415,7 @@ fn expires_at_equal_to_now_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let now = env.ledger().timestamp();
@@ -443,7 +443,7 @@ fn expires_at_in_past_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let now = env.ledger().timestamp();
@@ -474,7 +474,7 @@ fn expires_at_in_future_succeeds() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = payload_for(
@@ -510,7 +510,7 @@ fn forged_signature_panics() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -547,7 +547,7 @@ fn wrong_key_signature_panics() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     // Attacker builds a fully valid signature on the right message bytes
@@ -585,7 +585,7 @@ fn chain_id_mismatch_panics() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
@@ -662,7 +662,7 @@ fn key_too_long_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
 
@@ -701,7 +701,7 @@ fn value_too_long_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let long_value = String::from_str(&env, &"a".repeat(257));
@@ -736,7 +736,7 @@ fn empty_key_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = SignedMetadataPayload {
@@ -769,7 +769,7 @@ fn empty_value_rejected() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = SignedMetadataPayload {
@@ -802,7 +802,7 @@ fn key_cap_reached() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
 
@@ -858,7 +858,7 @@ fn subscriber_and_merchant_nonces_independent() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
 
@@ -906,7 +906,7 @@ fn nonce_overflow_is_guarded() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let signer = Address::generate(&env);
@@ -969,7 +969,7 @@ fn success_emits_signed_event() {
             &None::<i128>,
             &None::<u64>,
                 &None::<u32>,
-                &None::<soroban_sdk::Symbol>,
+            &None::<soroban_sdk::Symbol>,
 )
     };
     let payload = payload_for(&env, sub_id, "k", "v", 0u64, one_hour_from_now(&env));
