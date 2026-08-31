@@ -66,7 +66,89 @@ pub use types::{
 // ── Stub modules for features not yet extracted to separate files ─────────────
 
 /// State machine: validates and applies subscription status transitions.
-pub mod state_machine;
+pub mod state_machine {
+    use crate::types::{Error, SubscriptionStatus};
+
+    /// Documented transition matrix from `docs/subscription_state_machine.md`.
+    ///
+    /// `Cancelled` and `Archived` are terminal states. `InsufficientBalance`
+    /// may return to `Active` only after a successful deposit, and
+    /// `GracePeriod` may return to `Active` via deposit/buyout.
+    static ALLOWED_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
+        (
+            SubscriptionStatus::Active,
+            &[
+                SubscriptionStatus::Paused,
+                SubscriptionStatus::InsufficientBalance,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::Paused,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::InsufficientBalance,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::GracePeriod,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (
+            SubscriptionStatus::GracePeriod,
+            &[
+                SubscriptionStatus::Active,
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Expired,
+            ],
+        ),
+        (SubscriptionStatus::Expired, &[SubscriptionStatus::Cancelled]),
+        (SubscriptionStatus::Cancelled, &[] as &[SubscriptionStatus]),
+        (SubscriptionStatus::Archived, &[] as &[SubscriptionStatus]),
+    ];
+
+    /// Returns the documented next states for `status`.
+    pub fn get_allowed_transitions(status: SubscriptionStatus) -> &'static [SubscriptionStatus] {
+        ALLOWED_TRANSITIONS
+            .iter()
+            .find(|(current, _)| *current == status)
+            .map_or(&[], |(_, allowed)| *allowed)
+    }
+
+    /// Returns `true` when the pair is present in the documented transition matrix.
+    pub fn can_transition(current: SubscriptionStatus, next: SubscriptionStatus) -> bool {
+        get_allowed_transitions(current).contains(&next)
+    }
+
+    /// Returns `InvalidStatusTransition` when `current -> next` is not documented.
+    pub fn validate_status_transition(
+        current: SubscriptionStatus,
+        next: SubscriptionStatus,
+    ) -> Result<(), Error> {
+        if can_transition(current, next) {
+            Ok(())
+        } else {
+            Err(Error::InvalidStatusTransition)
+        }
+    }
+
+    /// Applies `next` only if the transition is documented.
+    pub fn transition_to(
+        current: &mut SubscriptionStatus,
+        next: SubscriptionStatus,
+    ) -> Result<(), Error> {
+        validate_status_transition(current.clone(), next.clone())?;
+        *current = next;
+        Ok(())
+    }
+}
 
 /// Period snapshots: immutable per-period billing snapshots.
 pub mod period_snapshots;

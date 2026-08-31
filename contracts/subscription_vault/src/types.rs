@@ -504,6 +504,182 @@ pub enum SubscriptionStatus {
     Archived = 6,
 }
 
+/// Allowed subscription status transitions, mirroring the state machine
+/// documented in `docs/subscription_state_machine.md`.
+///
+/// `Cancelled` and `Archived` are terminal states and intentionally have no
+/// outgoing entries. `InsufficientBalance -> Active` is reserved for
+/// deposit-funded recovery; callers must also verify that a deposit occurred
+/// before invoking this transition.
+pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
+    (
+        SubscriptionStatus::Active,
+        &[
+            SubscriptionStatus::Paused,
+            SubscriptionStatus::InsufficientBalance,
+            SubscriptionStatus::GracePeriod,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Paused,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::InsufficientBalance,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::GracePeriod,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Expired,
+        &[
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::Archived,
+        ],
+    ),
+];
+
+impl SubscriptionStatus {
+    /// Returns `true` when the transition `self -> next` is in the documented
+    /// transition matrix.
+    pub fn can_transition_to(self, next: SubscriptionStatus) -> bool {
+        ALLOWED_STATUS_TRANSITIONS
+            .iter()
+            .find(|(from, _)| *from == self)
+            .map(|(_, allowed)| allowed.contains(&next))
+            .unwrap_or(false)
+    }
+
+    /// Alias matching the `state_machine` module's `can_transition` API.
+    pub fn can_transition(self, next: SubscriptionStatus) -> bool {
+        self.can_transition_to(next)
+    }
+
+    /// Validates a status transition, returning
+    /// [`Error::InvalidStatusTransition`] when the matrix does not permit it.
+    pub fn validate_status_transition(self, next: SubscriptionStatus) -> Result<(), Error> {
+        if self.can_transition_to(next) {
+            Ok(())
+        } else {
+            Err(Error::InvalidStatusTransition)
+        }
+    }
+}
+
+/// Validates a status transition using the documented matrix.
+pub fn validate_status_transition(
+    from: SubscriptionStatus,
+    to: SubscriptionStatus,
+) -> Result<(), Error> {
+    from.validate_status_transition(to)
+}
+
+/// Returns `true` when the `from -> to` transition is in the documented matrix,
+/// including same-state no-ops for idempotent callers.
+pub fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
+    from == to || from.can_transition_to(to)
+}
+
+/// Applies a transition only when the matrix permits it. Same-state calls are
+/// accepted as idempotent no-ops.
+pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+    if *current == next {
+        return Ok(());
+    }
+    validate_status_transition(*current, next)?;
+    *current = next;
+    Ok(())
+}
+
+#[cfg(test)]
+mod status_transition_tests {
+    use super::{can_transition, transition_to, Error, SubscriptionStatus};
+
+    #[test]
+    fn documented_happy_paths_are_allowed() {
+        use SubscriptionStatus::*;
+        assert!(Active.can_transition_to(Paused));
+        assert!(Active.can_transition_to(InsufficientBalance));
+        assert!(Active.can_transition_to(GracePeriod));
+        assert!(Active.can_transition_to(Expired));
+        assert!(Active.can_transition_to(Cancelled));
+        assert!(Paused.can_transition_to(Active));
+        assert!(Paused.can_transition_to(Expired));
+        assert!(Paused.can_transition_to(Cancelled));
+        assert!(InsufficientBalance.can_transition_to(Active));
+        assert!(InsufficientBalance.can_transition_to(Expired));
+        assert!(InsufficientBalance.can_transition_to(Cancelled));
+        assert!(GracePeriod.can_transition_to(Active));
+        assert!(GracePeriod.can_transition_to(Expired));
+        assert!(GracePeriod.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Archived));
+    }
+
+    #[test]
+    fn terminal_states_are_enforced() {
+        use SubscriptionStatus::*;
+        for next in [
+            Active,
+            Paused,
+            Cancelled,
+            InsufficientBalance,
+            GracePeriod,
+            Expired,
+            Archived,
+        ] {
+            assert!(!Cancelled.can_transition_to(next));
+            assert!(!Archived.can_transition_to(next));
+        }
+    }
+
+    #[test]
+    fn invalid_transitions_return_error() {
+        use SubscriptionStatus::*;
+        assert_eq!(
+            Active.validate_status_transition(Archived),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Cancelled.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Expired.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+    }
+
+    #[test]
+    fn same_state_noop_is_allowed() {
+        use SubscriptionStatus::*;
+        assert!(can_transition(Active, Active));
+        let mut status = Active;
+        assert!(transition_to(&mut status, Active).is_ok());
+        assert_eq!(status, Active);
+        status = Cancelled;
+        assert!(transition_to(&mut status, Cancelled).is_ok());
+        assert_eq!(status, Cancelled);
+        assert!(transition_to(&mut status, Active).is_err());
+    }
+}
+
 /// Stores subscription details and current state.
 #[contracttype]
 #[derive(Clone, Debug)]

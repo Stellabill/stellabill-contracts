@@ -310,7 +310,9 @@ pub fn charge_one(
 
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
-        if sub.status != SubscriptionStatus::Expired {
+        if sub.status != SubscriptionStatus::Expired
+            && sub.status != SubscriptionStatus::Cancelled
+        {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
             env.events().publish(
@@ -799,13 +801,15 @@ pub fn charge_one(
                     // fresh entry so the clock is always initialised.
                     sub.grace_start_timestamp = Some(now);
                 }
-            } else if grace_duration > 0 {
-                // First underfunded charge — enter GracePeriod and start the clock
+            } else if grace_duration > 0 && previous_status == SubscriptionStatus::Active {
+                // First underfunded charge from Active — enter GracePeriod and start the clock
                 transition_to(&mut sub.status, SubscriptionStatus::GracePeriod)?;
                 sub.grace_start_timestamp = Some(now);
             } else {
-                // No grace period configured — go straight to InsufficientBalance
-                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                // No grace period configured, or already InsufficientBalance — ensure InsufficientBalance
+                if sub.status != SubscriptionStatus::InsufficientBalance {
+                    transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                }
                 sub.grace_start_timestamp = None;
             }
 
@@ -951,7 +955,9 @@ pub fn charge_usage_one(
 
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
-        if sub.status != SubscriptionStatus::Expired {
+        if sub.status != SubscriptionStatus::Expired
+            && sub.status != SubscriptionStatus::Cancelled
+        {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
             env.events().publish(

@@ -63,7 +63,6 @@
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_add_balance, safe_sub};
-use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
     AutoRenewToggledEvent, BillingChargeKind, DataKey, EmergencyWithdrawIntent, Error,
@@ -78,6 +77,52 @@ use crate::types::{
     TOPIC_ONE_OFF_CHARGED, BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
+
+/// Documented subscription state machine transitions.
+///
+/// `Cancelled` and `Archived` are terminal: they have no outgoing
+/// transitions. `Expired` may only transition to `Cancelled`.
+const ALLOWED_TRANSITIONS: &[(SubscriptionStatus, SubscriptionStatus)] = &[
+    (SubscriptionStatus::Active, SubscriptionStatus::Paused),
+    (SubscriptionStatus::Active, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::Active, SubscriptionStatus::Expired),
+    (SubscriptionStatus::Active, SubscriptionStatus::InsufficientBalance),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Active),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::Paused, SubscriptionStatus::Expired),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Active),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Expired),
+    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::GracePeriod),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Active),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Cancelled),
+    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Expired),
+    (SubscriptionStatus::Expired, SubscriptionStatus::Cancelled),
+];
+
+/// Returns `true` when `from -> to` is a documented subscription transition.
+fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
+    ALLOWED_TRANSITIONS.contains(&(from, to))
+}
+
+/// Validates a subscription status transition against the documented matrix.
+fn validate_status_transition(
+    from: SubscriptionStatus,
+    to: SubscriptionStatus,
+) -> Result<(), Error> {
+    if can_transition(from, to) {
+        Ok(())
+    } else {
+        Err(Error::InvalidStatusTransition)
+    }
+}
+
+/// Applies `next` to `current` only if the transition is documented.
+fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+    validate_status_transition(*current, next)?;
+    *current = next;
+    Ok(())
+}
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// Hard upper bound on billing interval: 365 days (31 536 000 s).
@@ -866,7 +911,8 @@ pub fn do_deposit_funds(
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance >= sub.amount
     {
-        sub.status = SubscriptionStatus::Active;
+        let previous_status = sub.status;
+        transition_to(&mut sub.status, SubscriptionStatus::Active)?;
         sub.grace_start_timestamp = None;
         write_subscription(env, subscription_id, &sub);
 
@@ -889,7 +935,7 @@ pub fn do_deposit_funds(
                 subscriber: sub.subscriber.clone(),
                 merchant: sub.merchant.clone(),
                 authorizer: sub.subscriber.clone(),
-                previous_status: SubscriptionStatus::Paused,
+                previous_status,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
