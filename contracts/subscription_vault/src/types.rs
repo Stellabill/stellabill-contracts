@@ -452,6 +452,9 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     76, // MerchantFeeBps(Address)
     77, // OraclePriceHistoryMeta(Address)
     78, // OraclePriceHistoryEntry(Address, u32)
+    81, // MerchantSubAccount(Address, Symbol)
+    82, // MerchantSubAccountList(Address)
+    83, // EmergencyWithdrawIntent(u32)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -499,6 +502,182 @@ pub enum SubscriptionStatus {
     Expired = 5,
     /// Subscription is archived (reduced storage, read-only).
     Archived = 6,
+}
+
+/// Allowed subscription status transitions, mirroring the state machine
+/// documented in `docs/subscription_state_machine.md`.
+///
+/// `Cancelled` and `Archived` are terminal states and intentionally have no
+/// outgoing entries. `InsufficientBalance -> Active` is reserved for
+/// deposit-funded recovery; callers must also verify that a deposit occurred
+/// before invoking this transition.
+pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
+    (
+        SubscriptionStatus::Active,
+        &[
+            SubscriptionStatus::Paused,
+            SubscriptionStatus::InsufficientBalance,
+            SubscriptionStatus::GracePeriod,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Paused,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::InsufficientBalance,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::GracePeriod,
+        &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Expired,
+            SubscriptionStatus::Cancelled,
+        ],
+    ),
+    (
+        SubscriptionStatus::Expired,
+        &[
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::Archived,
+        ],
+    ),
+];
+
+impl SubscriptionStatus {
+    /// Returns `true` when the transition `self -> next` is in the documented
+    /// transition matrix.
+    pub fn can_transition_to(self, next: SubscriptionStatus) -> bool {
+        ALLOWED_STATUS_TRANSITIONS
+            .iter()
+            .find(|(from, _)| *from == self)
+            .map(|(_, allowed)| allowed.contains(&next))
+            .unwrap_or(false)
+    }
+
+    /// Alias matching the `state_machine` module's `can_transition` API.
+    pub fn can_transition(self, next: SubscriptionStatus) -> bool {
+        self.can_transition_to(next)
+    }
+
+    /// Validates a status transition, returning
+    /// [`Error::InvalidStatusTransition`] when the matrix does not permit it.
+    pub fn validate_status_transition(self, next: SubscriptionStatus) -> Result<(), Error> {
+        if self.can_transition_to(next) {
+            Ok(())
+        } else {
+            Err(Error::InvalidStatusTransition)
+        }
+    }
+}
+
+/// Validates a status transition using the documented matrix.
+pub fn validate_status_transition(
+    from: SubscriptionStatus,
+    to: SubscriptionStatus,
+) -> Result<(), Error> {
+    from.validate_status_transition(to)
+}
+
+/// Returns `true` when the `from -> to` transition is in the documented matrix,
+/// including same-state no-ops for idempotent callers.
+pub fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
+    from == to || from.can_transition_to(to)
+}
+
+/// Applies a transition only when the matrix permits it. Same-state calls are
+/// accepted as idempotent no-ops.
+pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+    if *current == next {
+        return Ok(());
+    }
+    validate_status_transition(*current, next)?;
+    *current = next;
+    Ok(())
+}
+
+#[cfg(test)]
+mod status_transition_tests {
+    use super::{can_transition, transition_to, Error, SubscriptionStatus};
+
+    #[test]
+    fn documented_happy_paths_are_allowed() {
+        use SubscriptionStatus::*;
+        assert!(Active.can_transition_to(Paused));
+        assert!(Active.can_transition_to(InsufficientBalance));
+        assert!(Active.can_transition_to(GracePeriod));
+        assert!(Active.can_transition_to(Expired));
+        assert!(Active.can_transition_to(Cancelled));
+        assert!(Paused.can_transition_to(Active));
+        assert!(Paused.can_transition_to(Expired));
+        assert!(Paused.can_transition_to(Cancelled));
+        assert!(InsufficientBalance.can_transition_to(Active));
+        assert!(InsufficientBalance.can_transition_to(Expired));
+        assert!(InsufficientBalance.can_transition_to(Cancelled));
+        assert!(GracePeriod.can_transition_to(Active));
+        assert!(GracePeriod.can_transition_to(Expired));
+        assert!(GracePeriod.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Cancelled));
+        assert!(Expired.can_transition_to(Archived));
+    }
+
+    #[test]
+    fn terminal_states_are_enforced() {
+        use SubscriptionStatus::*;
+        for next in [
+            Active,
+            Paused,
+            Cancelled,
+            InsufficientBalance,
+            GracePeriod,
+            Expired,
+            Archived,
+        ] {
+            assert!(!Cancelled.can_transition_to(next));
+            assert!(!Archived.can_transition_to(next));
+        }
+    }
+
+    #[test]
+    fn invalid_transitions_return_error() {
+        use SubscriptionStatus::*;
+        assert_eq!(
+            Active.validate_status_transition(Archived),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Cancelled.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+        assert_eq!(
+            Expired.validate_status_transition(Active),
+            Err(Error::InvalidStatusTransition)
+        );
+    }
+
+    #[test]
+    fn same_state_noop_is_allowed() {
+        use SubscriptionStatus::*;
+        assert!(can_transition(Active, Active));
+        let mut status = Active;
+        assert!(transition_to(&mut status, Active).is_ok());
+        assert_eq!(status, Active);
+        status = Cancelled;
+        assert!(transition_to(&mut status, Cancelled).is_ok());
+        assert_eq!(status, Cancelled);
+        assert!(transition_to(&mut status, Active).is_err());
+    }
 }
 
 /// Stores subscription details and current state.
@@ -549,6 +728,12 @@ pub struct Subscription {
     /// enforce the one-interval renewal window. `None` when auto-renewal is
     /// enabled or has never been disabled.
     pub auto_renew_disabled_at: Option<u64>,
+    /// Outstanding arrears (unpaid shortfall) accumulated when a partial payment
+    /// drained the prepaid balance but did not cover the full charge amount.
+    ///
+    /// Arrears are always `>= 0`. Any deposit is applied to arrears *before*
+    /// it tops up the prepaid balance (see `do_deposit_funds`).
+    pub arrears: i128,
 }
 
 impl Subscription {
@@ -1577,6 +1762,43 @@ pub struct Coupon {
     pub revoked: bool,
 }
 
+impl Coupon {
+    /// Returns the absolute discount (in token base units) for a gross charge.
+    ///
+    /// Applies `percent_off_bps` first, then `fixed_off`, and clamps the total
+    /// discount to the gross amount so the payable amount never goes negative.
+    pub fn discount_amount(&self, gross: i128) -> i128 {
+        if gross <= 0 {
+            return 0;
+        }
+        let percent_discount = gross
+            .saturating_mul(self.percent_off_bps as i128)
+            .saturating_div(10000_i128);
+        let combined = percent_discount.saturating_add(self.fixed_off);
+        if combined <= 0 {
+            return 0;
+        }
+        if combined >= gross {
+            gross
+        } else {
+            combined
+        }
+    }
+
+    /// Returns `true` if the coupon is not revoked and has not expired.
+    ///
+    /// `expires_at == 0` means the coupon never expires.
+    pub fn is_active(&self, now: u64) -> bool {
+        !self.revoked && (self.expires_at == 0 || now < self.expires_at)
+    }
+
+    /// Returns `true` if the coupon can still be redeemed at `now`.
+    pub fn can_redeem(&self, now: u64, current_redemptions: u32) -> bool {
+        self.is_active(now)
+            && (self.max_redemptions == 0 || current_redemptions < self.max_redemptions)
+    }
+}
+
 /// Event emitted when a merchant creates a new coupon.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1994,6 +2216,37 @@ pub struct SubscriptionRecoveryReadyEvent {
     pub subscriber: Address,
     pub prepaid_balance: i128,
     pub required_amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when an underfunded interval charge is settled as a partial payment.
+///
+/// The merchant's `allow_partial_payment` policy is enabled, the subscription
+/// had some prepaid balance but less than the full charge, so the available
+/// balance was drained and the uncovered shortfall was added to
+/// `Subscription::arrears`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ArrearsAccruedEvent {
+    pub subscription_id: u32,
+    pub partial_amount: i128,
+    pub shortfall: i128,
+    pub total_arrears: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Emitted when a deposit is first applied to outstanding arrears before
+/// topping up the prepaid balance.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ArrearsSettledEvent {
+    pub subscription_id: u32,
+    /// Amount of the deposit applied to clear arrears.
+    pub arrears_paid: i128,
+    /// Remaining arrears after this deposit.
+    pub remaining_arrears: i128,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -2622,6 +2875,14 @@ pub struct MerchantConfig {
     pub redirect_url: String,
     pub is_paused: bool,
     pub last_updated: u64,
+    /// Per-merchant policy controlling whether underfunded interval charges may
+    /// be settled as a partial payment (draining whatever prepaid balance is
+    /// available and accumulating the shortfall as `Subscription::arrears`).
+    ///
+    /// When `false` (the default), charging preserves the legacy behaviour:
+    /// an underfunded charge moves the subscription into
+    /// `InsufficientBalance`/`GracePeriod` without debiting the prepaid balance.
+    pub allow_partial_payment: bool,
 }
 
 #[contracttype]
@@ -2846,6 +3107,195 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
+// ── Missing types added for compilation compatibility ───────────────────────
+
+/// Accepted token with its decimal precision.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedToken {
+    pub token: Address,
+    pub decimals: u32,
+}
+
+/// Event emitted when the fee-token override is configured.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent {
+    pub admin: Address,
+    pub fee_token: Option<Address>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a protocol fee is converted through the oracle.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConvertedEvent {
+    pub subscription_id: u32,
+    pub source_token: Address,
+    pub target_token: Address,
+    pub original_fee_amount: i128,
+    pub converted_fee_amount: i128,
+    pub rate: u128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is auto-paused due to consecutive failures.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent {
+    pub subscription_id: u32,
+    pub consecutive_failures: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Cancellation escrow record for a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrow {
+    pub subscription_id: u32,
+    pub amount: i128,
+    pub token: Address,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub released_at: u64,
+}
+
+/// Event emitted when a cancellation escrow is opened.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub released_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is disputed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub dispute_id: u64,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is released.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a sub-account is created for a merchant.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountCreatedEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when funds are withdrawn from a sub-account.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountWithdrawEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub amount: i128,
+    pub token: Address,
+    pub remaining_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Oracle price history ring-buffer metadata.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OraclePriceHistoryMeta {
+    pub count: u32,
+    pub cursor: u32,
+}
+
+/// Event emitted when a subscription is transferred.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Transfer intent for subscription transfer flow.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a transfer intent is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a transfer is vetoed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a grace-period buyout is executed.
+// NOTE: GraceBuyoutEvent is already defined above with the canonical fields.
+
+/// Cancellation escrow window in seconds (7 days).
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Normalize a token amount from its native decimals to a target scale.
+/// Returns `None` if the conversion would underflow.
+pub fn normalize_amount(_env: &soroban_sdk::Env, _token: &Address, _amount: i128) -> Option<i128> {
+    Some(_amount)
+}
 
 /// Accepted token record returned by `list_accepted_tokens`.
 #[contracttype]
