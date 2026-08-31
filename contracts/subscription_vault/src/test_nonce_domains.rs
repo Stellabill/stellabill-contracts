@@ -2,9 +2,9 @@
 //!
 //! This module verifies that monotonic nonce counters used across distinct operational domains
 //! do not collide or cross-consume. Specifically, it tests isolation between:
-//! - `DOMAIN_CHARGE_INTERVAL` (4)
-//! - `DOMAIN_DEPOSIT_FUNDS` (5)
-//! - `DOMAIN_CHARGE_ONEOFF` (6)
+//! - `DOMAIN_BATCH_CHARGE` (0)
+//! - `DOMAIN_ADMIN_ROTATION` (1)
+//! - `DOMAIN_OPERATOR_BATCH_CHARGE` (2)
 //!
 //! # Security Notes
 //! - **Domain Separation**: In Soroban storage, nonces are indexed by `DataKey::AdminNonce(signer, domain)`.
@@ -22,10 +22,8 @@
 
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use crate::nonce::{
-    check_and_advance, compute_next_nonce, get_nonce,
+    compute_next_nonce, consume_nonce, get_nonce,
     DOMAIN_BATCH_CHARGE, DOMAIN_ADMIN_ROTATION, DOMAIN_OPERATOR_BATCH_CHARGE,
-    DOMAIN_METADATA_SIGNED, DOMAIN_CHARGE_INTERVAL, DOMAIN_DEPOSIT_FUNDS,
-    DOMAIN_CHARGE_ONEOFF, DOMAIN_MERCHANT_ROTATION,
 };
 use crate::types::{DataKey, Error};
 
@@ -40,9 +38,9 @@ fn test_nonce_domain_isolation_core() {
     let contract_id = env.register(crate::SubscriptionVault, ());
 
     env.as_contract(&contract_id, || {
-        let domain_a = DOMAIN_CHARGE_INTERVAL;
-        let domain_b = DOMAIN_DEPOSIT_FUNDS;
-        let domain_c = DOMAIN_CHARGE_ONEOFF;
+        let domain_a = DOMAIN_BATCH_CHARGE;
+        let domain_b = DOMAIN_ADMIN_ROTATION;
+        let domain_c = DOMAIN_OPERATOR_BATCH_CHARGE;
         let nonce_n = 0u64;
 
         // Verify initial state across all domains is 0
@@ -51,27 +49,27 @@ fn test_nonce_domain_isolation_core() {
         assert_eq!(get_nonce(&env, &signer, domain_c), nonce_n);
 
         // 1. Consume nonce N under domain A
-        assert_eq!(check_and_advance(&env, &signer, domain_a, nonce_n), Ok(()));
+        assert_eq!(consume_nonce(&env, &signer, domain_a, nonce_n), Ok(()));
         assert_eq!(get_nonce(&env, &signer, domain_a), nonce_n + 1);
         // Ensure domain B and C remain untouched
         assert_eq!(get_nonce(&env, &signer, domain_b), nonce_n);
         assert_eq!(get_nonce(&env, &signer, domain_c), nonce_n);
 
         // 2. Consume nonce N under domain B (must succeed despite N being consumed in domain A)
-        assert_eq!(check_and_advance(&env, &signer, domain_b, nonce_n), Ok(()));
+        assert_eq!(consume_nonce(&env, &signer, domain_b, nonce_n), Ok(()));
         assert_eq!(get_nonce(&env, &signer, domain_b), nonce_n + 1);
         assert_eq!(get_nonce(&env, &signer, domain_c), nonce_n);
 
         // 3. Re-consume N under domain A (must reject as domain A is now at N+1)
         assert_eq!(
-            check_and_advance(&env, &signer, domain_a, nonce_n),
+            consume_nonce(&env, &signer, domain_a, nonce_n),
             Err(Error::NonceAlreadyUsed)
         );
         // Ensure failed re-consumption did not advance the counter
         assert_eq!(get_nonce(&env, &signer, domain_a), nonce_n + 1);
 
         // Verify we can still consume nonce N under domain C without collision
-        assert_eq!(check_and_advance(&env, &signer, domain_c, nonce_n), Ok(()));
+        assert_eq!(consume_nonce(&env, &signer, domain_c, nonce_n), Ok(()));
         assert_eq!(get_nonce(&env, &signer, domain_c), nonce_n + 1);
     });
 }
@@ -87,28 +85,53 @@ fn test_cross_subscription_same_nonce() {
     let contract_id = env.register(crate::SubscriptionVault, ());
 
     env.as_contract(&contract_id, || {
-        let domain = DOMAIN_CHARGE_INTERVAL;
+        let domain = DOMAIN_BATCH_CHARGE;
 
         // Both subscribers start at nonce 0
         assert_eq!(get_nonce(&env, &subscriber1, domain), 0);
         assert_eq!(get_nonce(&env, &subscriber2, domain), 0);
 
         // Subscriber 1 advances nonces 0, 1, 2
-        assert_eq!(check_and_advance(&env, &subscriber1, domain, 0), Ok(()));
-        assert_eq!(check_and_advance(&env, &subscriber1, domain, 1), Ok(()));
-        assert_eq!(check_and_advance(&env, &subscriber1, domain, 2), Ok(()));
+        assert_eq!(consume_nonce(&env, &subscriber1, domain, 0), Ok(()));
+        assert_eq!(consume_nonce(&env, &subscriber1, domain, 1), Ok(()));
+        assert_eq!(consume_nonce(&env, &subscriber1, domain, 2), Ok(()));
         assert_eq!(get_nonce(&env, &subscriber1, domain), 3);
 
         // Subscriber 2 consuming nonce 0 under the same domain MUST succeed
-        assert_eq!(check_and_advance(&env, &subscriber2, domain, 0), Ok(()));
+        assert_eq!(consume_nonce(&env, &subscriber2, domain, 0), Ok(()));
         assert_eq!(get_nonce(&env, &subscriber2, domain), 1);
 
         // Subscriber 2 consuming nonce 1 MUST succeed
-        assert_eq!(check_and_advance(&env, &subscriber2, domain, 1), Ok(()));
+        assert_eq!(consume_nonce(&env, &subscriber2, domain, 1), Ok(()));
         assert_eq!(get_nonce(&env, &subscriber2, domain), 2);
 
         // Verify Subscriber 1's nonce counter was not altered
         assert_eq!(get_nonce(&env, &subscriber1, domain), 3);
+    });
+}
+
+/// Edge case: skip-ahead nonces are rejected and do not advance the stored counter.
+#[test]
+fn test_skip_ahead_nonce_rejected() {
+    let env = Env::default();
+    let signer = Address::generate(&env);
+    let contract_id = env.register(crate::SubscriptionVault, ());
+
+    env.as_contract(&contract_id, || {
+        let domain = DOMAIN_BATCH_CHARGE;
+
+        assert_eq!(consume_nonce(&env, &signer, domain, 0), Ok(()));
+        assert_eq!(get_nonce(&env, &signer, domain), 1);
+
+        // Skip-ahead is a replay-protection violation.
+        assert_eq!(
+            consume_nonce(&env, &signer, domain, 2),
+            Err(Error::NonceAlreadyUsed)
+        );
+
+        // The rejected attempt does not lock the counter; the correct next nonce still succeeds.
+        assert_eq!(consume_nonce(&env, &signer, domain, 1), Ok(()));
+        assert_eq!(get_nonce(&env, &signer, domain), 2);
     });
 }
 
@@ -124,11 +147,6 @@ fn test_nonce_zero_consumption_all_domains() {
         DOMAIN_BATCH_CHARGE,
         DOMAIN_ADMIN_ROTATION,
         DOMAIN_OPERATOR_BATCH_CHARGE,
-        DOMAIN_METADATA_SIGNED,
-        DOMAIN_CHARGE_INTERVAL,
-        DOMAIN_DEPOSIT_FUNDS,
-        DOMAIN_CHARGE_ONEOFF,
-        DOMAIN_MERCHANT_ROTATION,
     ];
 
     env.as_contract(&contract_id, || {
@@ -137,12 +155,12 @@ fn test_nonce_zero_consumption_all_domains() {
             assert_eq!(get_nonce(&env, &signer, domain), 0);
 
             // Consuming nonce 0 must succeed
-            assert_eq!(check_and_advance(&env, &signer, domain, 0), Ok(()));
+            assert_eq!(consume_nonce(&env, &signer, domain, 0), Ok(()));
             assert_eq!(get_nonce(&env, &signer, domain), 1);
 
             // Re-consuming nonce 0 must fail
             assert_eq!(
-                check_and_advance(&env, &signer, domain, 0),
+                consume_nonce(&env, &signer, domain, 0),
                 Err(Error::NonceAlreadyUsed)
             );
         }
@@ -159,7 +177,7 @@ fn test_nonce_max_overflow_domain_isolation() {
     let contract_id = env.register(crate::SubscriptionVault, ());
 
     env.as_contract(&contract_id, || {
-        let domain = DOMAIN_CHARGE_ONEOFF;
+        let domain = DOMAIN_OPERATOR_BATCH_CHARGE;
         let key = DataKey::AdminNonce(signer.clone(), domain);
 
         // Artificially seed storage with u64::MAX
@@ -168,7 +186,7 @@ fn test_nonce_max_overflow_domain_isolation() {
 
         // Attempting to advance u64::MAX must return Error::Overflow
         assert_eq!(
-            check_and_advance(&env, &signer, domain, u64::MAX),
+            consume_nonce(&env, &signer, domain, u64::MAX),
             Err(Error::Overflow)
         );
 
@@ -180,7 +198,7 @@ fn test_nonce_max_overflow_domain_isolation() {
     });
 }
 
-/// Verifies total independence across all 8 domain constants simultaneously.
+/// Verifies total independence across all 3 domain constants simultaneously.
 #[test]
 fn test_all_domains_mutual_independence() {
     let env = Env::default();
@@ -191,18 +209,13 @@ fn test_all_domains_mutual_independence() {
         DOMAIN_BATCH_CHARGE,
         DOMAIN_ADMIN_ROTATION,
         DOMAIN_OPERATOR_BATCH_CHARGE,
-        DOMAIN_METADATA_SIGNED,
-        DOMAIN_CHARGE_INTERVAL,
-        DOMAIN_DEPOSIT_FUNDS,
-        DOMAIN_CHARGE_ONEOFF,
-        DOMAIN_MERCHANT_ROTATION,
     ];
 
     env.as_contract(&contract_id, || {
         // Step 1: Advance each domain by a different number of steps (domain index + 1 times)
         for (idx, &domain) in all_domains.iter().enumerate() {
             for step in 0..=(idx as u64) {
-                assert_eq!(check_and_advance(&env, &signer, domain, step), Ok(()));
+                assert_eq!(consume_nonce(&env, &signer, domain, step), Ok(()));
             }
         }
 
