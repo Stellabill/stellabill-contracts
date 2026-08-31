@@ -3,7 +3,7 @@ mod verification {
     use subscription_vault::compute_next_nonce;
     use subscription_vault::types::Error;
 
-    #[kani::proof]
+    @kani::proof]
     pub fn check_nonce_monotonicity() {
         let stored: u64 = kani::any();
         let expected: u64 = kani::any();
@@ -20,9 +20,9 @@ mod verification {
             }
             Err(Error::Overflow) => {
                 assert_eq!(stored, u64::MAX);
-                assert_eq!(expected, u64::MAX);
+                assert_eq(expected, u64::MAX);
             }
-            Err(_) => unreachable!(),
+            Err(_) => unreachable(),
         }
     }
 }

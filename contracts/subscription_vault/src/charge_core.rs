@@ -37,7 +37,7 @@ use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
 use crate::types::{
-    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, Coupon, DataKey,
     Error, FeeConvertedEvent, GracePeriodEnteredEvent, LifetimeCapReachedEvent,
     SubscriptionAutoPausedEvent, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionStatus, TOPIC_CHARGED, UsageChargeRejectedEvent, UsageChargeResult,
@@ -189,6 +189,61 @@ fn convert_fee(
     }
 }
 
+/// Resolve the coupon bound to a subscription and compute the post-discount
+/// charge amount.
+///
+/// Returns `(post_discount_amount, discount_amount, redemption_update)`.
+/// `redemption_update` is `Some(next_used_count)` when a valid coupon was
+/// applied and the redemption counter must be advanced on a successful charge.
+/// The counter is intentionally not advanced here so failed/insufficient
+/// charges do not consume a redemption.
+fn resolve_coupon_discount(
+    env: &Env,
+    subscription_id: u32,
+    now: u64,
+    token: &Address,
+    gross_amount: i128,
+    coupon_code: &Option<Symbol>,
+) -> Result<(i128, i128, Option<u32>), Error> {
+    if gross_amount <= 0 {
+        return Ok((gross_amount, 0, None));
+    }
+
+    let Some(code) = coupon_code else {
+        return Ok((gross_amount, 0, None));
+    };
+
+    let coupon: Coupon = env
+        .storage()
+        .instance()
+        .get(&DataKey::Coupon(code.clone()))
+        .ok_or(Error::CouponNotFound)?;
+
+    if coupon.token != token.clone() {
+        return Err(Error::CouponTokenMismatch);
+    }
+    if coupon.expires_at <= now {
+        return Err(Error::CouponExpired);
+    }
+
+    let used: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::CouponRedemptions(subscription_id))
+        .unwrap_or(0);
+    if used >= coupon.max_redemptions {
+        return Err(Error::CouponRedemptionLimit);
+    }
+
+    let percent_discount =
+        gross_amount.saturating_mul(coupon.percent_off_bps as i128) / 10_000i128;
+    let raw_discount = coupon.fixed_off.saturating_add(percent_discount);
+    let discount = raw_discount.min(gross_amount).max(0);
+    let net_amount = gross_amount - discount;
+
+    Ok((net_amount, discount, Some(used.saturating_add(1))))
+}
+
 /// Performs a single interval-based charge with optional replay protection.
 pub fn charge_one(
     env: &Env,
@@ -255,7 +310,9 @@ pub fn charge_one(
 
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
-        if sub.status != SubscriptionStatus::Expired {
+        if sub.status != SubscriptionStatus::Expired
+            && sub.status != SubscriptionStatus::Cancelled
+        {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
             env.events().publish(
@@ -289,7 +346,9 @@ pub fn charge_one(
         now,
         &sub.token,
         charge_amount,
-    );
+        &sub.coupon_code,
+    )
+    .map_err(|e| charge_fail(env, subscription_id, e, charge_amount, now))?;
 
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
@@ -322,13 +381,13 @@ pub fn charge_one(
                 let token_addr = sub.token.clone();
                 write_subscription(env, subscription_id, &sub);
                 if refund_amount > 0 {
+                    crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
                     let token_client = soroban_sdk::token::Client::new(env, &token_addr);
                     token_client.transfer(
                         &env.current_contract_address(),
                         &sub.subscriber,
                         &refund_amount,
                     );
-                    crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
                 }
                 env.events().publish(
                     (
@@ -598,6 +657,13 @@ pub fn charge_one(
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
 
+            // Consume one coupon redemption only after the charge has succeeded.
+            if let Some(next_used) = coupon_redemption {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::CouponRedemptions(subscription_id), &next_used);
+            }
+
             // Recover from grace period or insufficient balance on successful charge.
             // Clear the grace clock so the next charge window uses fresh timestamps.
             if sub.status == SubscriptionStatus::GracePeriod
@@ -691,8 +757,8 @@ pub fn charge_one(
                 BillingPeriodSnapshot {
                     subscription_id,
                     period_index,
-                    period_start: next_allowed.saturating_sub(sub.interval_seconds),
-                    period_end: now,
+                    period_start,
+                    period_end,
                     total_charged: charge_amount,
                     total_usage_units: 0,
                     status_flags: SNAPSHOT_FLAG_CLOSED | SNAPSHOT_FLAG_INTERVAL_CHARGED,
@@ -772,13 +838,15 @@ pub fn charge_one(
                     // fresh entry so the clock is always initialised.
                     sub.grace_start_timestamp = Some(now);
                 }
-            } else if grace_duration > 0 {
-                // First underfunded charge — enter GracePeriod and start the clock
+            } else if grace_duration > 0 && previous_status == SubscriptionStatus::Active {
+                // First underfunded charge from Active — enter GracePeriod and start the clock
                 transition_to(&mut sub.status, SubscriptionStatus::GracePeriod)?;
                 sub.grace_start_timestamp = Some(now);
             } else {
-                // No grace period configured — go straight to InsufficientBalance
-                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                // No grace period configured, or already InsufficientBalance — ensure InsufficientBalance
+                if sub.status != SubscriptionStatus::InsufficientBalance {
+                    transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
+                }
                 sub.grace_start_timestamp = None;
             }
 
@@ -924,7 +992,9 @@ pub fn charge_usage_one(
 
     // Expiration guard
     if sub.is_expired(now, env.ledger().sequence()) {
-        if sub.status != SubscriptionStatus::Expired {
+        if sub.status != SubscriptionStatus::Expired
+            && sub.status != SubscriptionStatus::Cancelled
+        {
             transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             write_subscription(env, subscription_id, &sub);
             env.events().publish(

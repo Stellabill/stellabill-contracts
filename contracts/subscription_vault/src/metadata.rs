@@ -89,6 +89,12 @@ pub fn do_set_metadata_signed(
     // resolve.
     let sub = get_subscription(env, payload.subscription_id)?;
 
+    // Setting metadata on a Cancelled subscription is blocked even via the
+    // signed path, consistent with the on-chain set_metadata behaviour.
+    if sub.status == crate::types::SubscriptionStatus::Cancelled {
+        return Err(Error::NotActive);
+    }
+
     // Validate key/value lengths before building the message — avoids
     // panicking in build_metadata_signed_message if the payload is
     // over-length, and returns a clean error instead.
@@ -256,7 +262,9 @@ fn apply_metadata_value(
     key: &String,
     value: &String,
 ) -> Result<(), Error> {
-    if key.len() > MAX_METADATA_KEY_LENGTH {
+    // Reject both empty keys (0 bytes) and keys that exceed the maximum.
+    // The length is measured in bytes, consistent with Soroban String semantics.
+    if key.len() == 0 || key.len() > MAX_METADATA_KEY_LENGTH {
         return Err(Error::MetadataKeyTooLong);
     }
 
@@ -303,6 +311,13 @@ pub fn set_metadata(
         return Err(Error::Forbidden);
     }
 
+    // Setting metadata on a Cancelled subscription is not meaningful — the
+    // subscription is in a terminal state. Delete is still permitted to allow
+    // callers to clean up storage.
+    if sub.status == crate::types::SubscriptionStatus::Cancelled {
+        return Err(Error::NotActive);
+    }
+
     apply_metadata_value(env, subscription_id, &key, &value)?;
 
     env.events().publish(
@@ -346,27 +361,32 @@ pub fn delete_metadata(
         .get(&DataKey::MetadataKeys(subscription_id))
         .unwrap_or(Vec::new(env));
 
-    if let Some(idx) = keys.iter().position(|k| k == key) {
-        let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
-        keys.remove(idx_u32);
-        env.storage()
-            .persistent()
-            .set(&DataKey::MetadataKeys(subscription_id), &keys);
+    // Return NotFound if the key is not in the key list rather than silently
+    // succeeding. This matches the documented API contract and allows callers
+    // to distinguish "already deleted" from "successfully deleted".
+    let idx = keys
+        .iter()
+        .position(|k| k == key)
+        .ok_or(Error::NotFound)?;
+    let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
+    keys.remove(idx_u32);
+    env.storage()
+        .persistent()
+        .set(&DataKey::MetadataKeys(subscription_id), &keys);
 
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Metadata(subscription_id, key.clone()));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Metadata(subscription_id, key.clone()));
 
-        env.events().publish(
-            (Symbol::new(env, "metadata_deleted"), subscription_id),
-            MetadataDeletedEvent {
-                subscription_id,
-                key,
-                authorizer: caller.clone(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
-            },
-        );
-    }
+    env.events().publish(
+        (Symbol::new(env, "metadata_deleted"), subscription_id),
+        MetadataDeletedEvent {
+            subscription_id,
+            key,
+            authorizer: caller.clone(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
 
     Ok(())
 }
