@@ -1735,7 +1735,7 @@ pub fn register_sub_account(
     merchant.require_auth();
 
     // Reject empty labels
-    let label_str = Symbol::to_string(&label);
+    let label_str = label.to_string();
     if label_str.len() == 0 {
         return Err(Error::InvalidInput);
     }

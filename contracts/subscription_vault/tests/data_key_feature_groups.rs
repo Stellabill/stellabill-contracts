@@ -36,7 +36,7 @@
 
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, String as SorobanString};
-use subscription_vault::types::{is_known_instance_discriminant, DataKey};
+use subscription_vault::{is_known_instance_discriminant, DataKey};
 
 /// Subscription-domain storage keys: per-subscription lifecycle, metering,
 /// metadata, and per-subscriber caps.

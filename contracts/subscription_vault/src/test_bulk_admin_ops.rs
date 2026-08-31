@@ -23,6 +23,7 @@ fn funded_sub(te: &TestEnv, subscriber: &Address, merchant: &Address) -> u32 {
     let sub_id = te.client.create_subscription(
         subscriber, merchant, &AMOUNT, &INTERVAL, &false, &None, &None,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
     te.client
@@ -256,6 +257,7 @@ fn bulk_pause_reports_expired_as_failure() {
         &None,
         &Some(now + 1_000),
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client

@@ -282,11 +282,11 @@ pub enum DataKey {
     OraclePriceHistoryMeta(Address),
     /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
     OraclePriceHistoryEntry(Address, u32),
-    /// Per-merchant sub-account balance keyed by (merchant, label). Discriminant 81.
+    /// Merchant sub-account balance keyed by (merchant, label). Discriminant 81.
     MerchantSubAccount(Address, Symbol),
-    /// Per-merchant sub-account list. Discriminant 82.
+    /// List of sub-account labels for a merchant. Discriminant 82.
     MerchantSubAccountList(Address),
-    /// Emergency withdraw intent for a subscription. Discriminant 83.
+    /// Emergency withdraw intent keyed by subscription ID. Discriminant 83.
     EmergencyWithdrawIntent(u32),
 }
 
@@ -682,7 +682,7 @@ mod status_transition_tests {
 
 /// Stores subscription details and current state.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub subscriber: Address,
     pub merchant: Address,
@@ -1281,14 +1281,14 @@ pub enum Error {
     EscrowNotReleased = 15002,
 
     // --- Emergency Withdraw (16000-16099) ---
-    /// Emergency withdraw intent not found.
-    EmergencyWithdrawNotRequested = 16001,
     /// Emergency withdraw cooldown is still active.
-    EmergencyWithdrawCooldownActive = 16002,
-    /// Emergency withdraw state has changed unexpectedly.
-    EmergencyWithdrawStateChanged = 16003,
-    /// Emergency withdraw request is in an invalid state.
-    EmergencyWithdrawInvalidState = 16004,
+    EmergencyWithdrawCooldownActive = 16001,
+    /// Emergency withdraw state is invalid for the requested operation.
+    EmergencyWithdrawInvalidState = 16002,
+    /// No emergency withdraw has been requested for this subscription.
+    EmergencyWithdrawNotRequested = 16003,
+    /// Subscription state changed since the emergency withdraw was requested.
+    EmergencyWithdrawStateChanged = 16004,
 
     // --- Referral (17000-17099) ---
     /// Self-referral is not allowed.
@@ -1300,6 +1300,54 @@ impl Error {
     pub const fn to_code(self) -> u32 {
         self as u32
     }
+}
+
+/// Normalize a raw token amount to 9-decimal internal representation.
+///
+/// Reads the token's decimals from `DataKey::TokenDecimals` and scales the
+/// amount up by `10^(9 - decimals)`. Returns an error if the token is not
+/// registered, has zero decimals, more than 9 decimals, or if the scaling
+/// would overflow.
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals > 9 {
+        return Err(Error::InvalidInput);
+    }
+    let factor: i128 = 10i128.pow(9 - decimals);
+    raw.checked_mul(factor).ok_or(Error::Overflow)
+}
+
+/// Denormalize a 9-decimal internal amount back to the token's native decimals.
+///
+/// The inverse of [`normalize_amount`]. Returns an error if the division
+/// would lose precision (i.e. the result cannot be exactly re-scaled back
+/// to the original value).
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals > 9 {
+        return Err(Error::InvalidInput);
+    }
+    let factor: i128 = 10i128.pow(9 - decimals);
+    let result = normalized.checked_div(factor).ok_or(Error::Overflow)?;
+    // Verify no precision was lost
+    if result.checked_mul(factor).ok_or(Error::Overflow)? != normalized {
+        return Err(Error::InvalidInput);
+    }
+    Ok(result)
 }
 
 #[contracttype]
@@ -3249,13 +3297,205 @@ pub fn normalize_amount(_env: &soroban_sdk::Env, _token: &Address, _amount: i128
     Some(_amount)
 }
 
+/// Accepted token record returned by `list_accepted_tokens`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AcceptedToken {
+    pub token: Address,
+    pub decimals: u32,
+}
+
+/// Event emitted when the fee-token override is configured.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent {
+    pub admin: Address,
+    pub fee_token: Option<Address>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a protocol fee is converted to the fee-token.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeConvertedEvent {
+    pub subscription_id: u32,
+    pub source_token: Address,
+    pub target_token: Address,
+    pub original_fee_amount: i128,
+    pub converted_fee_amount: i128,
+    pub rate: u128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is auto-paused after consecutive charge failures.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionAutoPausedEvent {
+    pub subscription_id: u32,
+    pub consecutive_failures: u32,
+    pub threshold: u32,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Cancellation escrow record held for a cancelled subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrow {
+    pub subscription_id: u32,
+    pub amount: i128,
+    pub token: Address,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub released_at: u64,
+}
+
+impl PartialEq for CancellationEscrow {
+    fn eq(&self, other: &Self) -> bool {
+        self.subscription_id == other.subscription_id
+            && self.amount == other.amount
+            && self.token == other.token
+            && self.subscriber == other.subscriber
+            && self.merchant == other.merchant
+            && self.released_at == other.released_at
+    }
+}
+
+/// Event emitted when a cancellation escrow is opened.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub released_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is disputed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub dispute_id: u64,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is released.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Per-token oracle price history ring-buffer metadata.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OraclePriceHistoryMeta {
+    pub count: u32,
+    pub cursor: u32,
+}
+
+/// Event emitted when a subscription is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionPausedEvent {
+    pub subscription_id: u32,
+    pub authorizer: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Transfer intent for subscription ownership transfer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a transfer intent is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferIntentCreatedEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a subscription is transferred.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionTransferredEvent {
+    pub subscription_id: u32,
+    pub from: Address,
+    pub to: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a transfer is vetoed by the merchant.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferVetoedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a sub-account is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountCreatedEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when funds are withdrawn from a sub-account.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubAccountWithdrawEvent {
+    pub merchant: Address,
+    pub label: Symbol,
+    pub token: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Window in seconds for cancellation escrow disputes.
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+
 #[cfg(test)]
 mod event_topic_tests {
     use super::{
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
-    use soroban_sdk::{Env, FromVal, Symbol, ToXdr};
+    use soroban_sdk::{Env, FromVal, Symbol};
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::testutils::Events;
 
     /// The emitted wire representation is part of the indexer-facing contract.
     /// Publish every cached short topic in one transaction and compare each
@@ -3286,12 +3526,12 @@ mod event_topic_tests {
 
             assert_eq!(
                 emitted_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
+                legacy_topic.clone().to_xdr(&env),
                 "event topic {name} changed its wire representation"
             );
             assert_eq!(
                 expected_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
+                legacy_topic.clone().to_xdr(&env),
                 "cached topic {name} differs from Symbol::new"
             );
         }
@@ -3305,9 +3545,9 @@ mod event_topic_tests {
         let long_topic = Symbol::new(&env, "subscription_created");
 
         assert_eq!(
-            long_topic.to_xdr(&env),
+            long_topic.clone().to_xdr(&env),
             Symbol::new(&env, "subscription_created").to_xdr(&env)
         );
-        assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
+        assert_ne!(long_topic.clone().to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
 }

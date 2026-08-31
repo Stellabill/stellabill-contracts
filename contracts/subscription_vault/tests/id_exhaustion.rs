@@ -88,6 +88,7 @@ fn create_subscription_last_id_succeeds() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     assert_eq!(id, u32::MAX - 1, "last valid id must be u32::MAX - 1");
@@ -142,6 +143,7 @@ fn create_subscription_counter_unchanged_after_failure() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     assert_eq!(
@@ -172,6 +174,7 @@ fn create_subscription_with_token_last_id_succeeds() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     assert_eq!(id, u32::MAX - 1);
@@ -197,6 +200,8 @@ fn create_subscription_with_token_at_max_returns_limit_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         )
         .expect_err("must fail when counter is at u32::MAX");
 
@@ -222,6 +227,7 @@ fn create_subscription_with_token_counter_unchanged_after_failure() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
@@ -240,7 +246,7 @@ fn create_subscription_from_plan_last_id_succeeds() {
     seed_next_id(&env, &client.address, u32::MAX - 1);
 
     let subscriber = Address::generate(&env);
-    let id = client.create_subscription_from_plan(&subscriber, &plan_id);
+    let id = client.create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>);
 
     assert_eq!(id, u32::MAX - 1);
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
@@ -263,7 +269,7 @@ fn create_subscription_from_plan_at_max_returns_overflow() {
 
     let subscriber = Address::generate(&env);
     let err = client
-        .try_create_subscription_from_plan(&subscriber, &plan_id)
+        .try_create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>)
         .expect_err("must fail when counter is at u32::MAX");
 
     assert_eq!(err, Ok(Error::Overflow));
@@ -280,7 +286,7 @@ fn create_subscription_from_plan_counter_unchanged_after_failure() {
     seed_next_id(&env, &client.address, u32::MAX);
 
     let subscriber = Address::generate(&env);
-    let _ = client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    let _ = client.try_create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>);
 
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
 }

@@ -48,6 +48,7 @@ fn create_sub(
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     (id, subscriber, merchant)
 }
@@ -220,6 +221,7 @@ fn test_deposit_credit_limit_aggregate_two_subs() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
 
     // Set credit limit: 15_000_000

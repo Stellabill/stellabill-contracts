@@ -160,7 +160,8 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent,
+    ProtocolFeeConfiguredEvent, CANCELLATION_ESCROW_WINDOW_SECS,
+    is_known_instance_discriminant, AdminConfigChangedEvent,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -532,11 +533,13 @@ pub mod operator {
         ids: &Vec<u32>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
-        require_operator_auth(env, &operator)?;
-
-        // Nonce check must run before any state mutation to prevent replay.
-        crate::nonce::check_and_advance(env, &operator, crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE, nonce)?;
-
+        let stored_op = require_operator_auth(env, &operator)?;
+        crate::nonce::check_and_advance(
+            env,
+            &stored_op,
+            crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE,
+            nonce,
+        )?;
         Ok(crate::admin::execute_batch_charge(env, ids))
     }
 
@@ -612,8 +615,7 @@ pub use types::{
     ReconciliationSummaryPage, RecoveryEvent, RecoveryReason,
     ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent,
     SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
-    SplitChargeEvent, SplitPayees,
-    SubAccountCreatedEvent, SubAccountWithdrawEvent,
+    SplitChargeEvent, SplitPayees, SubAccountCreatedEvent, SubAccountWithdrawEvent,
     SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
@@ -1066,6 +1068,40 @@ impl SubscriptionVault {
         Ok(())
     }
 
+    // ── Merchant Whitelist ──────────────────────────────────────────────────
+
+    /// Set the merchant whitelist mode. Admin only.
+    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        merchant::set_whitelist_mode(&env, admin, enabled)
+    }
+
+    /// Get the current merchant whitelist mode.
+    pub fn get_whitelist_mode(env: Env) -> bool {
+        merchant::get_whitelist_mode(&env)
+    }
+
+    /// Check if a merchant is approved under whitelist mode.
+    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
+        merchant::is_merchant_approved(&env, &merchant)
+    }
+
+    /// Approve a merchant under whitelist mode. Admin only.
+    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::approve_merchant(&env, admin, merchant)
+    }
+
+    /// Revoke a merchant under whitelist mode. Admin only.
+    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant(&env, admin, merchant)
+    }
+
+    // ── Auto-Pause Threshold ────────────────────────────────────────────────
+
+    /// Set the auto-pause threshold. Admin only.
+    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        admin::do_set_auto_pause_threshold(&env, admin, threshold)
+    }
+
     // ── Migration / Export ────────────────────────────────────────────────────
 
     /// Run the schema migration entry point. Admin only.
@@ -1457,8 +1493,8 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
             expires_at,
-            None, // expires_at_ledger
-            None, // sub_account_label
+            None,
+            None,
         )?;
 
         let split = SplitPayees {
@@ -1894,7 +1930,7 @@ impl SubscriptionVault {
     /// `None`, with `previous_expires_at_ledger` set to the prior bound so
     /// indexers can reconstruct the lifecycle).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_sub_exp_ledger(
+    pub fn set_sub_expiration_ledger(
         env: Env,
         subscription_id: u32,
         authorizer: Address,
@@ -3590,4 +3626,4 @@ mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
 #[cfg(test)]
-mod test_charge_auth;
+mod test_operator;

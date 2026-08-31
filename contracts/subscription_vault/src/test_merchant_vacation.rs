@@ -77,6 +77,7 @@ fn setup_merchant_and_sub(
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     token_admin.mint(&subscriber, &10_000i128);
@@ -311,6 +312,7 @@ fn test_vacation_does_not_affect_other_merchants() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     token_admin.mint(&subscriber2, &10_000i128);
@@ -361,6 +363,7 @@ fn test_vacation_usage_charge_blocked() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     token_admin.mint(&subscriber, &10_000i128);
@@ -457,6 +460,7 @@ fn test_vacation_past_subscription_expiration() {
         &None::<i128>,
         &Some(expires_at),
         &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     token_admin.mint(&subscriber, &10_000i128);

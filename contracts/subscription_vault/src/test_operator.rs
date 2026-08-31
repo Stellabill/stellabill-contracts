@@ -28,9 +28,10 @@ fn make_funded_subscription(te: &TestEnv, subscriber: &Address, merchant: &Addre
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(subscriber, &DEPOSIT);
-    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT);
+    te.client.deposit_funds(&sub_id, subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
     sub_id
 }
 
@@ -396,6 +397,7 @@ fn operator_charge_usage_succeeds() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
@@ -426,6 +428,7 @@ fn operator_charge_usage_wrong_operator_rejected() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
@@ -738,6 +741,7 @@ fn operator_charge_usage_with_reference_succeeds() {
         &None,
         &None::<u64>,
         &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
 );
     te.stellar_token_client().mint(&subscriber, &DEPOSIT);
     te.client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None::<soroban_sdk::BytesN<32>>);
