@@ -105,8 +105,18 @@ fn setup_env<'a>() -> (
     vault.init(&token.address, &7, &admin, &100, &(3 * 86_400));
 
     let mut merchants = Vec::with_capacity(3);
+    let redirect_url = soroban_sdk::String::from_str(&env, "https://example.com");
     for _ in 0..3 {
-        merchants.push(Address::generate(&env));
+        let merchant = Address::generate(&env);
+        vault.initialize_merchant_config(
+            &merchant,
+            &merchant,
+            &0,
+            &0x1F,
+            &None,
+            &redirect_url,
+        );
+        merchants.push(merchant);
     }
 
     let mut subscribers = Vec::with_capacity(5);
