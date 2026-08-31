@@ -16,8 +16,8 @@ cross-contract transfers.
 
 ### Overview
 
-The contract stores a `DataKey::SchemaVersion` key in instance storage. Its value
-must always equal the binary's `STORAGE_VERSION` constant (currently `2`).
+The contract stores a `DataKey::SchemaVersion` key in persistent storage. Its value
+must always equal the binary's `STORAGE_VERSION` constant (currently `5`).
 
 - `init` writes `SchemaVersion = STORAGE_VERSION` on first call.
 - The `migrate(admin)` entrypoint compares the on-chain stored version against the
@@ -29,7 +29,7 @@ Implemented in `contracts/subscription_vault/src/lib.rs` (delegates to `admin::d
 
 | Stored version | Binary version | Result |
 |:---:|:---:|:---|
-| `stored > binary` | — | `Err(SchemaMigrationDowngrade)` — downgrade rejected |
+| `stored > binary` | — | `Err(SchemaVersionMismatch)` — downgrade rejected |
 | `stored == binary` | — | `Ok(())` — idempotent no-op, no event emitted |
 | `stored < binary` | — | Runs upgrade ladder, writes new version, emits `SchemaMigratedEvent` |
 
@@ -58,11 +58,11 @@ Each arm must be self-contained and must not assume any prior arm ran in the sam
 ### Security properties
 
 - **Downgrade guard:** if the on-chain version is newer than the binary, the call is
-  rejected immediately with `SchemaMigrationDowngrade`, preventing accidental rollback
+  rejected immediately with `SchemaVersionMismatch`, preventing accidental rollback
   corruption.
 - **Idempotent:** calling `migrate` when already at the current version is a safe no-op.
 - **Admin-only:** non-admin callers are rejected with `Unauthorized`.
-- **No fund movement:** `migrate` only reads and writes the `SchemaVersion` instance key.
+- **No fund movement:** `migrate` only reads and writes the `SchemaVersion` persistent key.
   No token transfers, subscription mutations, or balance changes occur.
 - **Audit trail:** every successful upgrade emits a `SchemaMigratedEvent` with the
   admin address, version pair, and ledger timestamp.
@@ -112,7 +112,7 @@ All export functions require **admin authentication** and are read-only.
 - No funds can be moved via these hooks.
 - The contract does **not** include a generic import hook; imports are intentionally
   excluded to prevent misuse and to keep the surface area minimal.
-- Storage versioning is exposed as a constant (`STORAGE_VERSION = 2`) to support
+- Storage versioning is exposed as a constant (`STORAGE_VERSION = 5`) to support
   migration tooling decisions.
 
 ## Caveats
@@ -128,16 +128,20 @@ The following tests in `contracts/subscription_vault/src/test.rs` cover the
 
 | Test | What it verifies |
 |---|---|
-| `test_init_writes_schema_version` | `init` writes `SchemaVersion = 2` |
+| `test_init_writes_schema_version` | `init` writes `SchemaVersion = STORAGE_VERSION` |
 | `test_migrate_same_version_is_noop_success` | Same-version call returns `Ok`, no event |
-| `test_migrate_downgrade_is_rejected` | Stored > binary → `SchemaMigrationDowngrade` |
+| `test_migrate_downgrade_is_rejected` | Stored > binary → `SchemaVersionMismatch` |
 | `test_migrate_non_admin_is_rejected` | Non-admin → `Unauthorized` |
-| `test_migrate_forward_upgrade_writes_version_and_emits_event` | v0 → v2: version written, event emitted |
-| `test_migrate_forward_from_version_1_to_2` | v1 → v2: succeeds |
+| `test_migrate_forward_upgrade_writes_version_and_emits_event` | v0 → STORAGE_VERSION: version written, event emitted |
+| `test_migrate_forward_from_version_1_to_stored` | v1 → STORAGE_VERSION: succeeds |
 | `test_migrate_is_idempotent_after_forward_upgrade` | Second call after upgrade is no-op |
 | `test_migrate_does_not_affect_subscriptions` | Subscription state unchanged after migration |
 | `test_migrate_event_fields_are_correct` | Event fields match admin, versions, timestamp |
 | `test_migrate_downgrade_does_not_emit_event` | Rejected downgrade emits no event |
+| `test_migrate_schema_same_version_is_noop` | Same-version migrate returns Ok, no event |
+| `test_migrate_schema_rejects_downgrade` | Stored > binary → `SchemaVersionMismatch` |
+| `test_migrate_schema_requires_admin` | Non-admin → `Unauthorized` |
+| `test_migrate_schema_upgrades_legacy_version` | v1 → STORAGE_VERSION: version written, event emitted |
 
 ## Migration golden regression test suite
 
@@ -172,7 +176,7 @@ The golden regression test suite provides automated validation of snapshot stabi
 - No funds can be moved via these hooks.
 - The contract does **not** include a generic import hook; imports are intentionally
   excluded to prevent misuse and to keep the surface area minimal.
-- Storage versioning is exposed as a constant (`STORAGE_VERSION = 2`) to support
+- Storage versioning is exposed as a constant (`STORAGE_VERSION = 5`) to support
   migration tooling decisions.
 
 ## Caveats

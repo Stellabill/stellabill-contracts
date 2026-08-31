@@ -9212,18 +9212,10 @@ mod storage_layout {
     // 9. SchemaVersion key is readable after init
     //    Confirms the schema version is written during init and can be read
     //    back â€” a prerequisite for any future migration guard logic.
-    // -------------------------------------------------------------------------
-    #[test]
+    // -------------------------------------------------------------------------    #[test]
     fn test_schema_version_is_set_after_init() {
         let (env, client, _token, _admin) = setup_test_env();
-
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must be set after init")
-        });
-
+        let version = read_schema_version(&env, &client.address);
         assert_eq!(version, crate::STORAGE_VERSION);
     }
 
@@ -9232,69 +9224,47 @@ mod storage_layout {
         let (env, client, _token, admin) = setup_test_env();
         let before_events = env.events().all().len();
 
-        client.migrate_schema(&admin);
+        client.migrate(&admin);
 
         let after_events = env.events().all().len();
         assert_eq!(before_events, after_events, "same-version migration should not emit an event");
 
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must still be present")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
     }
 
     #[test]
     fn test_migrate_schema_rejects_downgrade() {
         let (env, client, _token, admin) = setup_test_env();
 
-        env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .set(&DataKey::SchemaVersion, &crate::STORAGE_VERSION.saturating_add(1));
-        });
+        write_schema_version(&env, &client.address, crate::STORAGE_VERSION.saturating_add(1));
 
-        let result = client.try_migrate_schema(&admin);
-        assert_eq!(result.unwrap_err(), Error::SchemaVersionTooHigh);
+        let result = client.try_migrate(&admin);
+        assert_eq!(result.unwrap_err(), Error::SchemaVersionMismatch);
     }
 
     #[test]
     fn test_migrate_schema_requires_admin() {
-        let (env, client, _token, admin) = setup_test_env();
+        let (env, client, _token, _admin) = setup_test_env();
         let stranger = Address::generate(&env);
 
-        let result = client.try_migrate_schema(&stranger);
+        let result = client.try_migrate(&stranger);
         assert_eq!(result.unwrap_err(), Error::Unauthorized);
 
         // Ensure the stored version is unchanged.
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must still be present")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
     }
 
     #[test]
     fn test_migrate_schema_upgrades_legacy_version() {
         let (env, client, _token, admin) = setup_test_env();
 
-        env.as_contract(&client.address, || {
-            env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
-        });
+        // Simulate a pre-v3 deployment by writing version 1 to persistent storage
+        // (the authoritative tier that get_schema_version checks first).
+        write_schema_version(&env, &client.address, 1u32);
 
-        client.migrate_schema(&admin);
+        client.migrate(&admin);
 
-        let version: u32 = env.as_contract(&client.address, || {
-            env.storage()
-                .instance()
-                .get(&DataKey::SchemaVersion)
-                .expect("schema_version must be present after migration")
-        });
-        assert_eq!(version, crate::STORAGE_VERSION);
+        assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
         let events = env.events().all();
         assert!(events.iter().any(|event| {
@@ -10789,22 +10759,19 @@ fn test_usage_no_limits_configured_is_passthrough() {
 //   - forward upgrade writes new version and emits SchemaMigratedEvent
 //   - non-admin caller is rejected
 
-/// Helper: read the on-chain SchemaVersion directly from instance storage.
+/// Helper: read the on-chain SchemaVersion (persistent first, then instance).
+/// Uses the same lookup order as `admin::get_schema_version` so tests
+/// observe the same version that `do_migrate` would see.
 fn read_schema_version(env: &Env, contract_id: &Address) -> u32 {
-    env.as_contract(contract_id, || {
-        env.storage()
-            .instance()
-            .get(&DataKey::SchemaVersion)
-            .unwrap_or(0)
-    })
+    env.as_contract(contract_id, || crate::admin::get_schema_version(env))
 }
 
-/// Helper: forcibly overwrite SchemaVersion in storage (for downgrade/upgrade tests).
+/// Helper: forcibly overwrite SchemaVersion in persistent storage
+/// (for downgrade/upgrade tests).  Persistent is the authoritative tier
+/// since `do_init` writes there and `get_schema_version` reads there first.
 fn write_schema_version(env: &Env, contract_id: &Address, version: u32) {
     env.as_contract(contract_id, || {
-        env.storage()
-            .instance()
-            .set(&DataKey::SchemaVersion, &version);
+        env.storage().persistent().set(&DataKey::SchemaVersion, &version);
     });
 }
 
@@ -10823,10 +10790,10 @@ fn has_event_with_symbol(env: &Env, events: &soroban_sdk::Vec<(Address, soroban_
 
 #[test]
 fn test_init_writes_schema_version() {
-    // After init, DataKey::SchemaVersion must equal STORAGE_VERSION (2).
+    // After init, DataKey::SchemaVersion must equal STORAGE_VERSION.
     let (env, client, _token, _admin) = setup_test_env();
     let version = read_schema_version(&env, &client.address);
-    assert_eq!(version, 2, "init must write SchemaVersion = STORAGE_VERSION");
+    assert_eq!(version, crate::STORAGE_VERSION, "init must write SchemaVersion = STORAGE_VERSION");
 }
 
 #[test]
@@ -10834,15 +10801,15 @@ fn test_migrate_same_version_is_noop_success() {
     // Calling migrate when stored == binary must return Ok and emit no event.
     let (env, client, _token, admin) = setup_test_env();
 
-    // Confirm version is already 2.
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    // Confirm version is already STORAGE_VERSION.
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
     // migrate should succeed silently.
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "same-version migrate must be Ok");
 
     // Version must remain unchanged.
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
     // No schema_migrated event should have been emitted (env.events().all()
     // returns only events from the most recent invocation).
@@ -10890,7 +10857,7 @@ fn test_migrate_non_admin_is_rejected() {
 #[test]
 fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
     // Simulate a contract deployed before init wrote SchemaVersion (stored = 0)
-    // being upgraded to binary version 2.
+    // being upgraded to the current binary version.
     let (env, client, _token, admin) = setup_test_env();
 
     // Patch stored version to 0 to simulate a pre-migration deployment.
@@ -10901,10 +10868,10 @@ fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "forward migration must succeed");
 
-    // Version must now equal STORAGE_VERSION (2).
+    // Version must now equal STORAGE_VERSION.
     assert_eq!(
         read_schema_version(&env, &client.address),
-        2,
+        crate::STORAGE_VERSION,
         "stored version must equal STORAGE_VERSION after migration"
     );
 
@@ -10917,7 +10884,7 @@ fn test_migrate_forward_upgrade_writes_version_and_emits_event() {
 }
 
 #[test]
-fn test_migrate_forward_from_version_1_to_2() {
+fn test_migrate_forward_from_version_1_to_stored() {
     // Simulate upgrade from version 1 â†’ 2.
     let (env, client, _token, admin) = setup_test_env();
 
@@ -10925,8 +10892,8 @@ fn test_migrate_forward_from_version_1_to_2() {
     assert_eq!(read_schema_version(&env, &client.address), 1);
 
     let result = client.try_migrate(&admin);
-    assert!(result.is_ok(), "v1 â†’ v2 migration must succeed");
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert!(result.is_ok(), "v1 -> STORAGE_VERSION migration must succeed");
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 }
 
 #[test]
@@ -10937,12 +10904,12 @@ fn test_migrate_is_idempotent_after_forward_upgrade() {
     // First call: forward upgrade from 0 â†’ 2.
     write_schema_version(&env, &client.address, 0);
     client.migrate(&admin);
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 
-    // Second call: already at version 2, must be a no-op.
+    // Second call: already at current version, must be a no-op.
     let result = client.try_migrate(&admin);
     assert!(result.is_ok(), "second migrate call must be a no-op success");
-    assert_eq!(read_schema_version(&env, &client.address), 2);
+    assert_eq!(read_schema_version(&env, &client.address), crate::STORAGE_VERSION);
 }
 
 #[test]
@@ -11000,7 +10967,7 @@ fn test_migrate_event_fields_are_correct() {
             if Symbol::from_val(&env, &first) == Symbol::new(&env, "schema_migrated") {
                 let evt: crate::SchemaMigratedEvent = FromVal::from_val(&env, &data);
                 assert_eq!(evt.from_version, 1, "from_version must be 1");
-                assert_eq!(evt.to_version, 2, "to_version must be STORAGE_VERSION (2)");
+                assert_eq!(evt.to_version, crate::STORAGE_VERSION, "to_version must be STORAGE_VERSION");
                 assert_eq!(evt.admin, admin, "event admin must match caller");
                 assert_eq!(evt.timestamp, ts, "event timestamp must match ledger");
                 found = true;
