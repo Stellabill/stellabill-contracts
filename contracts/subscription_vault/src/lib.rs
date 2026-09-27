@@ -43,106 +43,7 @@ mod idempotency;
 mod invariants;
 mod merchant;
 mod metadata;
-mod nonce {
-    use crate::types::{DataKey, Error, EVENT_SCHEMA_VERSION};
-    use soroban_sdk::{Address, Env, Symbol};
-
-    pub(crate) const DOMAIN_BATCH_CHARGE: u32 = 0;
-    pub(crate) const DOMAIN_ADMIN_ROTATION: u32 = 1;
-    pub(crate) const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
-    pub(crate) const DOMAIN_MERCHANT_ROTATION: u32 = 3;
-    pub(crate) const DOMAIN_METADATA_SIGNED: u32 = 4;
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct NonceConsumedEvent {
-        pub signer: Address,
-        pub domain: u32,
-        pub nonce: u64,
-        pub timestamp: u64,
-        pub schema_version: u32,
-    }
-
-    pub(crate) fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::AdminNonce(signer.clone(), domain))
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn consume_nonce(
-        env: &Env,
-        signer: &Address,
-        domain: u32,
-        expected: u64,
-    ) -> Result<(), Error> {
-        let key = DataKey::AdminNonce(signer.clone(), domain);
-        let stored: u64 = env.storage().persistent().get(&key).unwrap_or(0);
-        if expected != stored {
-            return Err(Error::NonceAlreadyUsed);
-        }
-        let next = stored.checked_add(1).ok_or(Error::Overflow)?;
-        env.storage().persistent().set(&key, &next);
-        env.events().publish(
-            (Symbol::new(env, "nonce_consumed"), signer.clone(), domain),
-            NonceConsumedEvent {
-                signer: signer.clone(),
-                domain,
-                nonce: expected,
-                timestamp: env.ledger().timestamp(),
-                schema_version: EVENT_SCHEMA_VERSION,
-            },
-        );
-        Ok(())
-    }
-
-    pub(crate) fn check_and_advance(
-        env: &Env,
-        signer: &Address,
-        domain: u32,
-        expected: u64,
-    ) -> Result<(), Error> {
-        consume_nonce(env, signer, domain, expected)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use soroban_sdk::testutils::Address as _;
-
-        #[test]
-        fn nonce_advances_and_rejects_reuse_skip_and_overflow() {
-            let env = Env::default();
-            let signer = Address::generate(&env);
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 0);
-            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 1);
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0),
-                Err(crate::types::Error::NonceAlreadyUsed)
-            );
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 2),
-                Err(crate::types::Error::NonceAlreadyUsed)
-            );
-            let key = crate::types::DataKey::AdminNonce(signer.clone(), DOMAIN_BATCH_CHARGE);
-            env.storage().persistent().set(&key, &u64::MAX);
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, u64::MAX),
-                Err(crate::types::Error::Overflow)
-            );
-        }
-
-        #[test]
-        fn domains_and_signers_are_independent() {
-            let env = Env::default();
-            let signer = Address::generate(&env);
-            let other = Address::generate(&env);
-            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
-            assert_eq!(get_nonce(&env, &other, DOMAIN_BATCH_CHARGE), 0);
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_ADMIN_ROTATION), 0);
-        }
-    }
-}
+pub mod nonce;
 pub mod queries;
 mod safe_math;
 pub mod subscription;
@@ -153,7 +54,7 @@ mod validation;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
-pub use nonce::NonceConsumedEvent;
+pub use types::NonceConsumedEvent;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
     CancellationEscrowReleasedEvent,
@@ -594,7 +495,7 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    is_known_instance_discriminant,    AcceptedToken, AccruedTotals, AdminConfigChangedEvent, AdminProposal,
+    AcceptedToken, AccruedTotals, AdminProposal,
     AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
     ArrearsAccruedEvent, ArrearsSettledEvent,
@@ -1070,39 +971,6 @@ impl SubscriptionVault {
         Ok(())
     }
 
-    // ── Merchant Whitelist ──────────────────────────────────────────────────
-
-    /// Set the merchant whitelist mode. Admin only.
-    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
-        merchant::set_whitelist_mode(&env, admin, enabled)
-    }
-
-    /// Get the current merchant whitelist mode.
-    pub fn get_whitelist_mode(env: Env) -> bool {
-        merchant::get_whitelist_mode(&env)
-    }
-
-    /// Check if a merchant is approved under whitelist mode.
-    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
-        merchant::is_merchant_approved(&env, &merchant)
-    }
-
-    /// Approve a merchant under whitelist mode. Admin only.
-    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::approve_merchant(&env, admin, merchant)
-    }
-
-    /// Revoke a merchant under whitelist mode. Admin only.
-    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::revoke_merchant(&env, admin, merchant)
-    }
-
-    // ── Auto-Pause Threshold ────────────────────────────────────────────────
-
-    /// Set the auto-pause threshold. Admin only.
-    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
-        admin::do_set_auto_pause_threshold(&env, admin, threshold)
-    }
 
     // ── Migration / Export ────────────────────────────────────────────────────
 
@@ -2314,36 +2182,7 @@ impl SubscriptionVault {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
-        let new_sub = queries::get_subscription(&env, subscription_id)?;
-
-        let _period_start = old_sub.last_payment_timestamp;
-        let _period_end = timestamp;
-
-        env.events().publish(
-            (types::TOPIC_CHARGED,),
-            SubscriptionChargedEvent {
-                subscription_id,
-                subscriber: old_sub.subscriber,
-                merchant: old_sub.merchant,
-                token: old_sub.token,
-                amount: old_sub.amount,
-                lifetime_charged: new_sub.lifetime_charged,
-                timestamp,
-                period_start: old_sub.last_payment_timestamp,
-                period_end: timestamp,
-                salt: {
-                    let mut salt_buf = [0u8; 20];
-                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
-                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
-                    salt_buf[12..20].copy_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
-                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
-                    env.crypto().sha256(&salt_input).into()
-                },
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
-            },
-        );
-        Ok(result)
+        charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)
     }
 
     /// Charge metered usage. Admin only.
@@ -3545,51 +3384,6 @@ impl SubscriptionVault {
             .unwrap_or(0u32)
     }
 
-    // ── Coupons ──────────────────────────────────────────────────────────────
-
-    /// Create or update a discount coupon. Admin only.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_coupon(
-        env: Env,
-        admin: Address,
-        code: Symbol,
-        percent_off_bps: u32,
-        fixed_off: i128,
-        max_redemptions: u32,
-        expires_at: u64,
-        token: Address,
-    ) -> Result<(), Error> {
-        admin::require_admin_auth(&env, &admin)?;
-        coupon::do_create_coupon(
-            &env,
-            admin,
-            code,
-            percent_off_bps,
-            fixed_off,
-            max_redemptions,
-            expires_at,
-            token,
-        )
-    }
-
-    /// Revoke a coupon so it can no longer be redeemed. Admin only.
-    pub fn revoke_coupon(env: Env, admin: Address, code: Symbol) -> Result<(), Error> {
-        admin::require_admin_auth(&env, &admin)?;
-        coupon::do_revoke_coupon(&env, admin, code)
-    }
-
-    /// Bind a coupon to a subscription. Subscriber only.
-    pub fn apply_coupon(
-        env: Env,
-        subscription_id: u32,
-        subscriber: Address,
-        code: Symbol,
-    ) -> Result<(), Error> {
-        require_not_emergency_stop(&env)?;
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "apply_coupon")?;
-        subscriber.require_auth();
-        coupon::do_apply_coupon(&env, subscription_id, subscriber, code)
-    }
 
     /// Internal ID allocator.
     fn _next_id(env: &Env) -> Result<u32, Error> {
@@ -3690,3 +3484,6 @@ mod test_protocol_fee_routing;
 mod test_treasury_split;
 #[cfg(test)]
 mod test_operator;
+#[cfg(test)]
+mod test_enable_emergency_stop;
+
