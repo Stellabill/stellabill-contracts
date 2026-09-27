@@ -3520,3 +3520,6 @@ mod test_operator;
 
 #[cfg(test)]
 mod test_blocklist_is_blocklisted;
+
+#[cfg(test)]
+mod test_set_protocol_fee;
