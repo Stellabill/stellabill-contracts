@@ -166,7 +166,11 @@ fn adjacent_duplicate_beneficiary_is_rejected_even_when_the_total_is_valid() {
     let beneficiary = Address::generate(&env);
 
     assert_eq!(
-        validate_treasury_split(&shared_beneficiary_split(&env, &beneficiary, &[5_000, 5_000])),
+        validate_treasury_split(&shared_beneficiary_split(
+            &env,
+            &beneficiary,
+            &[5_000, 5_000]
+        )),
         Err(Error::InvalidFeeBips)
     );
 }
