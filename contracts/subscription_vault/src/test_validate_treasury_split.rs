@@ -311,10 +311,15 @@ fn repeated_calls_are_deterministic() {
 #[test]
 fn validation_never_writes_contract_storage() {
     let env = Env::default();
-    let key = DataKey::TreasurySplit;
+    // Keys the split configuration lives under: validation must not create or
+    // touch them, because a rejected split has to leave the live routing table
+    // exactly as it was.
+    let keys = [DataKey::Treasury, DataKey::PendingTreasuryChange];
 
-    assert!(!env.storage().persistent().has(&key));
-    assert!(!env.storage().instance().has(&key));
+    for key in keys.iter() {
+        assert!(!env.storage().persistent().has(key));
+        assert!(!env.storage().instance().has(key));
+    }
 
     assert!(validate_treasury_split(&split(&env, &[TOTAL_BPS])).is_ok());
     assert_eq!(
@@ -322,8 +327,10 @@ fn validation_never_writes_contract_storage() {
         Err(Error::InvalidFeeBips)
     );
 
-    assert!(!env.storage().persistent().has(&key));
-    assert!(!env.storage().instance().has(&key));
+    for key in keys.iter() {
+        assert!(!env.storage().persistent().has(key));
+        assert!(!env.storage().instance().has(key));
+    }
 }
 
 #[test]
