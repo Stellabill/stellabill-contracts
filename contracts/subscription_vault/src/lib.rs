@@ -2314,7 +2314,6 @@ impl SubscriptionVault {
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let timestamp = env.ledger().timestamp();
-        let old_sub = queries::get_subscription(&env, subscription_id)?;
         let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
 
