@@ -3689,4 +3689,8 @@ mod test_protocol_fee_routing;
 #[cfg(test)]
 mod test_treasury_split;
 #[cfg(test)]
+mod test_admin_privileged_auth;
+#[cfg(test)]
+mod test_admin_operator_scope;
+#[cfg(test)]
 mod test_operator;
