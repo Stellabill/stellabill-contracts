@@ -358,6 +358,15 @@ pub fn do_claim_cancellation_escrow(
 ) -> Result<i128, Error> {
     subscriber.require_auth();
 
+    // Reject if a dispute is already active for this subscription.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
     let escrow: CancellationEscrow = env
         .storage()
         .persistent()
@@ -369,17 +378,8 @@ pub fn do_claim_cancellation_escrow(
     }
 
     let now = env.ledger().timestamp();
-    if now < escrow.released_at {
+    if now <= escrow.released_at {
         return Err(Error::EscrowNotReleased);
-    }
-
-    // Reject if a dispute is already active for this subscription.
-    if env
-        .storage()
-        .instance()
-        .has(&DataKey::SubscriptionDispute(subscription_id))
-    {
-        return Err(Error::DisputeAlreadyOpen);
     }
 
     // Effects: remove escrow before external transfer (CEI).
@@ -437,6 +437,15 @@ pub fn do_lodge_escrow_dispute(
 ) -> Result<u64, Error> {
     merchant.require_auth();
 
+    // Reject if a dispute is already active for this subscription.
+    if env
+        .storage()
+        .instance()
+        .has(&DataKey::SubscriptionDispute(subscription_id))
+    {
+        return Err(Error::DisputeAlreadyOpen);
+    }
+
     let escrow: CancellationEscrow = env
         .storage()
         .persistent()
@@ -450,15 +459,6 @@ pub fn do_lodge_escrow_dispute(
     let now = env.ledger().timestamp();
     if now >= escrow.released_at {
         return Err(Error::EscrowNotReleased);
-    }
-
-    // Reject if a dispute is already active for this subscription.
-    if env
-        .storage()
-        .instance()
-        .has(&DataKey::SubscriptionDispute(subscription_id))
-    {
-        return Err(Error::DisputeAlreadyOpen);
     }
 
     // Effects: remove cancellation escrow, create dispute.
@@ -550,7 +550,7 @@ fn read_dispute(env: &Env, dispute_id: u64) -> Result<Dispute, Error> {
 
 fn next_dispute_id(env: &Env) -> u64 {
     let key = DataKey::NextDisputeId;
-    let current: u64 = env.storage().instance().get(&key).unwrap_or(0);
+    let current: u64 = env.storage().instance().get(&key).unwrap_or(1);
     let next = current.wrapping_add(1);
     env.storage().instance().set(&key, &next);
     current
