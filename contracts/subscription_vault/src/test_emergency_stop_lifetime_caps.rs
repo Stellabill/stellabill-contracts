@@ -48,8 +48,10 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &true,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     let plan_id =
         client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
@@ -66,7 +68,9 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        ),
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
+    ),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -79,7 +83,9 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        ),
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
+    ),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -87,11 +93,11 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128),
+        client.try_deposit_funds(&sub_id, &subscriber, &1_000_000i128, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -107,7 +113,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
-        client.try_charge_one_off(&sub_id, &merchant, &100_000i128),
+        client.try_charge_one_off(&sub_id, &merchant, &100_000i128, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::EmergencyStopActive))
     );
 
@@ -116,6 +122,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(client.get_admin(), admin);
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(!client.get_emergency_stop_status());
 
@@ -138,10 +145,12 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
         Symbol::new(&env, "emergency_stop_enabled")
     );
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.enable_emergency_stop(&admin);
     assert!(env.events().all().is_empty());
     assert!(client.get_emergency_stop_status());
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     let disabled_events = env.events().all();
     assert_eq!(disabled_events.len(), 1);
@@ -150,6 +159,7 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
         Symbol::new(&env, "emergency_stop_disabled")
     );
 
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
     assert!(env.events().all().is_empty());
     assert!(!client.get_emergency_stop_status());
@@ -171,8 +181,10 @@ fn test_emergency_stop_blocks_batch_charge() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     client.enable_emergency_stop(&admin);
@@ -195,11 +207,14 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
+    client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     client.enable_emergency_stop(&admin);
+    env.ledger().with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS);
     client.disable_emergency_stop(&admin);
 
     let ids = Vec::from_array(&env, [sub_id]);
@@ -225,13 +240,15 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &false,
         &Some(cap),
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
-    client.deposit_funds(&sub_id, &subscriber, &cap);
+    client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>),
         Ok(Ok(ChargeExecutionResult::Charged))
     );
     let after_first = client.get_subscription(&sub_id);
@@ -239,7 +256,7 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
 
     env.ledger().set_timestamp(T0 + (2 * INTERVAL) + 1);
     assert_eq!(
-        client.try_charge_subscription(&sub_id),
+        client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>),
         Ok(Ok(ChargeExecutionResult::LifetimeCapReached))
     );
 
@@ -266,9 +283,11 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &true,
         &Some(cap),
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
-    client.deposit_funds(&sub_id, &subscriber, &cap);
+    client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
     client.charge_usage_with_reference(&sub_id, &cap, &String::from_str(&env, "cap-exact-usage"));
 
     let sub = client.get_subscription(&sub_id);
@@ -294,9 +313,11 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &true,
         &Some(cap),
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
-    client.deposit_funds(&sub_id, &subscriber, &cap);
+    client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
 
     // Simulate a nearly exhausted cap while still active.
     let mut sub = client.get_subscription(&sub_id);
@@ -335,24 +356,36 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
         &false,
         &Some(cap),
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
-    client.deposit_funds(&sub_id, &subscriber, &cap);
-    client.charge_one_off(&sub_id, &merchant, &cap);
+    client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
+    client.charge_one_off(&sub_id, &merchant, &cap, &None::<soroban_sdk::BytesN<32>>);
     let events = env.events().all();
 
     // Capture events immediately after the mutating call.
     // In this test environment, subsequent view calls may reset the event buffer.
     let events = env.events().all();
 
+    // env.events().all() returns only events from the LAST contract call.
+    // Capture events immediately after charge_one_off, before any other calls.
+    let all_events = env.events().all();
+    let mut cap_events = 0u32;
+    for event in all_events.iter() {
+        if topic0(&env, &event) == Symbol::new(&env, "lifetime_cap_reached") {
+            cap_events += 1;
+        }
+    }
+    assert_eq!(cap_events, 1);
+
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.prepaid_balance, 0); // deposited exactly cap; charge consumed it all
     assert_eq!(client.get_merchant_balance(&merchant), cap);
-
     assert_eq!(
-        client.try_charge_one_off(&sub_id, &merchant, &1i128),
+        client.try_charge_one_off(&sub_id, &merchant, &1i128, &None::<soroban_sdk::BytesN<32>>),
         Err(Ok(Error::LifetimeCapReached))
     );
 }

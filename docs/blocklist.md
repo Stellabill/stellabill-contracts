@@ -98,10 +98,11 @@ pub struct BlocklistAddedEvent {
     pub added_by: Address,
     pub timestamp: u64,
     pub reason: Option<String>,
+    pub schema_version: u32,
 }
 ```
 
-**Topic**: `("blocklist_added",)`
+**Topic**: `("blocklist_added", subscriber)`
 
 ### BlocklistRemovedEvent
 
@@ -112,10 +113,11 @@ pub struct BlocklistRemovedEvent {
     pub subscriber: Address,
     pub removed_by: Address,
     pub timestamp: u64,
+    pub schema_version: u32,
 }
 ```
 
-**Topic**: `("blocklist_removed",)`
+**Topic**: `("blocklist_removed", subscriber)`
 
 ## API Reference
 
@@ -283,6 +285,11 @@ let new_sub_id = client.create_subscription(
 ### 6. Pause and Cancel Are Blocked for Subscriber (Not Merchant/Admin)
 
 **Behavior**: A blocklisted subscriber cannot self-pause, self-cancel, or self-resume their subscription. Merchants and admins retain full pause/cancel/resume authority over those subscriptions.
+
+**Enforcement points**:
+- `do_pause_subscription`: `require_not_blocklisted` is called when `authorizer == subscriber`
+- `do_cancel_subscription`: `require_not_blocklisted` is called when `authorizer == subscriber`
+- `do_resume_subscription`: `require_not_blocklisted` is called when `authorizer == subscriber`
 
 **Rationale**: Preventing subscriber-initiated mutation stops a blocked subscriber from hiding from charges (pausing) or racing to cancel before a dispute resolves. The merchant and admin can still manage the subscription lifecycle on behalf of both parties.
 

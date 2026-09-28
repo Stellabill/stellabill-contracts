@@ -9,11 +9,13 @@ This contract supports bounded billing-statement growth using configurable reten
 
 ## Retention model
 
-- Detailed rows are append-only per subscription, keyed by sequence.
+- Detailed rows are append-only per subscription, keyed by `DataKey::BillingStatement(subscription_id, sequence)` with sequence tracking via `DataKey::BillingStatementSequence(subscription_id)`.
+- Index of retained statement sequences is kept at `DataKey::BillingStatementsBySubscription(subscription_id)` as a `Vec<u32>`.
 - `set_billing_retention(admin, keep_recent)` configures the default number of detailed rows to keep.
 - `get_billing_retention()` returns current policy.
+- Persistent TTL is automatically extended on both write (`append_statement`) and read (`get_sub_statements_offset`, `get_sub_statements_cursor`) paths.
 
-Default policy keeps all rows until retention is explicitly set.
+Default policy keeps all rows until retention is explicitly set (`keep_recent = 0`).
 
 ## Compaction flow
 

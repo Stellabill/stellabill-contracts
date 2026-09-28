@@ -8,7 +8,14 @@
       "PowerShell(& \"C:\\\\Rust\\\\bin\\\\cargo.exe\" --version 2>&1)",
       "Bash(where cargo *)",
       "PowerShell(Get-Command cargo -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-ChildItem \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\" -ErrorAction SilentlyContinue | Select-Object FullName)",
-      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\")"
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\")",
+      "Bash(cargo build *)",
+      "Bash(git stash *)",
+      "Bash(grep -A6 \"E0428\\\\]: the name \\\\`period_snapshots\\\\`\\\\|E0428\\\\]: the name \\\\`check_and_advance\\\\`\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(gh pr *)",
+      "Bash(ls .github/PULL_REQUEST_TEMPLATE.md .github/pull_request_template.md)"
     ]
   }
 }

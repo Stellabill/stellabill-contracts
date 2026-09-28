@@ -55,7 +55,7 @@ The original implementation used `id + 1` with no guard, which would:
 - **Panic** in Rust debug builds at `u32::MAX + 1`.
 - **Silently wrap to `0`** in release builds, overwriting the first subscription and breaking all uniqueness guarantees.
 
-The hardened version **guards before incrementing**, so neither panic nor wrap can occur. Instead, callers receive a clean `Error::SubscriptionLimitReached` (code `429`).
+The hardened version **guards before incrementing**, so neither panic nor wrap can occur. Instead, callers of all three create entry-points (`create_subscription`, `create_subscription_with_token`, and `create_subscription_from_plan`) receive a clean `Error::SubscriptionLimitReached` (code `6001`).
 
 ---
 
@@ -102,7 +102,7 @@ Both live in instance storage and share the contract's storage budget.
 
 | Code | Name | When |
 |---|---|---|
-| `429` | `SubscriptionLimitReached` | Counter reached `MAX_SUBSCRIPTION_ID`; no more IDs available |
+| `6001` | `SubscriptionLimitReached` | Counter reached `MAX_SUBSCRIPTION_ID`; no more IDs available |
 | `404` | `NotFound` | Subscription ID does not exist in storage |
 
 ---
@@ -118,3 +118,19 @@ Both live in instance storage and share the contract's storage budget.
 | `test_id_at_max_minus_one_succeeds` | Counter at `MAX-1` → allocation returns `MAX-1` |
 | `test_id_at_max_returns_limit_reached` | Counter at `MAX` → `SubscriptionLimitReached` |
 | `test_no_id_reuse_after_limit` | Repeated calls after limit → always `SubscriptionLimitReached`, counter stable |
+
+### Integration tests (`tests/id_exhaustion.rs`)
+
+These seed `DataKey::NextId` directly (via `env.as_contract`) so the boundary is exercised without creating billions of subscriptions. They cover all three create entry-points.
+
+| Test | Scenario |
+|---|---|
+| `create_subscription_last_id_succeeds` | Counter at `MAX-1` → final allocation succeeds with `MAX-1` |
+| `create_subscription_at_max_returns_limit_reached` | Counter at `MAX` → `SubscriptionLimitReached` |
+| `create_subscription_counter_unchanged_after_failure` | Failed allocation leaves counter at `MAX` (no wrap) |
+| `create_subscription_with_token_last_id_succeeds` | Token path: final allocation succeeds |
+| `create_subscription_with_token_at_max_returns_limit_reached` | Token path at `MAX` → `SubscriptionLimitReached` |
+| `create_subscription_with_token_counter_unchanged_after_failure` | Token-path failure keeps counter at `MAX` |
+| `create_subscription_from_plan_last_id_succeeds` | Plan path: final allocation succeeds |
+| `create_subscription_from_plan_at_max_returns_limit_reached` | Plan path at `MAX` → `SubscriptionLimitReached` |
+| `create_subscription_from_plan_counter_unchanged_after_failure` | Plan-path failure keeps counter at `MAX` |

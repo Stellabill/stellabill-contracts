@@ -6,6 +6,9 @@ Merchants can withdraw their accumulated balance from the Subscription Vault usi
 Funds accumulate to a merchant's balance each time a subscription for that merchant is
 successfully charged.
 
+The merchant earnings ledger is stored persistently as `MerchantBalance[(merchant, token)]`
+and only the authorized merchant may withdraw from their own bucket.
+
 ## Process and Requirements
 
 1. **Authorization**: The merchant must authorize the withdrawal transaction. The contract enforces this using `merchant.require_auth()`.

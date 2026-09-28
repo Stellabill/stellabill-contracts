@@ -127,6 +127,11 @@ fn create_mock_sub(env: &Env, subscriber: &Address, token: &Address) -> Subscrip
         start_time: env.ledger().timestamp(),
         expires_at: None,
         grace_start_timestamp: None,
+        cancel_at: None,
+        expires_at_ledger: None,
+        sub_account_label: None,
+        auto_renew: true,
+        auto_renew_disabled_at: None,
     }
 }
 
@@ -277,7 +282,9 @@ fn test_subscriber_list_invalid_limit_overflow() {
 }
 
 fn create_sub_for_merchant_and_token(client: &SubscriptionVaultClient<'static>, subscriber: &Address, merchant: &Address, token: &Address) -> u32 {
-    client.create_subscription(subscriber, merchant, &1000, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>)
+    client.create_subscription(subscriber, merchant, &1000, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>&None::<u32>,
+    &None::<soroban_sdk::Symbol>,
+)
 }
 
 #[test]
@@ -422,7 +429,9 @@ fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
 
     // This creation should fail with InvalidInput because we simulated an oversized contract
     // AND we forced the scan path by configuring a credit limit.
-    client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>);
+    client.create_subscription(&subscriber, &merchant, &100, &(30 * 24 * 60 * 60), &false, &None, &None::<u64>&None::<u32>,
+    &None::<soroban_sdk::Symbol>,
+);
 }
 
 // ================================================================
@@ -456,6 +465,8 @@ mod benchmark {
             &false,
             &None,
             &None::<u64>,
+        &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
 
         // High budgets so we never hit limit; just measure
@@ -491,7 +502,7 @@ mod benchmark {
         env.as_contract(&client.address, || {
             env.storage()
                 .instance()
-                .set(&Symbol::new(&env, "next_id"), &1000);
+                .set(&crate::types::DataKey::NextId, &1000);
         });
 
         env.budget().set_cpu_budget(2_000_000);
@@ -570,6 +581,8 @@ fn test_get_subscription_within_budget() {
         &false,
         &None,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     with_perf_budget(
@@ -597,6 +610,8 @@ fn test_get_subscription_budget_too_tight() {
         &false,
         &None,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     // Impossibly tight budgets — must exceed
@@ -663,7 +678,7 @@ fn test_list_subscriber_sparse_ids_within_budget() {
         }
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &5000);
     });
 
     with_perf_budget(
@@ -845,7 +860,7 @@ fn test_subscriber_list_1000_items_multi_page_within_budget() {
         }
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &5000);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &5000);
     });
 
     let page_size = 25u32;
@@ -904,7 +919,7 @@ fn test_dos_unbounded_scan_capped_by_max_scan_depth_and_budget() {
         });
     }
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &10_010);
+        env.storage().instance().set(&crate::types::DataKey::NextId, &10_010);
     });
 
     // Page 1: scans first MAX_SCAN_DEPTH IDs (1000), finds none, returns empty + cursor

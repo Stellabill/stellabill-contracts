@@ -71,6 +71,30 @@ Performance tests cover:
 
 Overall line coverage for `queries.rs` and `subscription.rs` read paths exceeds **95%**.
 
+## 100k Subscription Soak Test
+
+The ignored integration test in `contracts/subscription_vault/tests/soak_100k.rs`
+seeds `100_000` subscriptions directly with `env.as_contract` so the benchmark
+measures read-path behavior instead of subscription creation overhead. It covers:
+
+- `1_000` merchants with one dense merchant, one single-subscription merchant,
+  and the remaining subscriptions spread across the other merchants.
+- `get_subscriptions_by_merchant` first, middle, and last 100-row pages.
+- `list_subscriptions_by_subscriber` first, middle, tail, resumed-cursor, and
+  exhausted-cursor reads.
+- Per-query CPU and ledger-read assertions against the documented budgets.
+
+Run it manually with:
+
+```bash
+cargo test --release -p subscription_vault --test soak_100k soak_100k -- --ignored --nocapture
+```
+
+The soak test prints `[Soak]` lines with seeded counts, per-query CPU/read
+usage, elapsed wall time, and final completion metadata. The separate `Soak`
+GitHub Actions workflow runs this command nightly and can also be started with
+`workflow_dispatch`.
+
 ## Safety Limits
 
 ### `MAX_SCAN_DEPTH` (1,000)

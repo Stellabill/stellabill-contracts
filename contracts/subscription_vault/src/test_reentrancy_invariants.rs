@@ -13,17 +13,18 @@
 //! - Cross-function reentrancy simulation (not possible in Soroban test env).
 //! - Live token callback injection (Soroban mock auths prevent this).
 
-    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
+use crate::types::{
+    DataKey, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
-// ── constants ────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ constants Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const T0: u64 = 1_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
 const AMOUNT: i128 = 10_000_000;
 const PREPAID: i128 = 50_000_000;
 
-// ── setup helper ─────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ setup helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let env = Env::default();
@@ -58,6 +59,8 @@ fn create_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+    &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     (id, subscriber, merchant)
 }
@@ -87,7 +90,7 @@ fn seed_merchant_balance(
 }
 
 // =============================================================================
-// 1. DEPOSIT — CEI invariants
+// 1. DEPOSIT Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance updated in storage BEFORE token transfer.
@@ -101,7 +104,7 @@ fn test_deposit_state_committed_before_transfer() {
     let vault_before = token_client.balance(&client.address);
     let deposit = 5_000_000i128;
 
-    client.deposit_funds(&id, &subscriber, &deposit);
+    client.deposit_funds(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
 
     // Effects: storage reflects the deposit
     let sub = client.get_subscription(&id);
@@ -120,7 +123,7 @@ fn test_deposit_multiple_sequential_consistent_state() {
 
     let deposit = 5_000_000i128;
     for i in 1..=5 {
-        client.deposit_funds(&id, &subscriber, &deposit);
+        client.deposit_funds(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
         let sub = client.get_subscription(&id);
         assert_eq!(sub.prepaid_balance, deposit * i as i128);
     }
@@ -137,7 +140,7 @@ fn test_deposit_failure_leaves_state_unchanged() {
     let sub_before = client.get_subscription(&id);
 
     // below min_topup of 1_000_000
-    let result = client.try_deposit_funds(&id, &subscriber, &500);
+    let result = client.try_deposit_funds(&id, &subscriber, &500, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_err());
 
     let sub_after = client.get_subscription(&id);
@@ -146,14 +149,14 @@ fn test_deposit_failure_leaves_state_unchanged() {
 }
 
 /// Invariant: deposit on a cancelled subscription is rejected.
-/// Ensures the lock lifecycle is clean — no partial state on rejected ops.
+/// Ensures the lock lifecycle is clean Ã¢â‚¬â€ no partial state on rejected ops.
 #[test]
 fn test_deposit_on_cancelled_subscription_rejected_cleanly() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
     client.cancel_subscription(&id, &subscriber);
-    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
+    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     // Cancelled subs are blocklisted from deposit
     assert!(result.is_err());
     let sub = client.get_subscription(&id);
@@ -161,7 +164,7 @@ fn test_deposit_on_cancelled_subscription_rejected_cleanly() {
 }
 
 // =============================================================================
-// 2. CHARGE — CEI invariants
+// 2. CHARGE Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance debited and merchant balance credited BEFORE any
@@ -180,7 +183,7 @@ fn test_charge_token_conservation_invariant() {
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     let vault_before = token_client.balance(&client.address);
 
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     let sub_after = client.get_subscription(&id);
     let merchant_balance = client.get_merchant_balance(&merchant);
@@ -205,7 +208,7 @@ fn test_charge_insufficient_balance_no_partial_debit() {
     let grace = 7 * 24 * 60 * 60u64;
     env.ledger().set_timestamp(T0 + INTERVAL + grace + 1);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_ok()); // returns InsufficientBalance result, not Err
 
     let sub = client.get_subscription(&id);
@@ -225,13 +228,13 @@ fn test_charge_replay_rejected_no_state_mutation() {
         .mint(&client.address, &PREPAID);
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
-    client.charge_subscription(&id);
+    client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
 
     let sub_after_first = client.get_subscription(&id);
     let merchant_after_first = client.get_merchant_balance(&merchant);
 
     // Replay attempt in same interval
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::Replay)));
 
     let sub_after_replay = client.get_subscription(&id);
@@ -249,7 +252,7 @@ fn test_charge_on_paused_no_state_change() {
     client.pause_subscription(&id, &subscriber);
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::NotActive)));
 
     assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
@@ -269,7 +272,7 @@ fn test_charge_lifetime_charged_monotonically_increases() {
     let mut prev_lifetime = 0i128;
     for i in 1..=4 {
         env.ledger().set_timestamp(T0 + (i as u64 * INTERVAL) + 1);
-        client.charge_subscription(&id);
+        client.charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
         let sub = client.get_subscription(&id);
         assert!(sub.lifetime_charged > prev_lifetime);
         prev_lifetime = sub.lifetime_charged;
@@ -277,7 +280,7 @@ fn test_charge_lifetime_charged_monotonically_increases() {
 }
 
 // =============================================================================
-// 3. WITHDRAW (subscriber) — CEI invariants
+// 3. WITHDRAW (subscriber) Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance zeroed in storage BEFORE token transfer to subscriber.
@@ -288,7 +291,7 @@ fn test_withdraw_subscriber_state_committed_before_transfer() {
     let (id, subscriber, _) = create_sub(&env, &client, &token);
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     client.cancel_subscription(&id, &subscriber);
 
     let vault_before = token_client.balance(&client.address);
@@ -310,7 +313,7 @@ fn test_withdraw_subscriber_double_withdrawal_rejected() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     client.cancel_subscription(&id, &subscriber);
     client.withdraw_subscriber_funds(&id, &subscriber);
 
@@ -326,8 +329,8 @@ fn test_withdraw_subscriber_requires_cancelled_status() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
-    // Not cancelled — Active status
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
+    // Not cancelled Ã¢â‚¬â€ Active status
     let result = client.try_withdraw_subscriber_funds(&id, &subscriber);
     assert!(result.is_err());
     // Balance untouched
@@ -342,7 +345,7 @@ fn test_withdraw_subscriber_exact_amount_transferred() {
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     let deposit = 7_777_777i128;
-    client.deposit_funds(&id, &subscriber, &deposit);
+    client.deposit_funds(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
     client.cancel_subscription(&id, &subscriber);
 
     let subscriber_before = token_client.balance(&subscriber);
@@ -355,7 +358,7 @@ fn test_withdraw_subscriber_exact_amount_transferred() {
 }
 
 // =============================================================================
-// 4. WITHDRAW (merchant) — CEI invariants
+// 4. WITHDRAW (merchant) Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: merchant balance reduced in storage BEFORE token transfer.
@@ -442,7 +445,7 @@ fn test_merchant_cannot_withdraw_other_merchant() {
 }
 
 // =============================================================================
-// 5. REFUND — CEI invariants
+// 5. REFUND Ã¢â‚¬â€ CEI invariants
 // =============================================================================
 
 /// CEI: prepaid_balance debited in storage BEFORE token transfer back to subscriber.
@@ -452,7 +455,7 @@ fn test_refund_state_committed_before_transfer() {
     let (id, subscriber, _) = create_sub(&env, &client, &token);
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
 
     let vault_before = token_client.balance(&client.address);
     let subscriber_before = token_client.balance(&subscriber);
@@ -475,7 +478,7 @@ fn test_refund_exceeds_balance_rejected_no_state_change() {
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     let deposit = 5_000_000i128;
-    client.deposit_funds(&id, &subscriber, &deposit);
+    client.deposit_funds(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
 
     let vault_before = token_client.balance(&client.address);
 
@@ -493,7 +496,7 @@ fn test_refund_cumulative_cannot_exceed_deposit() {
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
     let deposit = 10_000_000i128;
-    client.deposit_funds(&id, &subscriber, &deposit);
+    client.deposit_funds(&id, &subscriber, &deposit, &None::<soroban_sdk::BytesN<32>>);
 
     // Drain in two steps
     client.partial_refund(&admin, &id, &subscriber, &5_000_000i128);
@@ -506,7 +509,7 @@ fn test_refund_cumulative_cannot_exceed_deposit() {
 }
 
 // =============================================================================
-// 6. REENTRANCY GUARD — lock lifecycle
+// 6. REENTRANCY GUARD Ã¢â‚¬â€ lock lifecycle
 // =============================================================================
 
 /// Guard invariant: ReentrancyGuard::lock sets a key and removes it on drop.
@@ -516,13 +519,13 @@ fn test_reentrancy_guard_lock_is_released_after_operation() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    client.deposit_funds(&id, &subscriber, &5_000_000i128);
+    client.deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // After a successful deposit, no lock key should remain in storage.
-    // We verify this by running a second deposit — if the lock were stuck,
+    // We verify this by running a second deposit Ã¢â‚¬â€ if the lock were stuck,
     // it would return Reentrancy error.
-    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
-    assert!(result.is_ok(), "second deposit must succeed — lock must be released");
+    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert!(result.is_ok(), "second deposit must succeed Ã¢â‚¬â€ lock must be released");
 }
 
 /// Guard invariant: withdrawal lock is released after merchant withdrawal.
@@ -549,7 +552,7 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
     let (env, client, token, admin) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    client.deposit_funds(&id, &subscriber, &5_000_000i128);
+    client.deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
     // Rejected refund (wrong admin)
     let stranger = Address::generate(&env);
@@ -560,8 +563,53 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
     assert!(result.is_ok(), "valid refund must work after a rejected one");
 }
 
+/// Guard invariant: after a rejected deposit in a guarded entrypoint, the
+/// lock must be released so a later valid deposit is not blocked by stale state.
+#[test]
+fn test_reentrancy_guard_released_after_deposit_unauthorized_rejection() {
+    let (env, client, token, _) = setup();
+    let (id, subscriber, _) = create_sub(&env, &client, &token);
+    let attacker = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&attacker, &5_000_000i128);
+
+    let result = client.try_deposit_funds(&id, &attacker, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+
+    let success = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
+    assert!(success.is_ok(), "valid deposit must succeed after rejected deposit");
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 5_000_000i128);
+}
+
+/// Guard invariant: an expired charge rejection must not leave the lock stuck.
+#[test]
+fn test_reentrancy_guard_released_after_expired_charge_rejection() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    mint(&env, &token, &subscriber, PREPAID);
+
+    let expires_at = T0 + 1;
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &Some(expires_at),
+        &None::<Address>,
+    );
+    env.ledger().set_timestamp(T0 + 2);
+
+    let first = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(first, Err(Ok(Error::SubscriptionExpired)));
+
+    let second = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(second, Err(Ok(Error::SubscriptionExpired)));
+}
+
 // =============================================================================
-// 7. NESTED CALL ATTEMPTS — panic path coverage
+// 7. NESTED CALL ATTEMPTS Ã¢â‚¬â€ panic path coverage
 // =============================================================================
 
 /// Invariant: charge on a non-existent subscription panics / errors cleanly.
@@ -569,7 +617,7 @@ fn test_reentrancy_guard_not_stuck_after_rejection() {
 fn test_charge_nonexistent_subscription_errors_cleanly() {
     let (env, client, _, _) = setup();
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
-    let result = client.try_charge_subscription(&9999u32);
+    let result = client.try_charge_subscription(&9999u32, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
 
@@ -579,7 +627,7 @@ fn test_deposit_nonexistent_subscription_errors_cleanly() {
     let (env, client, token, _) = setup();
     let subscriber = Address::generate(&env);
     mint(&env, &token, &subscriber, PREPAID);
-    let result = client.try_deposit_funds(&9999u32, &subscriber, &5_000_000i128);
+    let result = client.try_deposit_funds(&9999u32, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
 
@@ -593,7 +641,7 @@ fn test_charge_blocked_by_emergency_stop_no_mutation() {
     client.enable_emergency_stop(&admin);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
 
     assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
@@ -608,7 +656,7 @@ fn test_deposit_blocked_by_emergency_stop_no_mutation() {
 
     client.enable_emergency_stop(&admin);
 
-    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128);
+    let result = client.try_deposit_funds(&id, &subscriber, &5_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
     assert_eq!(client.get_subscription(&id).prepaid_balance, 0);
 }
@@ -636,7 +684,7 @@ fn test_withdraw_subscriber_blocked_by_emergency_stop_no_mutation() {
     let (env, client, token, admin) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     client.cancel_subscription(&id, &subscriber);
 
     client.enable_emergency_stop(&admin);
@@ -647,7 +695,7 @@ fn test_withdraw_subscriber_blocked_by_emergency_stop_no_mutation() {
 }
 
 // =============================================================================
-// 8. LOCK RELEASE / RECOVERY — edge cases
+// 8. LOCK RELEASE / RECOVERY Ã¢â‚¬â€ edge cases
 // =============================================================================
 
 /// Invariant: after charge failure (insufficient balance), subsequent
@@ -657,11 +705,11 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
     let (env, client, token, _) = setup();
     let (id, subscriber, _) = create_sub(&env, &client, &token);
 
-    // Zero balance — charge will fail
+    // Zero balance Ã¢â‚¬â€ charge will fail
     seed_balance(&env, &client, id, 0);
     let grace = 7 * 24 * 60 * 60u64;
     env.ledger().set_timestamp(T0 + INTERVAL + grace + 1);
-    let _ = client.try_charge_subscription(&id);
+    let _ = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::InsufficientBalance
@@ -669,16 +717,16 @@ fn test_charge_failure_then_topup_then_charge_succeeds() {
 
     // Top up and resume
     mint(&env, &token, &subscriber, PREPAID);
-    client.deposit_funds(&id, &subscriber, &PREPAID);
+    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     client.resume_subscription(&id, &subscriber);
     assert_eq!(
         client.get_subscription(&id).status,
         SubscriptionStatus::Active
     );
 
-    // Next interval — charge must succeed cleanly
+    // Next interval Ã¢â‚¬â€ charge must succeed cleanly
     env.ledger().set_timestamp(T0 + INTERVAL + grace + 1 + INTERVAL);
-    let result = client.try_charge_subscription(&id);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
     assert!(result.is_ok());
     assert_eq!(
         client.get_subscription(&id).prepaid_balance,
