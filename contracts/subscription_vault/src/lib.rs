@@ -3650,6 +3650,8 @@ mod test_emergency_withdraw;
 mod test_abi_validators_integration;
 #[cfg(test)]
 mod test_coupon;
+#[cfg(test)]
+mod test_coupon_revoke_adversarial;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
