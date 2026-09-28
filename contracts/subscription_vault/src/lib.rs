@@ -63,6 +63,7 @@ pub use types::{
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
     ProtocolFeeConfiguredEvent, CANCELLATION_ESCROW_WINDOW_SECS,
     is_known_instance_discriminant, AdminConfigChangedEvent,
+    EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
