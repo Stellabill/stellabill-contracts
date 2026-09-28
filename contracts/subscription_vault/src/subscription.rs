@@ -1251,9 +1251,7 @@ fn apply_cancellation(
             merchant: sub.merchant.clone(),
             token: token_addr.clone(),
             amount: refund_amount,
-            opened_at: now,
             released_at,
-            released: false,
         };
 
         env.storage()
@@ -3626,46 +3624,64 @@ pub fn get_subscriber_exposure(
     compute_subscriber_exposure(env, &subscriber, &token)
 }
 
-/// Enable or disable automatic renewal for a subscription.
+/// Toggle auto-renewal for a subscription.
+///
+/// - Only the subscriber or merchant may call this.
+/// - Disabling sets `auto_renew_disabled_at` to the current timestamp (first
+///   disable only — subsequent disables preserve the original timestamp).
+/// - Re-enabling clears `auto_renew_disabled_at`.
+/// - Re-enabling after the renewal window (`disabled_at + interval_seconds`)
+///   has elapsed returns `Error::RenewalWindowClosed`.
+/// - Toggling on a non-Active subscription (Cancelled, Expired, etc.) returns
+///   `Error::InvalidStatusTransition`.
 pub fn do_set_auto_renew(
     env: &Env,
     subscription_id: u32,
     authorizer: Address,
     enabled: bool,
 ) -> Result<(), Error> {
-    let mut sub = get_subscription(env, subscription_id)?;
-
-    // Only subscriber or merchant may toggle auto-renew.
-    if authorizer != sub.subscriber && authorizer != sub.merchant {
-        return Err(Error::Forbidden);
-    }
     authorizer.require_auth();
 
-    if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
-        return Err(Error::InvalidStatusTransition);
+    let mut sub = crate::queries::get_subscription(env, subscription_id)?;
+
+    // Only subscriber or merchant may toggle auto-renewal.
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
     }
 
     let now = env.ledger().timestamp();
 
-    if !enabled {
-        // Disable: record timestamp only on the first disable.
-        if sub.auto_renew {
-            sub.auto_renew_disabled_at = Some(now);
-        }
-        sub.auto_renew = false;
-    } else {
-        // Enable: check renewal window.
+    // Toggling on expired subscriptions is rejected.
+    if sub.is_expired(now, env.ledger().sequence()) {
+        return Err(Error::SubscriptionExpired);
+    }
+
+    // Toggling on terminal / non-Active states is rejected.
+    match sub.status {
+        SubscriptionStatus::Active | SubscriptionStatus::Paused => {}
+        _ => return Err(Error::InvalidStatusTransition),
+    }
+
+    if enabled {
+        // Re-enable: check renewal window.
         if !sub.auto_renew {
-            // Already disabled — check window.
             if let Some(disabled_at) = sub.auto_renew_disabled_at {
                 let window_end = disabled_at.saturating_add(sub.interval_seconds);
                 if now >= window_end {
                     return Err(Error::RenewalWindowClosed);
                 }
             }
+            sub.auto_renew = true;
             sub.auto_renew_disabled_at = None;
         }
-        sub.auto_renew = true;
+        // Already enabled — no-op, but still emit event and save.
+    } else {
+        // Disable: preserve original disable timestamp on repeated calls.
+        if sub.auto_renew {
+            sub.auto_renew = false;
+            sub.auto_renew_disabled_at = Some(now);
+        }
+        // Already disabled — no-op (preserve original timestamp).
     }
 
     write_subscription(env, subscription_id, &sub);
@@ -3674,9 +3690,9 @@ pub fn do_set_auto_renew(
         (Symbol::new(env, "auto_renew_toggled"), subscription_id),
         crate::types::AutoRenewToggledEvent {
             subscription_id,
-            subscriber: sub.subscriber,
-            merchant: sub.merchant,
-            enabled: sub.auto_renew,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            enabled,
             authorizer,
             timestamp: now,
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
@@ -3781,12 +3797,9 @@ pub fn do_initiate_transfer(
 
     let intent = crate::types::TransferIntent {
         subscription_id,
-        from_subscriber: from.clone(),
         from: from.clone(),
         to: to.clone(),
-        created_at: env.ledger().timestamp(),
         expires_at,
-        executed: false,
     };
 
     env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);
@@ -3927,80 +3940,3 @@ pub fn write_split_payees(env: &Env, subscription_id: u32, split: &crate::types:
         .extend_ttl(&key, SUB_TTL_THRESHOLD as u32, SUB_TTL_EXTEND_TO as u32);
 }
 
-/// Toggle auto-renewal for a subscription.
-///
-/// - Only the subscriber or merchant may call this.
-/// - Disabling sets `auto_renew_disabled_at` to the current timestamp (first
-///   disable only — subsequent disables preserve the original timestamp).
-/// - Re-enabling clears `auto_renew_disabled_at`.
-/// - Re-enabling after the renewal window (`disabled_at + interval_seconds`)
-///   has elapsed returns `Error::RenewalWindowClosed`.
-/// - Toggling on a non-Active subscription (Cancelled, Expired, etc.) returns
-///   `Error::InvalidStatusTransition`.
-pub fn do_set_auto_renew(
-    env: &Env,
-    subscription_id: u32,
-    authorizer: Address,
-    enabled: bool,
-) -> Result<(), Error> {
-    authorizer.require_auth();
-
-    let mut sub = crate::queries::get_subscription(env, subscription_id)?;
-
-    // Only subscriber or merchant may toggle auto-renewal.
-    if authorizer != sub.subscriber && authorizer != sub.merchant {
-        return Err(Error::Forbidden);
-    }
-
-    let now = env.ledger().timestamp();
-
-    // Toggling on expired subscriptions is rejected.
-    if sub.is_expired(now, env.ledger().sequence()) {
-        return Err(Error::SubscriptionExpired);
-    }
-
-    // Toggling on terminal / non-Active states is rejected.
-    match sub.status {
-        SubscriptionStatus::Active | SubscriptionStatus::Paused => {}
-        _ => return Err(Error::InvalidStatusTransition),
-    }
-
-    if enabled {
-        // Re-enable: check renewal window.
-        if !sub.auto_renew {
-            if let Some(disabled_at) = sub.auto_renew_disabled_at {
-                let window_end = disabled_at.saturating_add(sub.interval_seconds);
-                if now >= window_end {
-                    return Err(Error::RenewalWindowClosed);
-                }
-            }
-            sub.auto_renew = true;
-            sub.auto_renew_disabled_at = None;
-        }
-        // Already enabled — no-op, but still emit event and save.
-    } else {
-        // Disable: preserve original disable timestamp on repeated calls.
-        if sub.auto_renew {
-            sub.auto_renew = false;
-            sub.auto_renew_disabled_at = Some(now);
-        }
-        // Already disabled — no-op (preserve original timestamp).
-    }
-
-    write_subscription(env, subscription_id, &sub);
-
-    env.events().publish(
-        (Symbol::new(env, "auto_renew_toggled"), subscription_id),
-        AutoRenewToggledEvent {
-            subscription_id,
-            subscriber: sub.subscriber.clone(),
-            merchant: sub.merchant.clone(),
-            enabled,
-            authorizer,
-            timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
-        },
-    );
-
-    Ok(())
-}
