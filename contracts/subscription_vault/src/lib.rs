@@ -1,4 +1,4 @@
-#![no_std]
+﻿#![no_std]
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
@@ -137,7 +137,21 @@ impl SubscriptionVault {
         env.storage().instance().set(&key, &(current + 1));
         Ok(current)
     }
+    /// Get the current emergency stop status of the vault.
+        /// Get the current emergency stop status of the vault.
+    pub fn get_emergency_stop_status(env: Env) -> bool {
+        if !env.storage().instance().has(&soroban_sdk::Symbol::new(&env, "admin")) {
+            panic!("not initialized");
+        }
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::Symbol::new(&env, "emergency_stop"))
+            .unwrap_or(false)
+    }
+
 }
 
 #[cfg(test)]
 mod test;
+
+

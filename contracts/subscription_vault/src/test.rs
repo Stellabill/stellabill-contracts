@@ -255,3 +255,5 @@ fn test_create_subscription_past_expiration_rejected() {
     let result = client.try_create_subscription(&sub, &merchant, &1000i128, &3600u64, &false, &Some(now));
     assert_eq!(result, Err(Ok(Error::InvalidArgument)));
 }
+
+mod test_get_emergency_stop_status;
