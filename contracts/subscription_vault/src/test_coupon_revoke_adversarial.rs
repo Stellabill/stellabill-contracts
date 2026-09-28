@@ -16,7 +16,7 @@
 //! * revoking one code cannot affect a sibling coupon.
 
 use crate::test_utils::{create_test_client, setup_env};
-use crate::types::{Coupon, CouponRevokedEvent, Error, EVENT_SCHEMA_VERSION};
+use crate::types::{Coupon, CouponRevokedEvent, DataKey, Error, EVENT_SCHEMA_VERSION};
 use crate::SubscriptionVaultClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -99,7 +99,14 @@ fn unauthorized_revoke_leaves_coupon_fields_untouched() {
     assert_eq!(after.percent_off_bps, 2_000);
     assert_eq!(after.fixed_off, 500);
     assert_eq!(after.max_redemptions, 100);
-    assert_eq!(after.redemptions, 0);
+    // The global bind counter lives outside the coupon body
+    // (`DataKey::CouponRedemptions`); a rejected revoke must not touch it.
+    let redemptions: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CouponRedemptions(code.clone()))
+        .unwrap_or(0);
+    assert_eq!(redemptions, 0);
 }
 
 #[test]
