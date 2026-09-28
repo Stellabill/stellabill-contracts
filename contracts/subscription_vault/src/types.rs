@@ -504,10 +504,10 @@ pub enum SubscriptionStatus {
 /// Allowed subscription status transitions, mirroring the state machine
 /// documented in `docs/subscription_state_machine.md`.
 ///
-/// `Cancelled` and `Archived` are terminal states and intentionally have no
-/// outgoing entries. `InsufficientBalance -> Active` is reserved for
-/// deposit-funded recovery; callers must also verify that a deposit occurred
-/// before invoking this transition.
+/// `Cancelled` may only archive and `Archived` is fully immutable.
+/// `InsufficientBalance -> Active` is reserved for deposit-funded recovery;
+/// callers must also verify that a deposit occurred before invoking this
+/// transition.
 pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
     (
         SubscriptionStatus::Active,
@@ -539,6 +539,7 @@ pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatu
         SubscriptionStatus::GracePeriod,
         &[
             SubscriptionStatus::Active,
+            SubscriptionStatus::InsufficientBalance,
             SubscriptionStatus::Expired,
             SubscriptionStatus::Cancelled,
         ],
@@ -549,6 +550,10 @@ pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatu
             SubscriptionStatus::Cancelled,
             SubscriptionStatus::Archived,
         ],
+    ),
+    (
+        SubscriptionStatus::Cancelled,
+        &[SubscriptionStatus::Archived],
     ),
 ];
 

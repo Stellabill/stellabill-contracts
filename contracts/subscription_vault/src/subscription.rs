@@ -80,51 +80,12 @@ use crate::types::{
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-/// Documented subscription state machine transitions.
-///
-/// `Cancelled` and `Archived` are terminal: they have no outgoing
-/// transitions. `Expired` may only transition to `Cancelled`.
-const ALLOWED_TRANSITIONS: &[(SubscriptionStatus, SubscriptionStatus)] = &[
-    (SubscriptionStatus::Active, SubscriptionStatus::Paused),
-    (SubscriptionStatus::Active, SubscriptionStatus::Cancelled),
-    (SubscriptionStatus::Active, SubscriptionStatus::Expired),
-    (SubscriptionStatus::Active, SubscriptionStatus::InsufficientBalance),
-    (SubscriptionStatus::Paused, SubscriptionStatus::Active),
-    (SubscriptionStatus::Paused, SubscriptionStatus::Cancelled),
-    (SubscriptionStatus::Paused, SubscriptionStatus::Expired),
-    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Active),
-    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Cancelled),
-    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Expired),
-    (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::GracePeriod),
-    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Active),
-    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Cancelled),
-    (SubscriptionStatus::GracePeriod, SubscriptionStatus::Expired),
-    (SubscriptionStatus::Expired, SubscriptionStatus::Cancelled),
-];
-
-/// Returns `true` when `from -> to` is a documented subscription transition.
-fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool {
-    ALLOWED_TRANSITIONS.contains(&(from, to))
-}
-
-/// Validates a subscription status transition against the documented matrix.
-fn validate_status_transition(
-    from: SubscriptionStatus,
-    to: SubscriptionStatus,
-) -> Result<(), Error> {
-    if can_transition(from, to) {
-        Ok(())
-    } else {
-        Err(Error::InvalidStatusTransition)
-    }
-}
-
-/// Applies `next` to `current` only if the transition is documented.
-fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
-    validate_status_transition(*current, next)?;
-    *current = next;
-    Ok(())
-}
+// Transition rules live in exactly one place: `crate::state_machine`.
+//
+// This module used to carry a second copy of the matrix, which drifted and
+// rejected the documented `Cancelled -> Archived` / `Expired -> Archived`
+// steps that `do_cleanup_subscription` depends on.
+use crate::state_machine::transition_to;
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// Hard upper bound on billing interval: 365 days (31 536 000 s).

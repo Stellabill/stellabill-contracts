@@ -172,17 +172,22 @@ pub mod state_machine {
 
     /// Documented transition matrix from `docs/subscription_state_machine.md`.
     ///
-    /// `Cancelled` and `Archived` are terminal states. `InsufficientBalance`
-    /// may return to `Active` only after a successful deposit, and
-    /// `GracePeriod` may return to `Active` via deposit/buyout.
+    /// This is the single source of truth for `SubscriptionStatus` changes.
+    /// `Cancelled` and `Archived` are terminal for every target except
+    /// `Cancelled -> Archived`, which is the final step of
+    /// `cleanup_subscription`. `InsufficientBalance` may return to `Active`
+    /// only after a successful deposit, `GracePeriod` may return to `Active`
+    /// via a deposit/buyout, and an expired grace window falls through
+    /// `GracePeriod -> InsufficientBalance`.
     static ALLOWED_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatus])] = &[
         (
             SubscriptionStatus::Active,
             &[
                 SubscriptionStatus::Paused,
                 SubscriptionStatus::InsufficientBalance,
-                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::GracePeriod,
                 SubscriptionStatus::Expired,
+                SubscriptionStatus::Cancelled,
             ],
         ),
         (
@@ -197,7 +202,6 @@ pub mod state_machine {
             SubscriptionStatus::InsufficientBalance,
             &[
                 SubscriptionStatus::Active,
-                SubscriptionStatus::GracePeriod,
                 SubscriptionStatus::Cancelled,
                 SubscriptionStatus::Expired,
             ],
@@ -206,12 +210,22 @@ pub mod state_machine {
             SubscriptionStatus::GracePeriod,
             &[
                 SubscriptionStatus::Active,
+                SubscriptionStatus::InsufficientBalance,
                 SubscriptionStatus::Cancelled,
                 SubscriptionStatus::Expired,
             ],
         ),
-        (SubscriptionStatus::Expired, &[SubscriptionStatus::Cancelled]),
-        (SubscriptionStatus::Cancelled, &[] as &[SubscriptionStatus]),
+        (
+            SubscriptionStatus::Expired,
+            &[
+                SubscriptionStatus::Cancelled,
+                SubscriptionStatus::Archived,
+            ],
+        ),
+        (
+            SubscriptionStatus::Cancelled,
+            &[SubscriptionStatus::Archived],
+        ),
         (SubscriptionStatus::Archived, &[] as &[SubscriptionStatus]),
     ];
 
@@ -3690,3 +3704,6 @@ mod test_protocol_fee_routing;
 mod test_treasury_split;
 #[cfg(test)]
 mod test_operator;
+
+#[cfg(test)]
+mod test_state_machine_adversarial;
