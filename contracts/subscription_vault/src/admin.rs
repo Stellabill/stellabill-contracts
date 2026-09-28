@@ -1248,3 +1248,64 @@ pub fn do_migrate(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
+
+    #[test]
+    fn test_get_token_decimals_valid() {
+        let env = Env::default();
+        let token = Address::generate(&env);
+        let decimals = 7;
+        
+        env.storage().instance().set(&accepted_token_decimals_key(&token), &decimals);
+        assert_eq!(get_token_decimals(&env, &token), Ok(decimals));
+    }
+
+    #[test]
+    fn test_get_token_decimals_invalid_or_zero_address() {
+        let env = Env::default();
+        // In Soroban, addresses are strictly typed. An uninitialized/unknown address
+        // acts as our "invalid/zero" input. We verify deterministic behavior.
+        let token = Address::generate(&env);
+        
+        // Ensure state is clean before
+        let before_has = env.storage().instance().has(&accepted_token_decimals_key(&token));
+        assert_eq!(before_has, false);
+
+        // Verify deterministic error for unknown address
+        assert_eq!(get_token_decimals(&env, &token), Err(Error::NotFound));
+        
+        // Verify state is unchanged after rejected operation
+        let after_has = env.storage().instance().has(&accepted_token_decimals_key(&token));
+        assert_eq!(before_has, after_has);
+    }
+
+    #[test]
+    fn test_get_token_decimals_auth() {
+        let env = Env::default();
+        let token = Address::generate(&env);
+        env.storage().instance().set(&accepted_token_decimals_key(&token), &18u32);
+        
+        // get_token_decimals has no auth checks (it's a pure read).
+        // If an auth check existed, this would fail without env.mock_all_auths().
+        // We verify it returns successfully without requiring authorization.
+        assert_eq!(get_token_decimals(&env, &token), Ok(18));
+    }
+
+    #[test]
+    fn test_get_token_decimals_boundaries() {
+        let env = Env::default();
+        let token_zero_decimals = Address::generate(&env);
+        let token_max_decimals = Address::generate(&env);
+        
+        env.storage().instance().set(&accepted_token_decimals_key(&token_zero_decimals), &0u32);
+        env.storage().instance().set(&accepted_token_decimals_key(&token_max_decimals), &u32::MAX);
+        
+        assert_eq!(get_token_decimals(&env, &token_zero_decimals), Ok(0));
+        assert_eq!(get_token_decimals(&env, &token_max_decimals), Ok(u32::MAX));
+    }
+}
