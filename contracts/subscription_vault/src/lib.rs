@@ -3689,4 +3689,8 @@ mod test_protocol_fee_routing;
 #[cfg(test)]
 mod test_treasury_split;
 #[cfg(test)]
+mod test_admin_sub_account_label_migration;
+#[cfg(test)]
+mod test_admin_sub_account_label_scan_bound;
+#[cfg(test)]
 mod test_operator;
