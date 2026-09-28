@@ -3690,3 +3690,6 @@ mod test_protocol_fee_routing;
 mod test_treasury_split;
 #[cfg(test)]
 mod test_operator;
+
+#[cfg(test)]
+mod test_calculate_quorum;
