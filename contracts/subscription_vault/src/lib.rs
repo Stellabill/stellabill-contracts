@@ -3488,3 +3488,6 @@ mod test_operator;
 #[cfg(test)]
 mod test_enable_emergency_stop;
 
+#[cfg(test)]
+mod test_recover_stranded_funds;
+
