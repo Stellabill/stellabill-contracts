@@ -27,8 +27,7 @@ use crate::types::{
     CANCELLATION_ESCROW_WINDOW_SECS,
 };
 use soroban_sdk::{
-    testutils::Address as _, testutils::Events as _, testutils::Ledger as _, vec, Address, FromVal,
-    IntoVal, Symbol, Vec,
+    testutils::Address as _, testutils::Events as _, vec, Address, FromVal, IntoVal, Symbol, Vec,
 };
 
 const AMOUNT: i128 = 1_000;
@@ -68,14 +67,6 @@ fn admin_nonce(te: &TestEnv) -> u64 {
         .get_admin_nonce(&te.admin, &DOMAIN_OPERATOR_BATCH_CHARGE)
 }
 
-fn ids(te: &TestEnv, values: &[u32]) -> Vec<u32> {
-    let mut out: Vec<u32> = Vec::new(&te.env);
-    for v in values {
-        out.push_back(*v);
-    }
-    out
-}
-
 fn status(te: &TestEnv, sub_id: u32) -> SubscriptionStatus {
     te.client.get_subscription(&sub_id).status
 }
@@ -109,9 +100,9 @@ fn bulk_cancel_rejects_future_and_max_nonce_without_cancelling() {
     let before_b = te.client.get_subscription(&b);
 
     for nonce in [1u64, 7u64, u64::MAX] {
-        let res =
-            te.client
-                .try_bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a, b]), &nonce);
+        let res = te
+            .client
+            .try_bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a, b], &nonce);
 
         assert_eq!(res, Err(Ok(Error::NonceAlreadyUsed)));
         assert_eq!(admin_nonce(&te), 0, "rejected batch must not advance nonce");
@@ -141,7 +132,7 @@ fn bulk_cancel_fails_closed_when_the_nonce_counter_cannot_advance() {
 
     let res = te
         .client
-        .try_bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a]), &u64::MAX);
+        .try_bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a], &u64::MAX);
 
     assert_eq!(res, Err(Ok(Error::Overflow)));
     assert_eq!(admin_nonce(&te), u64::MAX);
@@ -162,18 +153,18 @@ fn bulk_cancel_releases_the_guard_after_rejected_and_successful_calls() {
     // Rejected call first: the guard must not stay held (Error::Reentrancy).
     assert_eq!(
         te.client
-            .try_bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a]), &9u64),
+            .try_bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a], &9u64),
         Err(Ok(Error::NonceAlreadyUsed))
     );
     let first = te
         .client
-        .bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a]), &0u64);
+        .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a], &0u64);
     assert!(changed(&first.get(0).unwrap()));
 
     // And again after a successful call, with the advanced nonce.
     let second = te
         .client
-        .bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[b]), &1u64);
+        .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, b], &1u64);
     assert!(changed(&second.get(0).unwrap()));
     assert_eq!(admin_nonce(&te), 2);
 }
@@ -241,7 +232,7 @@ fn bulk_cancel_oversized_batch_is_rejected_without_burning_a_nonce() {
     // The untouched nonce is still usable, proving nothing was burned.
     let results = te
         .client
-        .bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a]), &0u64);
+        .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a], &0u64);
     assert!(changed(&results.get(0).unwrap()));
     assert_eq!(admin_nonce(&te), 1);
 }
@@ -298,7 +289,7 @@ fn bulk_cancel_reports_expired_and_missing_ids_without_aborting_the_batch() {
 
     let results = te.client.bulk_cancel_subscriptions(
         &te.admin,
-        &ids(&te.env, &[0u32, expiring, u32::MAX, live]),
+        &vec![&te.env, 0u32, expiring, u32::MAX, live],
         &0u64,
     );
 
@@ -342,7 +333,7 @@ fn bulk_cancel_counts_envelope_for_a_mixed_batch() {
 
     te.client.bulk_cancel_subscriptions(
         &te.admin,
-        &ids(&te.env, &[cancelled, already, u32::MAX, live]),
+        &vec![&te.env, cancelled, already, u32::MAX, live],
         &0u64,
     );
 
@@ -379,7 +370,7 @@ fn bulk_cancel_escrows_each_prepaid_balance_once_and_refunds_exactly_once() {
     // refund can never be escrowed twice.
     let results = te
         .client
-        .bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[a, b, a]), &0u64);
+        .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, a, b, a], &0u64);
 
     assert!(changed(&results.get(0).unwrap()));
     assert!(changed(&results.get(1).unwrap()));
@@ -426,12 +417,12 @@ fn bulk_cancel_of_a_paused_subscription_keeps_the_active_count_consistent() {
 
     // Pausing consumes the same batch nonce, so the cancel must use nonce 1.
     te.client
-        .bulk_pause_subscriptions(&te.admin, &ids(&te.env, &[paused]), &0u64);
+        .bulk_pause_subscriptions(&te.admin, &vec![&te.env, paused], &0u64);
     assert_eq!(te.client.get_subscriber_active_count(&subscriber), 1);
 
     let results =
         te.client
-            .bulk_cancel_subscriptions(&te.admin, &ids(&te.env, &[paused, other]), &1u64);
+            .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, paused, other], &1u64);
 
     assert!(changed(&results.get(0).unwrap()));
     assert!(changed(&results.get(1).unwrap()));
@@ -457,7 +448,7 @@ fn bulk_cancel_by_a_removed_operator_is_rejected_with_state_intact() {
     te.client.set_operator(&te.admin, &operator);
     let first = te
         .client
-        .bulk_cancel_subscriptions(&operator, &ids(&te.env, &[a]), &0u64);
+        .bulk_cancel_subscriptions(&operator, &vec![&te.env, a], &0u64);
     assert!(changed(&first.get(0).unwrap()));
     assert_eq!(te.client.get_operator_nonce(&operator), 1);
 
@@ -469,7 +460,7 @@ fn bulk_cancel_by_a_removed_operator_is_rejected_with_state_intact() {
     // not be able to advance it or cancel anything.
     let res = te
         .client
-        .try_bulk_cancel_subscriptions(&operator, &ids(&te.env, &[b]), &1u64);
+        .try_bulk_cancel_subscriptions(&operator, &vec![&te.env, b], &1u64);
     assert_eq!(res, Err(Ok(Error::Unauthorized)));
     assert_eq!(te.client.get_operator_nonce(&operator), 1);
     assert_eq!(te.client.get_subscription(&b), before);
