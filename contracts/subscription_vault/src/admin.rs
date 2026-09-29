@@ -1681,3 +1681,223 @@ mod get_protocol_fee_bps_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod get_treasury_split_adversarial_tests {
+    use super::*;
+    use crate::test_utils::setup::TestEnv;
+    use soroban_sdk::testutils::Address as _;
+
+    fn entry(env: &Env, bps: u32) -> TreasurySplitEntry {
+        TreasurySplitEntry {
+            beneficiary: Address::generate(env),
+            bps,
+        }
+    }
+
+    fn read_split(te: &TestEnv) -> Option<TreasurySplitConfig> {
+        te.env.as_contract(&te.client.address, || {
+            get_treasury_split(&te.env)
+        })
+    }
+
+    /// Valid call: unset storage returns `None` and does not create state.
+    #[test]
+    fn returns_none_when_unset_and_leaves_storage_unchanged() {
+        let te = TestEnv::default();
+        te.env.as_contract(&te.client.address, || {
+            assert!(get_treasury_split(&te.env).is_none());
+            assert!(!te.env.storage().persistent().has(&DataKey::TreasurySplit));
+            assert!(!te.env.storage().instance().has(&DataKey::TreasurySplit));
+        });
+    }
+
+    /// Valid call: a configured split is returned verbatim.
+    #[test]
+    fn returns_configured_split_verbatim() {
+        let te = TestEnv::default();
+        let a = entry(&te.env, 6_000);
+        let b = entry(&te.env, 4_000);
+        let mut entries = Vec::new(&te.env);
+        entries.push_back(a.clone());
+        entries.push_back(b.clone());
+        let config = TreasurySplitConfig { entries: entries.clone() };
+        te.env.as_contract(&te.client.address, || {
+            write_config(&te.env, &DataKey::TreasurySplit, &config);
+        });
+
+        let got = read_split(&te).expect("split must be present");
+        assert_eq!(got.entries.len(), 2);
+        assert_eq!(got.entries.get(0).unwrap(), a);
+        assert_eq!(got.entries.get(1).unwrap(), b);
+    }
+
+    /// Boundary: a single beneficiary holding all 10_000 bps round-trips.
+    #[test]
+    fn returns_single_full_allocation_split() {
+        let te = TestEnv::default();
+        let only = entry(&te.env, 10_000);
+        let mut entries = Vec::new(&te.env);
+        entries.push_back(only.clone());
+        let config = TreasurySplitConfig { entries };
+        te.env.as_contract(&te.client.address, || {
+            write_config(&te.env, &DataKey::TreasurySplit, &config);
+        });
+
+        let got = read_split(&te).expect("split must be present");
+        assert_eq!(got.entries.len(), 1);
+        assert_eq!(got.entries.get(0).unwrap(), only);
+    }
+
+    /// Read-only: repeated reads do not mutate storage.
+    #[test]
+    fn repeated_reads_do_not_mutate_storage() {
+        let te = TestEnv::default();
+        let a = entry(&te.env, 5_000);
+        let b = entry(&te.env, 5_000);
+        let mut entries = Vec::new(&te.env);
+        entries.push_back(a);
+        entries.push_back(b);
+        let config = TreasurySplitConfig { entries };
+        te.env.as_contract(&te.client.address, || {
+            write_config(&te.env, &DataKey::TreasurySplit, &config);
+        });
+
+        let first = read_split(&te);
+        let second = read_split(&te);
+        assert_eq!(first, second);
+        assert!(te.env.as_contract(&te.client.address, || {
+            te.env.storage().persistent().has(&DataKey::TreasurySplit)
+        }));
+    }
+
+    /// Failure path: `set_treasury_split` rejects an empty entry list and the
+    /// stored split remains unset.
+    #[test]
+    fn set_rejects_empty_entries_and_leaves_split_unset() {
+        let te = TestEnv::default();
+        let empty: Vec<TreasurySplitEntry> = Vec::new(&te.env);
+        assert_eq!(
+            te.client.try_set_treasury_split(&te.admin, &empty),
+            Err(Ok(Error::InvalidFeeBips))
+        );
+        assert!(read_split(&te).is_none());
+    }
+
+    /// Failure path: duplicate beneficiaries are rejected and any previously
+    /// configured split is left untouched.
+    #[test]
+    fn set_rejects_duplicate_beneficiaries_without_overwriting() {
+        let te = TestEnv::default();
+        let existing = entry(&te.env, 10_000);
+        let mut initial = Vec::new(&te.env);
+        initial.push_back(existing.clone());
+        te.client
+            .set_treasury_split(&te.admin, &initial);
+        let before = read_split(&te).expect("split must be present");
+
+        let dup = Address::generate(&te.env);
+        let mut dup_entries = Vec::new(&te.env);
+        dup_entries.push_back(TreasurySplitEntry { beneficiary: dup.clone(), bps: 5_000 });
+        dup_entries.push_back(TreasurySplitEntry { beneficiary: dup, bps: 5_000 });
+        assert_eq!(
+            te.client.try_set_treasury_split(&te.admin, &dup_entries),
+            Err(Ok(Error::InvalidFeeBips))
+        );
+        assert_eq!(read_split(&te), Some(before));
+    }
+
+    /// Failure path: a total that does not equal 10_000 bps is rejected and
+    /// the stored split is unchanged.
+    #[test]
+    fn set_rejects_non_ten_thousand_total_without_overwriting() {
+        let te = TestEnv::default();
+        let existing = entry(&te.env, 10_000);
+        let mut initial = Vec::new(&te.env);
+        initial.push_back(existing);
+        te.client.set_treasury_split(&te.admin, &initial);
+        let before = read_split(&te).expect("split must be present");
+
+        let mut bad = Vec::new(&te.env);
+        bad.push_back(entry(&te.env, 9_999));
+        assert_eq!(
+            te.client.try_set_treasury_split(&te.admin, &bad),
+            Err(Ok(Error::InvalidFeeBips))
+        );
+        assert_eq!(read_split(&te), Some(before));
+    }
+
+    /// Failure path: a zero-bps entry is rejected and the stored split is
+    /// unchanged.
+    #[test]
+    fn set_rejects_zero_bps_entry_without_overwriting() {
+        let te = TestEnv::default();
+        let existing = entry(&te.env, 10_000);
+        let mut initial = Vec::new(&te.env);
+        initial.push_back(existing);
+        te.client.set_treasury_split(&te.admin, &initial);
+        let before = read_split(&te).expect("split must be present");
+
+        let mut bad = Vec::new(&te.env);
+        bad.push_back(entry(&te.env, 0));
+        bad.push_back(entry(&te.env, 10_000));
+        assert_eq!(
+            te.client.try_set_treasury_split(&te.admin, &bad),
+            Err(Ok(Error::InvalidFeeBips))
+        );
+        assert_eq!(read_split(&te), Some(before));
+    }
+
+    /// Unauthorized caller: a non-admin is rejected and the stored split is
+    /// unchanged.
+    #[test]
+    fn set_rejects_non_admin_and_leaves_split_unchanged() {
+        let te = TestEnv::default();
+        let existing = entry(&te.env, 10_000);
+        let mut initial = Vec::new(&te.env);
+        initial.push_back(existing);
+        te.client.set_treasury_split(&te.admin, &initial);
+        let before = read_split(&te).expect("split must be present");
+
+        let attacker = Address::generate(&te.env);
+        let mut attempt = Vec::new(&te.env);
+        attempt.push_back(entry(&te.env, 10_000));
+        assert_eq!(
+            te.client.try_set_treasury_split(&attacker, &attempt),
+            Err(Ok(Error::Forbidden))
+        );
+        assert_eq!(read_split(&te), Some(before));
+    }
+
+    /// `clear_treasury_split` removes the config and `get_treasury_split`
+    /// then returns `None`.
+    #[test]
+    fn clear_removes_split_and_get_returns_none() {
+        let te = TestEnv::default();
+        let mut entries = Vec::new(&te.env);
+        entries.push_back(entry(&te.env, 10_000));
+        te.client.set_treasury_split(&te.admin, &entries);
+        assert!(read_split(&te).is_some());
+
+        te.client.clear_treasury_split(&te.admin);
+        assert!(read_split(&te).is_none());
+    }
+
+    /// Unauthorized caller: `clear_treasury_split` rejects a non-admin and the
+    /// stored split is unchanged.
+    #[test]
+    fn clear_rejects_non_admin_and_leaves_split_unchanged() {
+        let te = TestEnv::default();
+        let mut entries = Vec::new(&te.env);
+        entries.push_back(entry(&te.env, 10_000));
+        te.client.set_treasury_split(&te.admin, &entries);
+        let before = read_split(&te).expect("split must be present");
+
+        let attacker = Address::generate(&te.env);
+        assert_eq!(
+            te.client.try_clear_treasury_split(&attacker),
+            Err(Ok(Error::Forbidden))
+        );
+        assert_eq!(read_split(&te), Some(before));
+    }
+}
