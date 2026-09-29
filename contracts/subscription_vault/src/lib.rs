@@ -3519,6 +3519,8 @@ mod test_treasury_split;
 #[cfg(test)]
 mod test_admin_treasury_change;
 #[cfg(test)]
+mod test_do_submit_proposal;
+#[cfg(test)]
 mod test_operator;
 
 #[cfg(test)]
