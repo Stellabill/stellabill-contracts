@@ -175,6 +175,121 @@ pub mod admin_api;
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements;
 
+#[cfg(test)]
+mod do_set_operator_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup(env: &Env) -> (Address, Address, Address) {
+        env.mock_all_auths();
+        let admin = Address::generate(env);
+        let operator = Address::generate(env);
+        let stranger = Address::generate(env);
+        (admin, operator, stranger)
+    }
+
+    #[test]
+    fn do_set_operator_grants_operator_role() {
+        let env = Env::default();
+        let (admin, operator, _) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+        assert!(!client.is_operator(&operator));
+
+        client.do_set_operator(&admin, &operator, &true);
+        assert!(client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_revokes_operator_role() {
+        let env = Env::default();
+        let (admin, operator, _) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+        client.do_set_operator(&admin, &operator, &true);
+        assert!(client.is_operator(&operator));
+
+        client.do_set_operator(&admin, &operator, &false);
+        assert!(!client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_is_idempotent() {
+        let env = Env::default();
+        let (admin, operator, _) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+        client.do_set_operator(&admin, &operator, &true);
+        client.do_set_operator(&admin, &operator, &true);
+        assert!(client.is_operator(&operator));
+
+        client.do_set_operator(&admin, &operator, &false);
+        client.do_set_operator(&admin, &operator, &false);
+        assert!(!client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_rejects_unauthorized_caller() {
+        let env = Env::default();
+        let (admin, operator, stranger) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let result = client.try_do_set_operator(&stranger, &operator, &true);
+        assert!(result.is_err());
+        assert!(!client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_rejects_operator_self_grant() {
+        let env = Env::default();
+        let (admin, operator, _) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let result = client.try_do_set_operator(&operator, &operator, &true);
+        assert!(result.is_err());
+        assert!(!client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_rejects_before_initialization() {
+        let env = Env::default();
+        let (admin, operator, _) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        let result = client.try_do_set_operator(&admin, &operator, &true);
+        assert!(result.is_err());
+        assert!(!client.is_operator(&operator));
+    }
+
+    #[test]
+    fn do_set_operator_rejected_call_leaves_state_unchanged() {
+        let env = Env::default();
+        let (admin, operator, stranger) = setup(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+        client.do_set_operator(&admin, &operator, &true);
+        assert!(client.is_operator(&operator));
+
+        let result = client.try_do_set_operator(&stranger, &operator, &false);
+        assert!(result.is_err());
+        assert!(client.is_operator(&operator));
+    }
+}
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 pub mod accounting {
@@ -3520,9 +3635,6 @@ mod test_treasury_split;
 mod test_admin_treasury_change;
 #[cfg(test)]
 mod test_operator;
-
-#[cfg(test)]
-mod test_do_set_operator;
 
 #[cfg(test)]
 mod revoke_merchant_adversarial_tests {
