@@ -881,7 +881,7 @@ fn test_subscription_struct_status_field() {
         prepaid_balance: 500_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -903,7 +903,7 @@ fn test_subscription_struct_with_lifetime_cap() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: Some(cap),
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -2185,7 +2185,7 @@ fn test_compute_next_charge_info_active() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2206,7 +2206,7 @@ fn test_compute_next_charge_info_paused() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2227,7 +2227,7 @@ fn test_compute_next_charge_info_cancelled() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2247,7 +2247,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         prepaid_balance: 1_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2976,8 +2976,6 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
-        &None::<u64>,
     );
 
     // Old plan remains unchanged and addressable.
@@ -3017,8 +3015,6 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
-        &None::<u64>,
     );
 
     let sub_id = test_env
@@ -3218,7 +3214,7 @@ fn test_migrate_subscription_requires_plan_origin() {
     assert_eq!(page.subscription_ids.len(), 2);
     assert_eq!(page.subscription_ids.get(0).unwrap(), sub_id);
     assert_eq!(page.subscription_ids.get(1).unwrap(), id2);
-    assert!(!page.has_next);
+    assert!(page.next_start_id.is_none());
 }
 
 /// Subscriber can withdraw remaining prepaid balance after cap-triggered cancellation.
@@ -4392,7 +4388,7 @@ fn test_billing_statements_offset_pagination_newest_first() {
         &true,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
 
     for i in 1..=6 {
         test_env
@@ -4436,7 +4432,7 @@ fn test_billing_statements_cursor_pagination_boundaries() {
         &true,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
 
     for i in 1..=4 {
         test_env
@@ -4487,7 +4483,7 @@ fn test_compaction_prunes_old_statements_and_keeps_recent() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &500_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &500_000_000i128);
 
     for i in 1..=8 {
         test_env
@@ -4756,7 +4752,7 @@ fn test_oracle_enabled_charge_uses_quote_conversion() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &100_000_000i128);
 
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
@@ -4784,7 +4780,7 @@ fn test_oracle_stale_quote_rejected() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &100_000_000i128);
 
     let result = test_env.client.try_charge_subscription(&id);
     assert_eq!(result, Err(Ok(Error::OraclePriceStale)));
@@ -4856,8 +4852,6 @@ fn test_create_subscription_lifetime_cap_less_than_amount_rejected() {
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
-        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -4932,8 +4926,6 @@ fn test_create_subscription_with_token_lifetime_cap_less_than_amount_rejected() 
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
-        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -4972,8 +4964,6 @@ fn test_create_subscription_max_amount_and_cap_succeeds() {
         &INTERVAL,
         &false,
         &Some(i128::MAX),
-    ,
-        &None::<u64>,
     );
     let sub = test_env.client.get_subscription(&id);
     assert_eq!(sub.amount, i128::MAX);
@@ -4992,8 +4982,6 @@ fn test_create_subscription_max_amount_cap_smaller_rejected() {
         &INTERVAL,
         &false,
         &Some(i128::MAX - 1),
-    ,
-        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -6649,7 +6637,7 @@ fn setup_oracle_env<'a>(
         &None::<i128>,
         &None::<u64>,
     );
-    client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
     (id, subscriber, merchant, oracle)
 }
 
@@ -7995,8 +7983,6 @@ fn test_oneoff_lifetime_cap_boundary() {
         &INTERVAL,
         &false,
         &Some(20_000_000i128),
-    ,
-        &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
