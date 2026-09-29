@@ -1628,3 +1628,56 @@ mod rewrite_subscriptions_for_arrears_tests {
         te.client.migrate(&attacker);
     }
 }
+
+#[cfg(test)]
+mod get_protocol_fee_bps_tests {
+    use super::*;
+    use crate::test_utils::setup::TestEnv;
+
+    #[test]
+    fn returns_zero_when_unset() {
+        let te = TestEnv::default();
+        te.env.as_contract(&te.client.address, || {
+            // Nothing set yet, should default to 0
+            assert_eq!(get_protocol_fee_bps(&te.env), 0);
+        });
+    }
+
+    #[test]
+    fn returns_configured_value() {
+        let te = TestEnv::default();
+        let expected_fee = 500u32;
+        
+        te.env.as_contract(&te.client.address, || {
+            write_config(&te.env, &DataKey::FeeBps, &expected_fee);
+            assert_eq!(get_protocol_fee_bps(&te.env), expected_fee);
+        });
+    }
+
+    #[test]
+    fn returns_boundary_value_max() {
+        let te = TestEnv::default();
+        let expected_fee = u32::MAX;
+        
+        te.env.as_contract(&te.client.address, || {
+            write_config(&te.env, &DataKey::FeeBps, &expected_fee);
+            assert_eq!(get_protocol_fee_bps(&te.env), expected_fee);
+        });
+    }
+
+    #[test]
+    fn read_only_does_not_alter_storage() {
+        let te = TestEnv::default();
+        te.env.as_contract(&te.client.address, || {
+            // Record initial storage state
+            let initial_count = te.env.storage().persistent().has(&DataKey::FeeBps);
+            
+            // Perform the read
+            let fee = get_protocol_fee_bps(&te.env);
+            
+            // Verify state is unchanged
+            assert_eq!(fee, 0);
+            assert_eq!(te.env.storage().persistent().has(&DataKey::FeeBps), initial_count);
+        });
+    }
+}
