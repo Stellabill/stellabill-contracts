@@ -2,6 +2,9 @@
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
+#[cfg(test)]
+mod tests;
+
 #![allow(dead_code)]
 
 use crate::types::{
