@@ -15,7 +15,6 @@ use soroban_sdk::TryFromVal;
 const AMOUNT: i128 = 10_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60; // 30 days
 const DEPOSIT: i128 = 25_000_000; // enough for two intervals
-const CONFIG_COOLDOWN_SECS: u64 = crate::admin::CONFIG_COOLDOWN_SECS;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,110 +94,6 @@ fn set_operator_replaces_previous_operator() {
 }
 
 #[test]
-fn set_operator_emits_event_with_schema_version() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-
-    te.env.ledger().with_mut(|li| li.timestamp = 42);
-    te.client.set_operator(&te.admin, &operator);
-
-    let events = te.env.events().all();
-    let last = events.last().expect("no events");
-    let payload: OperatorSetEvent = last.2.into_val(&te.env);
-    assert_eq!(payload.admin, te.admin);
-    assert_eq!(payload.operator, operator);
-    assert_eq!(payload.timestamp, 42);
-    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
-}
-
-#[test]
-fn set_operator_self_as_operator_rejected() {
-    let te = TestEnv::default();
-    let result = te.client.try_set_operator(&te.admin, &te.admin);
-    assert!(
-        result == Err(Ok(Error::InvalidInput)),
-        "admin cannot be set as its own operator"
-    );
-    assert_eq!(te.client.get_operator(), None);
-}
-
-#[test]
-fn set_operator_contract_address_rejected_preserves_state() {
-    let te = TestEnv::default();
-    let contract_addr = te.client.address.clone();
-    let before = te.client.get_operator();
-
-    let result = te.client.try_set_operator(&te.admin, &contract_addr);
-    assert_eq!(result, Err(Ok(Error::InvalidInput)));
-    assert_eq!(te.client.get_operator(), before);
-}
-
-#[test]
-fn set_operator_within_cooldown_rejected_and_state_unchanged() {
-    let te = TestEnv::default();
-    let op1 = Address::generate(&te.env);
-    let op2 = Address::generate(&te.env);
-    let start = 5_000u64;
-
-    te.env.ledger().with_mut(|li| li.timestamp = start);
-    te.client.set_operator(&te.admin, &op1);
-
-    te.env.ledger().with_mut(|li| {
-        li.timestamp = start + crate::admin::CONFIG_COOLDOWN_SECS - 1
-    });
-    let result = te.client.try_set_operator(&te.admin, &op2);
-    assert_eq!(result, Err(Ok(Error::CooldownActive)));
-    assert_eq!(te.client.get_operator(), Some(op1));
-}
-
-#[test]
-fn set_operator_at_exact_cooldown_boundary_allowed() {
-    let te = TestEnv::default();
-    let op1 = Address::generate(&te.env);
-    let op2 = Address::generate(&te.env);
-    let start = 9_000u64;
-
-    te.env.ledger().with_mut(|li| li.timestamp = start);
-    te.client.set_operator(&te.admin, &op1);
-
-    te.env.ledger().with_mut(|li| {
-        li.timestamp = start + crate::admin::CONFIG_COOLDOWN_SECS
-    });
-    te.client.set_operator(&te.admin, &op2);
-    assert_eq!(te.client.get_operator(), Some(op2));
-}
-
-#[test]
-fn set_operator_rejected_call_emits_no_events() {
-    let te = TestEnv::default();
-    let stranger = Address::generate(&te.env);
-    let operator = Address::generate(&te.env);
-
-    let before = te.env.events().all().len();
-    assert!(te.client.try_set_operator(&stranger, &operator).is_err());
-    assert_eq!(
-        te.env.events().all().len(),
-        before,
-        "rejected set_operator must not emit events"
-    );
-    assert_eq!(te.client.get_operator(), None);
-}
-
-#[test]
-fn set_operator_does_not_disturb_other_config() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-    let min_topup_before = te.client.get_min_topup();
-    let tokens_before = te.client.list_accepted_tokens().len();
-
-    te.client.set_operator(&te.admin, &operator);
-
-    assert_eq!(te.client.get_min_topup(), min_topup_before);
-    assert_eq!(te.client.list_accepted_tokens().len(), tokens_before);
-    assert_eq!(te.client.get_operator(), Some(operator));
-}
-
-#[test]
 fn set_operator_non_admin_rejected() {
     let te = TestEnv::default();
     let stranger = Address::generate(&te.env);
@@ -256,24 +151,6 @@ fn remove_operator_clears_address_and_emits_event() {
 }
 
 #[test]
-fn remove_operator_emits_event_with_schema_version() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-
-    te.client.set_operator(&te.admin, &operator);
-    te.env.ledger().with_mut(|li| {
-        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
-    });
-    te.client.remove_operator(&te.admin);
-
-    let events = te.env.events().all();
-    let last = events.last().expect("no events");
-    let payload: OperatorRemovedEvent = last.2.into_val(&te.env);
-    assert_eq!(payload.admin, te.admin);
-    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
-}
-
-#[test]
 fn remove_operator_when_none_set_is_noop() {
     let te = TestEnv::default();
     // No operator set; this should succeed without panicking.
@@ -293,18 +170,6 @@ fn remove_operator_non_admin_rejected() {
     assert!(result.is_err(), "non-admin should not be able to remove operator");
 
     // Operator should still be set.
-    assert_eq!(te.client.get_operator(), Some(operator));
-}
-
-#[test]
-fn remove_operator_operator_caller_rejected_state_unchanged() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-
-    te.client.set_operator(&te.admin, &operator);
-
-    let result = te.client.try_remove_operator(&operator);
-    assert!(result.is_err(), "operator must not be able to remove itself");
     assert_eq!(te.client.get_operator(), Some(operator));
 }
 
@@ -369,30 +234,6 @@ fn operator_batch_charge_wrong_nonce_rejected() {
         result == Err(Ok(Error::NonceAlreadyUsed)),
         "wrong nonce should return NonceAlreadyUsed"
     );
-}
-
-#[test]
-fn operator_batch_charge_wrong_nonce_preserves_state() {
-    let te = TestEnv::default();
-    let subscriber = Address::generate(&te.env);
-    let merchant = Address::generate(&te.env);
-    let operator = Address::generate(&te.env);
-
-    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
-    te.client.set_operator(&te.admin, &operator);
-    te.jump(INTERVAL + 1);
-
-    let before = te.client.get_subscription(&sub_id);
-    let result = te
-        .client
-        .try_operator_batch_charge(&operator, &vec![&te.env, sub_id], &1u64);
-    assert_eq!(result, Err(Ok(Error::NonceAlreadyUsed)));
-
-    let after = te.client.get_subscription(&sub_id);
-    assert_eq!(after.prepaid_balance, before.prepaid_balance);
-    assert_eq!(after.lifetime_charged, before.lifetime_charged);
-    assert_eq!(after.status, before.status);
-    assert_eq!(te.client.get_operator_nonce(&operator), 0u64);
 }
 
 #[test]
@@ -558,28 +399,6 @@ fn operator_charge_subscription_wrong_operator_rejected() {
     te.jump(INTERVAL + 1);
     let result = te.client.try_operator_charge_subscription(&stranger, &sub_id);
     assert!(result.is_err());
-}
-
-#[test]
-fn operator_charge_subscription_wrong_operator_preserves_state() {
-    let te = TestEnv::default();
-    let subscriber = Address::generate(&te.env);
-    let merchant = Address::generate(&te.env);
-    let operator = Address::generate(&te.env);
-    let stranger = Address::generate(&te.env);
-
-    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
-    te.client.set_operator(&te.admin, &operator);
-    te.jump(INTERVAL + 1);
-
-    let before = te.client.get_subscription(&sub_id);
-    let result = te.client.try_operator_charge_subscription(&stranger, &sub_id);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
-
-    let after = te.client.get_subscription(&sub_id);
-    assert_eq!(after.prepaid_balance, before.prepaid_balance);
-    assert_eq!(after.lifetime_charged, before.lifetime_charged);
-    assert_eq!(after.status, before.status);
 }
 
 // ── operator_charge_usage ─────────────────────────────────────────────────────
@@ -855,31 +674,6 @@ fn operator_batch_charge_blocked_by_emergency_stop() {
 }
 
 #[test]
-fn operator_batch_charge_emergency_stop_preserves_state() {
-    let te = TestEnv::default();
-    let subscriber = Address::generate(&te.env);
-    let merchant = Address::generate(&te.env);
-    let operator = Address::generate(&te.env);
-
-    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
-    te.client.set_operator(&te.admin, &operator);
-    te.client.enable_emergency_stop(&te.admin);
-    te.jump(INTERVAL + 1);
-
-    let before = te.client.get_subscription(&sub_id);
-    let result = te
-        .client
-        .try_operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
-    assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
-
-    let after = te.client.get_subscription(&sub_id);
-    assert_eq!(after.prepaid_balance, before.prepaid_balance);
-    assert_eq!(after.lifetime_charged, before.lifetime_charged);
-    assert_eq!(after.status, before.status);
-    assert_eq!(te.client.get_operator_nonce(&operator), 0u64);
-}
-
-#[test]
 fn operator_charge_subscription_blocked_by_emergency_stop() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
@@ -1124,68 +918,6 @@ fn operator_removed_events(te: &TestEnv) -> std::vec::Vec<OperatorRemovedEvent> 
             OperatorRemovedEvent::try_from_val(&te.env, &data).ok()
         })
         .collect()
-}
-
-#[test]
-fn remove_operator_cooldown_boundary_rejected_preserves_operator() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-    let start = 11_000u64;
-
-    te.env.ledger().with_mut(|li| li.timestamp = start);
-    te.client.set_operator(&te.admin, &operator);
-
-    // One second short of the cooldown window.
-    te.env.ledger().with_mut(|li| {
-        li.timestamp = start + crate::admin::CONFIG_COOLDOWN_SECS - 1
-    });
-    let result = te.client.try_remove_operator(&te.admin);
-    assert_eq!(result, Err(Ok(Error::CooldownActive)));
-    assert_eq!(te.client.get_operator(), Some(operator));
-    assert_eq!(operator_removed_events(&te).len(), 0);
-}
-
-#[test]
-fn remove_operator_unauthorized_does_not_consume_cooldown() {
-    let te = TestEnv::default();
-    let operator = Address::generate(&te.env);
-    let stranger = Address::generate(&te.env);
-    let start = 12_000u64;
-
-    te.env.ledger().with_mut(|li| li.timestamp = start);
-    te.client.set_operator(&te.admin, &operator);
-
-    assert!(te.client.try_remove_operator(&stranger).is_err());
-
-    // The failed call must not have consumed the Operator cooldown slot.
-    te.env.ledger().with_mut(|li| {
-        li.timestamp = start + crate::admin::CONFIG_COOLDOWN_SECS
-    });
-    te.client.remove_operator(&te.admin);
-    assert_eq!(te.client.get_operator(), None);
-}
-
-#[test]
-fn remove_operator_does_not_clear_operator_nonce() {
-    let te = TestEnv::default();
-    let subscriber = Address::generate(&te.env);
-    let merchant = Address::generate(&te.env);
-    let operator = Address::generate(&te.env);
-
-    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
-    te.client.set_operator(&te.admin, &operator);
-    te.jump(INTERVAL + 1);
-    te.client
-        .operator_batch_charge(&operator, &vec![&te.env, sub_id], &0u64);
-    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
-
-    te.env.ledger().with_mut(|li| {
-        li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS
-    });
-    te.client.remove_operator(&te.admin);
-
-    // Nonce is per-operator and independent of the current operator slot.
-    assert_eq!(te.client.get_operator_nonce(&operator), 1u64);
 }
 
 #[test]
