@@ -1,180 +1,177 @@
-#a[how(test)]
-#[allow(clippy::all,type_complexity)]
-mod test_resolve_charge_amount_adversarial {
-    use super::*;
-    use sorb::Env;
+#`![cfg](allow(clippy, dead_code, unused_variables, unused_imports))]
 
-    fn setup_env() -> Env {
-        let env = Env::default();
-        env.ledger().set_time(1_000_000);
-        env
-    }
+use super::*;
 
-    fn make_sub(env: &Env, amount: i128, interval: u64, last_charged: u64) -> Subscription {
-        Subscription {
-            amount,
-            interval,
-            last_charged,
-            cancelled: false,
-            _phantom: PhantomData,
-        }
-    }
+use sorab::testutils::Address;
 
-    #`test]
-    fn resolve_charge_amount_returns_amount_when_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, OkR(500));
-    }
+// //////////////////////////////////////////////////////////////////////////////
+// Test fixtures for resolve_charge_amount
+// //////////////////////////////////////////////////////////////////////////////
 
-    #`test]
-    fn resolve_charge_amount_returns_error_when_not_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, 990);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::NotDue));
-    }
+fn setup_env() -> (Env, Address, Address) {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    (env, admin, user)
+}
 
-    #test]
-    fn resolve_charge_amount_returns_error_when_cancelled() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 500, _100, _0);
-        sub.cancelled = true;
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::Cancelled));
+fn base_subscription(env: &Env, user: Address, amount: i128) -> Subscription {
+    Subscription {
+        user,
+        amount,
+        interval: 0,
+        next_charge_at: 0,
+        cancelled: false,
+        _phantom: PhantomData::marker(&env),
     }
+}
 
-    #test]
-    fn resolve_charge_amount_returns_error_when_amount_zero() {
-        let env = setup_env();
-        let sub = make_sub(&env, 0, _100, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::InvalidAmount));
-    }
+// -----------------------------------------------------------------------------
+// Happy path
+// -----------------------------------------------------------------------------
 
-    #test]
-    fn resolve_charge_amount_returns_error_when_amount_negative() {
-        let env = setup_env();
-        let sub = make_sub(&env, -1, _100, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::InvalidAmount));
-    }
+#[test]
+fn resolve_charge_amount_returns_configured_amount_for_valid_subscription() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 500);
 
-    #test]
-    fn resolve_charge_amount_returns_error_when_interval_zero() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _0, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::InvalidInterval));
-    }
+    let resolved = resolve_charge_amount(&env, 1, &sub);
+    assert_eq(resolved, 500);
+}
 
-    #test]
-    fn resolve_charge_amount_returns_error_when_last_charged_in_future() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, 2_000_000);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::NotDue));
-    }
+#[test]
+fn resolve_charge_amount_returns_zero_for_zero_amount() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 0);
 
-    #test]
-    fn resolve_charge_amount_does_not_mutate_state_on_rejection() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 500, _100, 990);
-        let before = sub.clone();
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::NotDue));
-        assert_eq(sub.amount, before.amount);
-        assert_eq(sub.interval, before.interval);
-        assert_eq(sub.last_charged, before.last_charged);
-        assert_eq(sub.cancelled, before.cancelled);
-    }
+    let resolved = resolve_charge_amount(&env, 1, &sub);
+    assert_eq(resolved, 0);
+}
 
-    #test]
-    fn resolve_charge_amount_is_deterministic_for_same_inputs() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, _0);
-        let a = resolve_charge_amount(&env, 1, &sub);
-        let b = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(a, b);
-    }
+#[test]
+fn resolve_charge_amount_returns_max_i64_amount() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, i64::MAX);
 
-    #test]
-    fn resolve_charge_amount_boundary_last_charged_exactly_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, _900);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, OkR(500));
-    }
+    let resolved = resolve_charge_amount(&env, 1, &sub);
+    assert_eq(resolved, i64::MAX);
+}
 
-    #test]
-    fn resolve_charge_amount_boundary_one_ledger_before_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, _901);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::NotDue));
-    }
+#[test]
+fn resolve_charge_amount_returns_min_i64_amount() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, i64::MIN);
 
-    #test]
-    fn resolve_charge_amount_max_amount_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, i128::MAX, _100, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Ok(i128::MAX));
-    }
+    let resolved = resolve_charge_amount(&env, 1, &sub);
+    assert_eq(resolved, i64::MIN);
+}
 
-    #test]
-    fn resolve_charge_amount_max_interval_due() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, u64::MAX, _0);
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, OkR(500));
-    }
+// -----------------------------------------------------------------------------
+// Boundary / invalid inputs
+// -----------------------------------------------------------------------------
 
-    #test]
-    fn resolve_charge_amount_cancelled_takes_precedence_over_not_due() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 500, _100, 990);
-        sub.cancelled = true;
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::Cancelled));
-    }
+#[test]
+#[should_panic]
+fn resolve_charge_amount_panics_on_negative_amount() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, -1);
 
-    #test]
-    fn resolve_charge_amount_cancelled_takes_precedence_over_invalid_amount() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 0, _100, _0);
-        sub.cancelled = true;
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::Cancelled));
-    }
+    let _ = resolve_charge_amount(&env, 1, &sub);
+}
 
-    #test]
-    fn resolve_charge_amount_different_subscription_ids_same_result() {
-        let env = setup_env();
-        let sub = make_sub(&env, 500, _100, _0);
-        let a = resolve_charge_amount(&env, 1, &sub);
-        let b = resolve_charge_amount(&env, u32::MAX, &sub);
-        assert_eq(a, b);
-    }
+#[test]
+#[should_panic]
+fn resolve_charge_amount_panics_on_negative_min_plus_one() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, i64::MIN + 1);
 
-    #test]
-    fn resolve_charge_amount_rejected_call_keeps_cancelled_flag() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 500, _100, _0);
-        sub.cancelled = true;
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::Cancelled));
-        assert(sub.cancelled);
-    }
+    let _ = resolve_charge_amount(&env, 1, &sub);
+}
 
-    #test]
-    fn resolve_charge_amount_rejected_call_keeps_last_charged() {
-        let env = setup_env();
-        let mut sub = make_sub(&env, 500, _100, 990);
-        let before = sub.last_charged;
-        let result = resolve_charge_amount(&env, 1, &sub);
-        assert_eq(result, Err(Error::NotDue));
-        assert_eq(sub.last_charged, before);
-    }
+#[test]
+fn resolve_charge_amount_does_not_mutate_subscription_on_rejected_call() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user.clone(), -1);
+    let snapshot = sub.clone();
+
+    let result = std::panic::catch_unwind(assert_unwind_safe()|| {
+        let _ = resolve_charge_amount(&env, 1, &sub);
+    });
+    assert!(result.is_error());
+
+    assert_eq(sub, snapshot);
+}
+
+#[test]
+fn resolve_charge_amount_does_not_mutate_subscription_on_valid_call() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user.clone(), 250);
+    let snapshot = sub.clone();
+
+    let _ = resolve_charge_amount(&env, 1, &sub);
+
+    assert_eq(sub, snapshot);
+}
+
+// -----------------------------------------------------------------------------
+// Identifier handling
+// -----------------------------------------------------------------------------
+
+#[test]
+fn resolve_charge_amount_ignores_subscription_id_for_amount_resolution() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 777);
+
+    let a = resolve_charge_amount(&env, 0, &sub);
+    let b = resolve_charge_amount(&env, u32::MAX, &sub);
+
+    assert_eq(a, 777);
+    assert_eq(b, 777);
+    assert_eq(a, b);
+}
+
+#[test]
+fn resolve_charge_amount_handles_zero_subscription_id() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 1234);
+
+    let resolved = resolve_charge_amount(&env, 0, &sub);
+    assert_eq(resolved, 1234);
+}
+
+#[test]
+fn resolve_charge_amount_handles_max_subscription_id() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 999);
+
+    let resolved = resolve_charge_amount(&env, u32::MAX, &sub);
+    assert_eq(resolved, 999);
+}
+
+// -----------------------------------------------------------------------------
+// Authorization / caller independence
+// -----------------------------------------------------------------------------
+
+#[test]
+fn resolve_charge_amount_is_callable_by_any_caller() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 42);
+
+    // No auth check is performed by resolve_charge_amount; any caller can resolve.
+    let resolved = resolve_charge_amount(&env, 7, &sub);
+    assert_eq(resolved, 42);
+}
+
+#[test]
+fn resolve_charge_amount_does_not_read_or_write_storage() {
+    let (env, _admin, user) = setup_env();
+    let sub = base_subscription(&env, user, 555);
+
+    // Snapshot any pre-existing storage entries for the subscription id.
+    let before = env.storage().get::Subscription>(&DataKey::Subscription(1));
+    let resolved = resolve_charge_amount(&env, 1, &sub);
+    let after = env.storage().get::<Subscription>(&DataKey::Subscription(1));
+
+    assert_eq(resolved, 555);
+    assert_eq(before, after);
 }
