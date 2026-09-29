@@ -3412,6 +3412,9 @@ mod test_cancellation_escrow;
 mod test_do_respond_dispute;
 
 #[cfg(test)]
+mod test_do_get_subscription_dispute;
+
+#[cfg(test)]
 mod test_usage_limits_required;
 
 #[cfg(test)]
