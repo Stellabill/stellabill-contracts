@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::types::{ProposalKind, OP_REFUND, OP_WITHDRAW};
+use crate::types::{Error, ProposalKind, OP_REFUND, OP_WITHDRAW};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -53,6 +53,200 @@ fn test_add_and_remove_guardians() {
     client.remove_guardian(&admin, &guardian1);
     assert_eq!(client.get_guardian_weight(&guardian1), 0);
     assert_eq!(client.get_guardian_weight(&guardian2), 50);
+}
+
+// ── add_guardian adversarial coverage ──────────────────────────────────────
+
+/// Helper: submit a RotateAdmin proposal and return its id.
+fn submit_rotate_proposal<'a>(
+    env: &'a Env,
+    client: &SubscriptionVaultClient<'a>,
+    eta: u64,
+) -> u32 {
+    let target = Address::generate(env);
+    client.submit_proposal(
+        &ProposalKind::RotateAdmin,
+        &target,
+        &None,
+        &0,
+        &5000,
+        &eta,
+    )
+}
+
+#[test]
+fn test_add_guardian_valid_call_records_weight() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // Precondition: unknown guardian has zero weight.
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+
+    client.add_guardian(&admin, &guardian, &100);
+
+    assert_eq!(client.get_guardian_weight(&guardian), 100);
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 1);
+    assert!(guardians.iter().any(|(g, w)| g == guardian && w == 100));
+}
+
+#[test]
+fn test_add_guardian_zero_weight_is_accepted_and_recorded() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // weight = 0 is the lower boundary; it must be stored, not silently dropped.
+    client.add_guardian(&admin, &guardian, &0);
+
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 1);
+    assert!(guardians.iter().any(|(g, w)| g == guardian && w == 0));
+}
+
+#[test]
+fn test_add_guardian_max_weight_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // u32::MAX is the upper boundary for the weight parameter.
+    client.add_guardian(&admin, &guardian, &u32::MAX);
+
+    assert_eq!(client.get_guardian_weight(&guardian), u32::MAX);
+}
+
+#[test]
+fn test_add_guardian_overwrites_existing_weight() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.add_guardian(&admin, &guardian, &100);
+    assert_eq!(client.get_guardian_weight(&guardian), 100);
+
+    // Re-adding the same guardian must replace the weight, not duplicate the entry.
+    client.add_guardian(&admin, &guardian, &250);
+
+    assert_eq!(client.get_guardian_weight(&guardian), 250);
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 1, "re-adding must not duplicate the guardian");
+    assert!(guardians.iter().any(|(g, w)| g == guardian && w == 250));
+}
+
+#[test]
+fn test_add_guardian_unauthorized_caller_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // A non-admin caller must be rejected with Unauthorized.
+    let result = client.try_add_guardian(&stranger, &guardian, &100);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+
+    // State must be unchanged after the rejected call.
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+    assert_eq!(client.list_guardians().len(), 0);
+}
+
+#[test]
+fn test_add_guardian_after_rotation_old_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.rotate_admin(&admin, &new_admin, &0u64);
+
+    // Old admin lost privileges; add_guardian must be rejected.
+    let result = client.try_add_guardian(&admin, &guardian, &100);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+    assert_eq!(client.list_guardians().len(), 0);
+
+    // New admin can add the guardian.
+    client.add_guardian(&new_admin, &guardian, &100);
+    assert_eq!(client.get_guardian_weight(&guardian), 100);
+}
+
+#[test]
+fn test_add_guardian_does_not_affect_existing_guardians() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.add_guardian(&admin, &guardian1, &100);
+    client.add_guardian(&admin, &guardian2, &50);
+
+    // Existing guardian weights must be preserved.
+    assert_eq!(client.get_guardian_weight(&guardian1), 100);
+    assert_eq!(client.get_guardian_weight(&guardian2), 50);
+    assert_eq!(client.list_guardians().len(), 2);
+}
+
+#[test]
+fn test_add_guardian_does_not_mutate_proposal_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let current_time = env.ledger().timestamp();
+    let eta = current_time + 3600;
+    let proposal_id = submit_rotate_proposal(&env, &client, eta);
+    let before = client.get_proposal(&proposal_id).unwrap();
+
+    client.add_guardian(&admin, &guardian, &100);
+
+    let after = client.get_proposal(&proposal_id).unwrap();
+    assert_eq!(before.kind, after.kind);
+    assert_eq!(before.target, after.target);
+    assert_eq!(before.quorum_bps, after.quorum_bps);
+    assert_eq!(before.executed, after.executed);
+    assert_eq!(client.get_current_proposal_id(), 1);
+}
+
+#[test]
+fn test_add_guardian_does_not_grant_vote_without_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.add_guardian(&admin, &guardian, &100);
+
+    // No proposal exists yet; voting on a nonexistent proposal must fail.
+    let result = client.try_vote_proposal(&0, &true);
+    assert!(result.is_err(), "voting on nonexistent proposal must be rejected");
 }
 
 #[test]

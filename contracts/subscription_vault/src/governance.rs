@@ -712,3 +712,160 @@ mod get_current_proposal_id_tests {
         assert_eq!(client.get_current_proposal_id(), 0);
     }
 }
+
+// ── Adversarial coverage for `add_guardian` ─────────────────────────────────
+//
+// `add_guardian` is the sole write path into the persistent `DataKey::Guardians`
+// map. It must reject zero weights before touching storage, accept the full
+// `u32` weight range (including `u32::MAX`), overwrite existing entries
+// idempotently, and leave the map byte-for-byte unchanged on rejection. These
+// tests pin those properties.
+#[cfg(test)]
+mod add_guardian_tests {
+    use super::*;
+    use crate::{SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    /// Register and initialize a fresh vault. Returns the generated client.
+    fn init_vault<'a>(env: &'a Env) -> SubscriptionVaultClient<'a> {
+        let admin = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(env, &contract_id);
+        client.init(&token, &6, &admin, &10_000_000, &86_400);
+        client
+    }
+
+    /// A fresh vault has no guardians; the first `add_guardian` registers the
+    /// caller with the exact weight supplied.
+    #[test]
+    fn registers_new_guardian_with_exact_weight() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        assert_eq!(client.get_guardian_weight(&guardian), 0);
+        client.add_guardian(&guardian, &guardian, &7);
+        assert_eq!(client.get_guardian_weight(&guardian), 7);
+    }
+
+    /// Weight `0` is rejected and must not create an entry.
+    #[test]
+    fn rejects_zero_weight_and_leaves_state_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        let result = client.try_add_guardian(&guardian, &guardian, &0);
+        assert_eq!(result, Err(Ok(Error::InvalidInput)));
+        assert_eq!(client.get_guardian_weight(&guardian), 0);
+        assert!(client.list_guardians().is_empty());
+    }
+
+    /// The full `u32` weight range is accepted, including `u32::MAX`.
+    #[test]
+    fn accepts_u32_max_weight() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        client.add_guardian(&guardian, &guardian, &u32::MAX);
+        assert_eq!(client.get_guardian_weight(&guardian), u32::MAX);
+    }
+
+    /// Re-adding an existing guardian overwrites the weight in place; the
+    /// guardian count does not grow.
+    #[test]
+    fn overwrites_existing_weight_idempotently() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        client.add_guardian(&guardian, &guardian, &1);
+        client.add_guardian(&guardian, &guardian, &42);
+        assert_eq!(client.get_guardian_weight(&guardian), 42);
+        assert_eq!(client.list_guardians().len(), 1);
+    }
+
+    /// A rejected zero-weight call must not disturb an existing guardian's
+    /// stored weight.
+    #[test]
+    fn rejected_zero_weight_preserves_existing_entry() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        client.add_guardian(&guardian, &guardian, &5);
+        let rejected = client.try_add_guardian(&guardian, &guardian, &0);
+        assert_eq!(rejected, Err(Ok(Error::InvalidInput)));
+        assert_eq!(client.get_guardian_weight(&guardian), 5);
+    }
+
+    /// Multiple distinct guardians are tracked independently.
+    #[test]
+    fn tracks_multiple_guardians_independently() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+
+        client.add_guardian(&a, &a, &3);
+        client.add_guardian(&b, &b, &9);
+        assert_eq!(client.get_guardian_weight(&a), 3);
+        assert_eq!(client.get_guardian_weight(&b), 9);
+        assert_eq!(client.list_guardians().len(), 2);
+    }
+
+    /// `remove_guardian` clears the entry; a subsequent `add_guardian` with a
+    /// fresh weight re-registers the guardian.
+    #[test]
+    fn re_registers_after_removal() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        client.add_guardian(&guardian, &guardian, &4);
+        client.remove_guardian(&guardian);
+        assert_eq!(client.get_guardian_weight(&guardian), 0);
+
+        client.add_guardian(&guardian, &guardian, &8);
+        assert_eq!(client.get_guardian_weight(&guardian), 8);
+    }
+
+    /// `add_guardian` must not consume or advance the proposal id counter.
+    #[test]
+    fn does_not_advance_proposal_counter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let client = init_vault(&env);
+        let guardian = Address::generate(&env);
+
+        assert_eq!(client.get_current_proposal_id(), 0);
+        client.add_guardian(&guardian, &guardian, &1);
+        assert_eq!(client.get_current_proposal_id(), 0);
+
+        let rejected = client.try_add_guardian(&guardian, &guardian, &0);
+        assert_eq!(rejected, Err(Ok(Error::InvalidInput)));
+        assert_eq!(client.get_current_proposal_id(), 0);
+    }
+}
