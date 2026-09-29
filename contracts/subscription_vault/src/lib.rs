@@ -3133,6 +3133,12 @@ impl SubscriptionVault {
         admin::set_treasury_split(&env, admin, entries)
     }
 
+    /// Get the currently configured protocol treasury address, or `None` if
+    /// none has been set. Read-only and requires no authorization.
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        admin::get_treasury(&env)
+    }
+
     /// Get the configured treasury split, or `None` if not set.
     pub fn get_treasury_split(env: Env) -> Option<types::TreasurySplitConfig> {
         admin::get_treasury_split(&env)

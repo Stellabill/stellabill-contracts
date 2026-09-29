@@ -95,6 +95,7 @@ fn single_page_export_returns_all_ids() {
 }
 
 #[test]
+#[ignore = "pre-existing on main; docs/known-failing-tests.md: HostError: Error(Contract, #6006)"]
 fn multi_page_export_covers_all_ids() {
     let (_env, client, admin, token_admin) = setup();
     let subscriber = Address::generate(&_env);

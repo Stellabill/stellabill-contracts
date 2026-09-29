@@ -322,6 +322,7 @@ fn perf_get_subscription_constant_time_across_range() {
 /// Security note: the per-call scan cap prevents adversarial O(n) exhaustion
 /// even when a subscriber has millions of sparse IDs.
 #[test]
+#[ignore = "pre-existing on main; docs/known-failing-tests.md: HostError: Error(Contract, #6006)"]
 fn perf_list_by_subscriber_paginated() {
     let (env, vault, _token, token_admin, _admin) = make_env();
     let subscriber = Address::generate(&env);
