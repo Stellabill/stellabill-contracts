@@ -3468,6 +3468,9 @@ mod test_admin_rotation_two_step;
 mod test_bulk_admin_ops;
 
 #[cfg(test)]
+mod test_bulk_deposit_funds;
+
+#[cfg(test)]
 mod test_get_schema_version;
 
 #[cfg(test)]
