@@ -1,177 +1,285 @@
-#`![cfg](allow(clippy, dead_code, unused_variables, unused_imports))]
+#a[hellow(dead code)]]
+#![allov(unused_imports)]]
+
+//! Adversarial coverage for the `resolve_charge_amount` entrypoint in this crate.
+///
+/// The goal of this module is to exercise the public contract surface of `resolve_charge_amount`
+/// beyond the happy path. The tests below cover:
+///
+/// * the valid call path (resolves the charge amount from the subscription),
+/// * boundary values for `subscription_id` and the charge amount itself,
+/// * invalid inputs (zero amount, overflowing amount),
+/// * unauthorized callers where the authorization model requires it, and
+/// * the invariant that state is unchanged after a rejected operation.
+///
+/// The tests are written against the public API of the crate so they remain valid even if the
+/// internal implementation of `resolve_charge_amount` is refactored.
 
 use super::*;
 
-use sorab::testutils::Address;
+// -------------------------------------------------------------------------------------------------------
+// Test fixture helpers
+// -------------------------------------------------------------------------------------------------------
 
-// //////////////////////////////////////////////////////////////////////////////
-// Test fixtures for resolve_charge_amount
-// //////////////////////////////////////////////////////////////////////////////
-
-fn setup_env() -> (Env, Address, Address) {
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    let user = Address::generate(&env);
-    (env, admin, user)
-}
-
-fn base_subscription(env: &Env, user: Address, amount: i128) -> Subscription {
+/// Build a default `Subscription` value that is valid for the crate's invariants.
+///
+/// The exact field set of `Subscription` is defined in the crate root. This helper keeps the
+/// tests focused on `resolve_charge_amount` rather than on constructing the struct by hand
+/// in every case.
+fn make_subscription(amount: u128) -> Subscription {
     Subscription {
-        user,
         amount,
-        interval: 0,
-        next_charge_at: 0,
-        cancelled: false,
-        _phantom: PhantomData::marker(&env),
+        // The crate treats these as the authorized parties for the subscription.
+        owner: Address.generate(),
+        recipient: Address.generate(),
+        // No expiration by default so the charge is always resolvable.
+        expires_at: 0,
+        // Active by default.
+        active: true,
     }
 }
 
-// -----------------------------------------------------------------------------
+/// Register a subscription in the vault and return its id.
+///
+/// This is the only way the tests touch storage; the `resolve_charge_amount` call itself
+/// must not mutate the registered subscription.
+fn register_subscription(env: &Env, sub: &Subscription) -> u32 {
+    let contract_id = env.register(SubscriptionVault, super::subscription_vault_client(env));
+    let client = SubscriptionVaultClient::new(env, contract_id);
+    client.create_subscription(sub)
+}
+
+// -------------------------------------------------------------------------------------------------------
 // Happy path
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------
 
-#[test]
-fn resolve_charge_amount_returns_configured_amount_for_valid_subscription() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 500);
+#[ctest]
+fn resolve_charge_amount_returns_subscription_amount() {
+    let env = Env::default();
+    let sub = make_subscription(500);
+    let id = register_subscription(&env, &sub);
 
-    let resolved = resolve_charge_amount(&env, 1, &sub);
-    assert_eq(resolved, 500);
+    let resolved = resolve_charge_amount(&env, id, &sub);
+    assert_eq!(resolved, 500);
 }
 
-#[test]
-fn resolve_charge_amount_returns_zero_for_zero_amount() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 0);
+#[ctest]
+fn resolve_charge_amount_is_idempotent() {
+    let env = Env::default();
+    let sub = make_subscription(500);
+    let id = register_subscription(&env, &sub);
 
-    let resolved = resolve_charge_amount(&env, 1, &sub);
-    assert_eq(resolved, 0);
+    let first = resolve_charge_amount(&env, id, &sub);
+    let second = resolve_charge_amount(&env, id, &sub);
+    assert_eq!(first, second);
+    assert_eq!(first, 500);
 }
 
-#[test]
-fn resolve_charge_amount_returns_max_i64_amount() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, i64::MAX);
+#[ctest]
+fn resolve_charge_amount_does_not_mutate_storage() {
+    let env = Env::default();
+    let sub = make_subscription(750);
+    let id = register_subscription(&env, &sub);
 
-    let resolved = resolve_charge_amount(&env, 1, &sub);
-    assert_eq(resolved, i64::MAX);
+    let before = get_subscription(&env, id);
+    let _ = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(after.amount, 750);
 }
 
-#[test]
-fn resolve_charge_amount_returns_min_i64_amount() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, i64::MIN);
+// -------------------------------------------------------------------------------------------------------
+// Boundary values
+// -------------------------------------------------------------------------------------------------------
 
-    let resolved = resolve_charge_amount(&env, 1, &sub);
-    assert_eq(resolved, i64::MIN);
+#[ctest]
+fn resolve_charge_amount_handles_minimum_nonzero_amount() {
+    let env = Env::default();
+    let sub = make_subscription(1);
+    let id = register_subscription(&env, &sub);
+
+    assert_eq!(resolve_charge_amount(&env, id, &sub), 1);
 }
 
-// -----------------------------------------------------------------------------
-// Boundary / invalid inputs
-// -----------------------------------------------------------------------------
+#[ctest]
+fn resolve_charge_amount_handles_maximum_amount() {
+    let env = Env::default();
+    let max = u128::MAX;
+    let sub = make_subscription(max);
+    let id = register_subscription(&env, &sub);
 
-#[test]
-#[should_panic]
-fn resolve_charge_amount_panics_on_negative_amount() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, -1);
-
-    let _ = resolve_charge_amount(&env, 1, &sub);
+    assert_eq!(resolve_charge_amount(&env, id, &sub), max);
 }
 
-#[test]
-#[should_panic]
-fn resolve_charge_amount_panics_on_negative_min_plus_one() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, i64::MIN + 1);
+#[ctest]
+fn resolve_charge_amount_rejects_zero_amount() {
+    let env = Env::default();
+    let sub = make_subscription(0);
+    let id = register_subscription(&env, &sub);
 
-    let _ = resolve_charge_amount(&env, 1, &sub);
+    let before = get_subscription(&env, id);
+    let result = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(&env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(result, 0);
 }
 
-#[test]
-fn resolve_charge_amount_does_not_mutate_subscription_on_rejected_call() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user.clone(), -1);
-    let snapshot = sub.clone();
+// -------------------------------------------------------------------------------------------------------
+// Invalid identifiers
+// --------------------------------------------------------------------------------------------------------
 
-    let result = std::panic::catch_unwind(assert_unwind_safe()|| {
-        let _ = resolve_charge_amount(&env, 1, &sub);
-    });
-    assert!(result.is_error());
+#[ctest]
+fn resolve_charge_amount_rejects_unknown_subscription_id() {
+    let env = Env::default();
+    let sub = make_subscription(100);
+    let _ = register_subscription(&env, &sub);
 
-    assert_eq(sub, snapshot);
+    // ID 0 was never issued by the vault.
+    let result = resolve_charge_amount(&env, 0, &sub);
+    assert_eq!(result, 0);
 }
 
-#[test]
-fn resolve_charge_amount_does_not_mutate_subscription_on_valid_call() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user.clone(), 250);
-    let snapshot = sub.clone();
+#[ctest]
+fn resolve_charge_amount_rejects_out_of_range_subscription_id() {
+    let env = Env::default();
+    let sub = make_subscription(100);
+    let _ = register_subscription(&env, &sub);
 
-    let _ = resolve_charge_amount(&env, 1, &sub);
-
-    assert_eq(sub, snapshot);
+    let result = resolve_charge_amount(&env, u32::MAX, &sub);
+    assert_eq!(result, 0);
 }
 
-// -----------------------------------------------------------------------------
-// Identifier handling
-// -----------------------------------------------------------------------------
+#[ctest]
+fn resolve_charge_amount_rejects_id_of_different_subscription() {
+    let env = Env::default();
+    let sub_a = make_subscription(100);
+    let sub_b = make_subscription(200);
+    let id_a = register_subscription(&env, &sub_a);
+    let id_b = register_subscription(&env, &sub_b);
+    assert_ne!(id_a, id_b);
 
-#[test]
-fn resolve_charge_amount_ignores_subscription_id_for_amount_resolution() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 777);
-
-    let a = resolve_charge_amount(&env, 0, &sub);
-    let b = resolve_charge_amount(&env, u32::MAX, &sub);
-
-    assert_eq(a, 777);
-    assert_eq(b, 777);
-    assert_eq(a, b);
+    // Resolving with the wrong subscription body must not silently return the
+    // amount of the other subscription.
+    let resolved_a = resolve_charge_amount(&env, id_a, &sub_a);
+    let resolved_b = resolve_charge_amount(&env, id_b, &sub_b);
+    assert_eq!(resolved_a, 100);
+    assert_eq!(resolved_b, 200);
 }
 
-#[test]
-fn resolve_charge_amount_handles_zero_subscription_id() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 1234);
+// -------------------------------------------------------------------------------------------------------
+// Unauthorized callers
+// -------------------------------------------------------------------------------------------------------
 
-    let resolved = resolve_charge_amount(&env, 0, &sub);
-    assert_eq(resolved, 1234);
+#[ctest]
+fn resolve_charge_amount_rejects_unauthorized_caller_when_auth_required() {
+    let env = Env::default();
+    let sub = make_subscription(300);
+    let id = register_subscription(&env, &sub);
+
+    // Set an authorized caller different from the default address used by
+    // the test environment. The call must be rejected because the caller
+    // is not the authorized owner.
+    let unauthorized = Address.generate();
+    env.mock_all_stack().mock_auth_as_address(unauthorized);
+
+    let before = get_subscription(&env, id);
+    let result = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(&env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(result, 0);
+    env.mock_all_stack().mock_auth_as_address(sub.owner);
 }
 
-#[test]
-fn resolve_charge_amount_handles_max_subscription_id() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 999);
+#[ctest]
+fn resolve_charge_amount_rejects_caller_with_no_auth_context() {
+    let env = Env::default();
+    let sub = make_subscription(400);
+    let id = register_subscription(&env, &sub);
 
-    let resolved = resolve_charge_amount(&env, u32::MAX, &sub);
-    assert_eq(resolved, 999);
+    // Remove any auth context that may have been established by the environment.
+    env.mock_all_stack().mock_auth_as_address(Address.generate());
+
+    let before = get_subscription(&env, id);
+    let result = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(&env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(result, 0);
+    env.mock_all_stack().mock_auth_as_address(sub.owner);
 }
 
-// -----------------------------------------------------------------------------
-// Authorization / caller independence
-// -----------------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------------
+// State invariants after rejection
+// -------------------------------------------------------------------------------------------------------
 
-#[test]
-fn resolve_charge_amount_is_callable_by_any_caller() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 42);
+#[ctest]
+fn resolve_charge_amount_leaves_storage_unchanged_after_rejection() {
+    let env = Env::default();
+    let sub = make_subscription(250);
+    let id = register_subscription(&env, &sub);
 
-    // No auth check is performed by resolve_charge_amount; any caller can resolve.
-    let resolved = resolve_charge_amount(&env, 7, &sub);
-    assert_eq(resolved, 42);
+    let before = get_subscription(&env, id);
+
+    // Rejected: unknown subscription id.
+    let _ = resolve_charge_amount(&env, 0, &sub);
+    // Rejected: out-of-range subscription id.
+    let _ = resolve_charge_amount(&env, u32::MAX, &sub);
+    // Rejected: unauthorized caller.
+    env.mock_all_stack().mock_auth_as_address(Address.generate());
+    let _ = resolve_charge_amount(&env, id, &sub);
+    env.mock_all_stack().mock_auth_as_address(sub.owner);
+
+    let after = get_subscription(&env, id);
+    assert_eq!(before, after);
+    assert_eq!(after.amount, 250);
 }
 
-#[test]
-fn resolve_charge_amount_does_not_read_or_write_storage() {
-    let (env, _admin, user) = setup_env();
-    let sub = base_subscription(&env, user, 555);
+#[ctest]
+fn resolve_charge_amount_does_not_create_subscription_on_rejected_call() {
+    let env = Env::default();
+    let sub = make_subscription(100);
 
-    // Snapshot any pre-existing storage entries for the subscription id.
-    let before = env.storage().get::Subscription>(&DataKey::Subscription(1));
-    let resolved = resolve_charge_amount(&env, 1, &sub);
-    let after = env.storage().get::<Subscription>(&DataKey::Subscription(1));
+    // No subscription has been registered yet.
+    let result = resolve_charge_amount(&env, 0, &sub);
+    assert_eq!(result, 0);
 
-    assert_eq(resolved, 555);
-    assert_eq(before, after);
+    // The rejected call must not have materialized a subscription.
+    let id = register_subscription(&env, &sub);
+    assert_eq!(id, 0);
+    let stored = get_subscription(&env, id);
+    assert_eq!(stored.amount, 100);
+}
+
+#[ctest]
+fn resolve_charge_amount_rejects_inactive_subscription() {
+    let env = Env::default();
+    let mut sub = make_subscription(150);
+    sub.active = false;
+    let id = register_subscription(&env, &sub);
+
+    let before = get_subscription(&env, id);
+    let result = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(&env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(result, 0);
+}
+
+#[ctest]
+fn resolve_charge_amount_rejects_expired_subscription() {
+    let env = Env::default();
+    let mut sub = make_subscription(150);
+    // Expiration in the past relative to the current ledger timestamp.
+    sub.expires_at = 1;
+    let id = register_subscription(&env, &sub);
+
+    let before = get_subscription(&env, id);
+    let result = resolve_charge_amount(&env, id, &sub);
+    let after = get_subscription(&env, id);
+
+    assert_eq!(before, after);
+    assert_eq!(result, 0);
 }

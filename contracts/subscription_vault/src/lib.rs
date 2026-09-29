@@ -196,6 +196,168 @@ pub mod accounting {
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
+
+    #[cfg(test)]
+    mod resolve_charge_amount_tests {
+        use super::*;
+        use crate::types::{OracleConfig, OracleKind, Subscription, SubscriptionStatus};
+        use soroban_sdk::{testutils::Address as _, Address, Env};
+
+        fn make_sub(env: &Env, amount: i128) -> Subscription {
+            let token = Address::generate(env);
+            Subscription {
+                subscriber: Address::generate(env),
+                merchant: Address::generate(env),
+                token,
+                amount,
+                interval: 0,
+                last_charged: 0,
+                status: SubscriptionStatus::Active,
+                created_at: 0,
+                next_charge_at: 0,
+                paused_at: 0,
+                cancelled_at: 0,
+                grace_period_end: 0,
+                lifetime_charged: 0,
+                charge_count: 0,
+                metadata: None,
+            }
+        }
+
+        #[test]
+        fn disabled_oracle_returns_subscription_amount() {
+            let env = Env::default();
+            let sub = make_sub(&env, 12_345);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Ok(12_345));
+        }
+
+        #[test]
+        fn disabled_oracle_returns_zero_amount() {
+            let env = Env::default();
+            let sub = make_sub(&env, 0);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Ok(0));
+        }
+
+        #[test]
+        fn disabled_oracle_returns_negative_amount() {
+            let env = Env::default();
+            let sub = make_sub(&env, -5);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Ok(-5));
+        }
+
+        #[test]
+        fn disabled_oracle_returns_max_amount() {
+            let env = Env::default();
+            let sub = make_sub(&env, i128::MAX);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Ok(i128::MAX));
+        }
+
+        #[test]
+        fn disabled_oracle_returns_min_amount() {
+            let env = Env::default();
+            let sub = make_sub(&env, i128::MIN);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Ok(i128::MIN));
+        }
+
+        #[test]
+        fn enabled_oracle_with_zero_price_returns_invalid() {
+            let env = Env::default();
+            let sub = make_sub(&env, 100);
+            let cfg = OracleConfig {
+                enabled: true,
+                oracle: None,
+                max_age_seconds: 0,
+                kind: OracleKind::FixedRate,
+                window_secs: 0,
+                fixed_numerator: 0,
+                fixed_denominator: 1,
+            };
+            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Err(Error::OraclePriceInvalid));
+        }
+
+        #[test]
+        fn enabled_oracle_with_overflow_returns_overflow() {
+            let env = Env::default();
+            let sub = make_sub(&env, i128::MAX);
+            let cfg = OracleConfig {
+                enabled: true,
+                oracle: None,
+                max_age_seconds: 0,
+                kind: OracleKind::FixedRate,
+                window_secs: 0,
+                fixed_numerator: 1,
+                fixed_denominator: 1,
+            };
+            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Err(Error::Overflow));
+        }
+
+        #[test]
+        fn enabled_oracle_with_negative_amount_returns_invalid() {
+            let env = Env::default();
+            let sub = make_sub(&env, -100);
+            let cfg = OracleConfig {
+                enabled: true,
+                oracle: None,
+                max_age_seconds: 0,
+                kind: OracleKind::FixedRate,
+                window_secs: 0,
+                fixed_numerator: 1,
+                fixed_denominator: 1,
+            };
+            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Err(Error::OraclePriceInvalid));
+        }
+
+        #[test]
+        fn enabled_oracle_with_zero_amount_returns_invalid() {
+            let env = Env::default();
+            let sub = make_sub(&env, 0);
+            let cfg = OracleConfig {
+                enabled: true,
+                oracle: None,
+                max_age_seconds: 0,
+                kind: OracleKind::FixedRate,
+                window_secs: 0,
+                fixed_numerator: 1,
+                fixed_denominator: 1,
+            };
+            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
+            let result = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(result, Err(Error::OraclePriceInvalid));
+        }
+
+        #[test]
+        fn rejected_call_does_not_mutate_subscription() {
+            let env = Env::default();
+            let sub = make_sub(&env, -100);
+            let original = sub.clone();
+            let cfg = OracleConfig {
+                enabled: true,
+                oracle: None,
+                max_age_seconds: 0,
+                kind: OracleKind::FixedRate,
+                window_secs: 0,
+                fixed_numerator: 1,
+                fixed_denominator: 1,
+            };
+            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
+            let _ = resolve_charge_amount(&env, 1, &sub);
+            assert_eq!(sub.amount, original.amount);
+            assert_eq!(sub.status, original.status);
+            assert_eq!(sub.charge_count, original.charge_count);
+            assert_eq!(sub.lifetime_charged, original.lifetime_charged);
+        }
+    }
     use crate::admin::{read_config, write_config};
     use crate::types::{DataKey, Error, OracleConfig, OracleConfigUpdatedEvent, OracleKind, OracleLivenessEvent, Subscription};
     use soroban_sdk::{Address, Env, Symbol, Vec};
@@ -210,6 +372,8 @@ pub mod oracle {
         _subscription_id: u32,
         sub: &Subscription,
     ) -> Result<i128, Error> {
+        // NOTE: `_subscription_id` is intentionally unused; the subscription
+        // record is passed by reference so callers control storage reads.
         let config = get_oracle_config(env);
         if !config.enabled {
             return Ok(sub.amount);
@@ -243,130 +407,6 @@ pub mod oracle {
         }
 
         Ok(token_amount)
-    }
-
-    #[cfg(test)]
-    mod resolve_charge_amount_tests {
-        use super::*;
-        use crate::types::{OracleConfig, OracleKind, Subscription, SubscriptionStatus};
-        use soroban_sdk::{testutils::Address as _, Address, Env};
-
-        fn make_sub(env: &Env, amount: i128) -> Subscription {
-            Subscription {
-                subscriber: Address::generate(env),
-                merchant: Address::generate(env),
-                token: Address::generate(env),
-                amount,
-                interval_seconds: 0,
-                last_charged: 0,
-                next_charge_at: 0,
-                status: SubscriptionStatus::Active,
-                created_at: 0,
-                cancelled_at: 0,
-                paused_at: 0,
-                expires_at: 0,
-                trial_ends_at: 0,
-                discount_bps: 0,
-                metadata: None,
-            }
-        }
-
-        #[test]
-        fn disabled_oracle_returns_subscription_amount() {
-            let env = Env::default();
-            let sub = make_sub(&env, 12_345);
-            let result = resolve_charge_amount(&env, 1, &sub);
-            assert_eq!(result, Ok(12_345));
-        }
-
-        #[test]
-        fn disabled_oracle_returns_zero_amount_unchanged() {
-            let env = Env::default();
-            let sub = make_sub(&env, 0);
-            let result = resolve_charge_amount(&env, 7, &sub);
-            assert_eq!(result, Ok(0));
-        }
-
-        #[test]
-        fn disabled_oracle_returns_negative_amount_unchanged() {
-            let env = Env::default();
-            let sub = make_sub(&env, -5);
-            let result = resolve_charge_amount(&env, 9, &sub);
-            assert_eq!(result, Ok(-5));
-        }
-
-        #[test]
-        fn disabled_oracle_returns_max_amount_unchanged() {
-            let env = Env::default();
-            let sub = make_sub(&env, i128::MAX);
-            let result = resolve_charge_amount(&env, 11, &sub);
-            assert_eq!(result, Ok(i128::MAX));
-        }
-
-        #[test]
-        fn disabled_oracle_returns_min_amount_unchanged() {
-            let env = Env::default();
-            let sub = make_sub(&env, i128::MIN);
-            let result = resolve_charge_amount(&env, 13, &sub);
-            assert_eq!(result, Ok(i128::MIN));
-        }
-
-        #[test]
-        fn enabled_oracle_with_zero_price_returns_oracle_price_invalid() {
-            let env = Env::default();
-            let sub = make_sub(&env, 100);
-            let cfg = OracleConfig {
-                enabled: true,
-                oracle: None,
-                max_age_seconds: 0,
-                kind: OracleKind::FixedRate,
-                window_secs: 0,
-                fixed_numerator: 0,
-                fixed_denominator: 1,
-            };
-            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
-            let result = resolve_charge_amount(&env, 1, &sub);
-            assert_eq!(result, Err(Error::OraclePriceInvalid));
-        }
-
-        #[test]
-        fn enabled_oracle_with_overflowing_amount_returns_overflow() {
-            let env = Env::default();
-            let sub = make_sub(&env, i128::MAX);
-            let cfg = OracleConfig {
-                enabled: true,
-                oracle: None,
-                max_age_seconds: 0,
-                kind: OracleKind::FixedRate,
-                window_secs: 0,
-                fixed_numerator: 1,
-                fixed_denominator: 1,
-            };
-            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
-            let result = resolve_charge_amount(&env, 1, &sub);
-            assert_eq!(result, Err(Error::Overflow));
-        }
-
-        #[test]
-        fn rejected_call_does_not_mutate_subscription() {
-            let env = Env::default();
-            let sub = make_sub(&env, 100);
-            let original = sub.clone();
-            let cfg = OracleConfig {
-                enabled: true,
-                oracle: None,
-                max_age_seconds: 0,
-                kind: OracleKind::FixedRate,
-                window_secs: 0,
-                fixed_numerator: 0,
-                fixed_denominator: 1,
-            };
-            crate::admin::write_config(&env, &crate::types::DataKey::Oracle, &cfg);
-            let _ = resolve_charge_amount(&env, 1, &sub);
-            assert_eq!(sub.amount, original.amount);
-            assert_eq!(sub.token, original.token);
-            assert_eq!(sub.status, original.status);
-        }
     }
 
     /// Persist oracle configuration. Admin only (caller must have verified auth).
