@@ -44,23 +44,6 @@ mod invariants;
 mod merchant;
 mod metadata;
 pub mod nonce;
-
-#[cfg(test)]
-mod get_admin_nonce_impl_tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-
-    #[test]
-    fn get_admin_nonce_requires_no_authorization() {
-        let env = Env::default();
-        let contract_id = env.register(SubscriptionVault, ());
-        let client = SubscriptionVaultClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        // No auth mocked: read-only query must still succeed.
-        assert_eq!(client.get_admin_nonce(&admin, &0u32), 0);
-    }
-}
-
 pub mod queries;
 mod safe_math;
 pub mod subscription;
@@ -191,76 +174,6 @@ pub mod admin_api;
 
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements;
-
-#[cfg(test)]
-mod get_admin_nonce_tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-
-    fn setup() -> (Env, SubscriptionVaultClient<'static>) {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(SubscriptionVault, ());
-        let client = SubscriptionVaultClient::new(&env, &contract_id);
-        (env, client)
-    }
-
-    #[test]
-    fn get_admin_nonce_returns_zero_before_any_consumption() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let domain: u32 = 0;
-        assert_eq!(client.get_admin_nonce(&admin, &domain), 0);
-    }
-
-    #[test]
-    fn get_admin_nonce_is_deterministic_and_isolated_per_domain() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let domain_a: u32 = 1;
-        let domain_b: u32 = 2;
-
-        let first = client.get_admin_nonce(&admin, &domain_a);
-        let second = client.get_admin_nonce(&admin, &domain_a);
-        assert_eq!(first, second);
-
-        assert_eq!(client.get_admin_nonce(&admin, &domain_b), 0);
-    }
-
-    #[test]
-    fn get_admin_nonce_is_isolated_per_signer() {
-        let (env, client) = setup();
-        let admin_a = Address::generate(&env);
-        let admin_b = Address::generate(&env);
-        let domain: u32 = 7;
-
-        assert_eq!(client.get_admin_nonce(&admin_a, &domain), 0);
-        assert_eq!(client.get_admin_nonce(&admin_b, &domain), 0);
-    }
-
-    #[test]
-    fn get_admin_nonce_handles_boundary_domain_values() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-
-        assert_eq!(client.get_admin_nonce(&admin, &u32::MIN), 0);
-        assert_eq!(client.get_admin_nonce(&admin, &u32::MAX), 0);
-    }
-
-    #[test]
-    fn get_admin_nonce_does_not_mutate_state() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let domain: u32 = 42;
-
-        let before = client.get_admin_nonce(&admin, &domain);
-        let _ = client.get_admin_nonce(&admin, &domain);
-        let after = client.get_admin_nonce(&admin, &domain);
-
-        assert_eq!(before, after);
-        assert_eq!(after, 0);
-    }
-}
 
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
@@ -3591,6 +3504,9 @@ mod test_merchant_whitelist;
 
 #[cfg(test)]
 mod test_split_billing;
+
+#[cfg(test)]
+mod test_get_admin_nonce;
 
 #[cfg(test)]
 mod test_merchant_vacation;
