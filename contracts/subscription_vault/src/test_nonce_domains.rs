@@ -1,31 +1,34 @@
 //! Replay Domain Isolation & Nonce Security Tests
-//!
-//! This module verifies that monotonic nonce counters used across distinct operational domains
-//! do not collide or cross-consume. Specifically, it tests isolation between:
-//! - `DOMAIN_BATCH_CHARGE` (0)
-//! - `DOMAIN_ADMIN_ROTATION` (1)
-//! - `DOMAIN_OPERATOR_BATCH_CHARGE` (2)
-//!
-//! # Security Notes
-//! - **Domain Separation**: In Soroban storage, nonces are indexed by `DataKey::AdminNonce(signer, domain)`.
-//!   Because `domain` is part of the persistent storage key, operators and subscribers can share the same
-//!   counter sequence across different transaction types without risk of cross-domain replay attacks or
-//!   denial-of-service via counter exhaustion.
-//! - **Per-Signer Isolation**: Each `(Address, u32)` tuple maintains an independent counter. An operator
-//!   advancing a nonce for Subscription A cannot affect the nonce counter for Subscription B or any other signer.
-//! - **Overflow Protection**: Checked arithmetic prevents wrapping at `u64::MAX`. Attempting to consume `u64::MAX`
-//!   returns `Error::Overflow` rather than wrapping to zero.
-//! - **Authentication Order**: In production contract methods, authentication (`require_admin_auth` or signature verification)
-//!   MUST occur before nonce checking to prevent unauthenticated callers from probing or advancing nonce counters.
+///
+/// This module verifies that monotonic nonce counters used across distinct operational domains
+/// do not collide or cross-consume. Specifically, it tests isolation between:
+/// - `DOMAIN_BATCH_CHARGE` (0)
+/// - `DOMAIN_ADMIN_ROTATION` (1)
+/// - `DOMAIN_OPERATOR_BATCH_CHARGE` (2)
+///
+/// # Security Notes
+/// - `DOMAIN_ADMIN_ROTATION` is the domain used by `AdminNonce` and the admin
+///   nonce accessors. This module exercises the admin nonce accessors with
+///   adversarial inputs (unauthorized callers, boundary nonces, and domain separation).
+/// - **Domain Separation**: In Soroban storage, nonces are indexed by `DataKey::AdminNonce(signer, domain)`.
+///   Because `domain` is part of the persistent storage key, operators and subscribers can share the same
+///   counter sequence across different transaction types without risk of cross-domain replay attacks or
+///   denial-of-service via counter exhaustion.
+/// - **Per-Signer Isolation**: Each `(Address, u32)` tuple maintains an independent counter. An operator
+///   advancing a nonce for Subscription A cannot affect the nonce counter for Subscription B or any other signer.
+/// - **Overflow Protection**: Checked arithmetic prevents wrapping at `u64::MAX`. Attempting to consume `u64::MAX`
+///   returns `Error::Overflow` rather than wrapping to zero.
+/// - **Authentication Order**: In production contract methods, authentication (`require_admin_auth` or signature verification)
+///   MUST occur before nonce checking to prevent unauthenticated callers from probing or advancing nonce counters.
 
-#![cfg(test)]
+#`!cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use crate::nonce::{
-    compute_next_nonce, consume_nonce, get_nonce,
-    DOMAIN_BATCH_CHARGE, DOMAIN_ADMIN_ROTATION, DOMAIN_OPERATOR_BATCH_CHARGE,
+compute_next_nonce, consume_nonce, get_nonce,
+DOMAIN_BATCH_CHARGE, DOMAIN_ADMIN_ROTATION, DOMAIN_OPERATOR_BATCH_CHARGE,
 };
-use crate::types::{DataKey, Error};
+use crate::types:{DataKey, Error};
 
 /// Verifies core domain isolation as specified in issue #603:
 /// 1. Consume nonce N under domain A.
@@ -60,7 +63,7 @@ fn test_nonce_domain_isolation_core() {
         assert_eq!(get_nonce(&env, &signer, domain_b), nonce_n + 1);
         assert_eq!(get_nonce(&env, &signer, domain_c), nonce_n);
 
-        // 3. Re-consume N under domain A (must reject as domain A is now at N+1)
+        // 3. Re-consume N under domain A" (must reject as domain A is now at N+1)
         assert_eq!(
             consume_nonce(&env, &signer, domain_a, nonce_n),
             Err(Error::NonceAlreadyUsed)
@@ -167,7 +170,7 @@ fn test_nonce_zero_consumption_all_domains() {
     });
 }
 
-/// Edge case test: Nonce overflow at `u64::MAX`.
+/// Edge case test: Nonce overflow at `u64::MAX` for the admin rotation domain.
 /// Verifies that when a nonce reaches `u64::MAX`, any attempt to consume it is rejected with `Error::Overflow`
 /// rather than wrapping to zero and reopening replay vulnerabilities.
 #[test]
@@ -177,7 +180,7 @@ fn test_nonce_max_overflow_domain_isolation() {
     let contract_id = env.register(crate::SubscriptionVault, ());
 
     env.as_contract(&contract_id, || {
-        let domain = DOMAIN_OPERATOR_BATCH_CHARGE;
+        let domain = DOMAIN_ADMIN_ROTATION;
         let key = DataKey::AdminNonce(signer.clone(), domain);
 
         // Artificially seed storage with u64::MAX
@@ -223,5 +226,111 @@ fn test_all_domains_mutual_independence() {
         for (idx, &domain) in all_domains.iter().enumerate() {
             assert_eq!(get_nonce(&env, &signer, domain), (idx as u64) + 1);
         }
+    });
+}
+
+/// Adversarial coverage for the admin nonce accessors.
+///
+/// The admin nonce accessors (`get_nonce`, `consume_nonce`, `compute_next_nonce`) are the
+/// support methods that back the admin rotation flow. This test exercises the
+/// valid calls, boundary values, and rejected operations for the admin domain and
+/// verifies that state is unchanged after every rejected operation.
+#[test]
+fn test_admin_nonce_adversarial_coverage() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let other = Address::generate(&env);
+    let contract_id = env.register(crate::SubscriptionVault, ());
+
+    env.as_contract(&contract_id, || {
+        let domain = DOMAIN_ADMIN_ROTATION;
+
+        // --- Valid call: fresh admin nonce is zero ---
+        assert_eq!(get_nonce(&env, &admin, domain), 0);
+
+        // --- Boundary: consuming nonce 0 succeeds and advances to 1 ---
+        assert_eq!(consume_nonce(&env, &admin, domain, 0), Ok(()));
+        assert_eq!(get_nonce(&env, &admin, domain), 1);
+
+        // --- Rejected: replay of already-consumed nonce 0 ---
+        assert_eq!(
+            consume_nonce(&env, &admin, domain, 0),
+            Err(Error::NonceAlreadyUsed)
+        );
+        // State unchanged after rejected operation
+        assert_eq!(get_nonce(&env, &admin, domain), 1);
+
+        // --- Rejected: skip-ahead nonce 5 ---
+        assert_eq!(
+            consume_nonce(&env, &admin, domain, 5),
+            Err(Error::NonceAlreadyUsed)
+        );
+        assert_eq!(get_nonce(&env, &admin, domain), 1);
+
+        // --- Rejected: backward nonce ---
+        assert_eq!(
+            consume_nonce(&env, &admin, domain, 0),
+            Err(Error::NonceAlreadyUsed)
+        );
+        assert_eq!(get_nonce(&env, &admin, domain), 1);
+
+        // --- Valid: consume the exact next nonce ---
+        assert_eq!(consume_nonce(&env, &admin, domain, 1), Ok(()));
+        assert_eq!(get_nonce(&env, &admin, domain), 2);
+
+        // --- Unauthorized/different signer has an independent counter ---
+        // A different address must not be able to consume the admin's nonce.
+        assert_eq!(get_nonce(&env, &other, domain), 0);
+        assert_eq!(consume_nonce(&env, &other, domain, 0), Ok(()));
+        // Admin's counter is unaffected by the other signer's consumption.
+        assert_eq!(get_nonce(&env, &admin, domain), 2);
+        assert_eq!(get_nonce(&env, &other, domain), 1);
+
+        // --- Boundary: u64::MAX-1 advances to u64::MAX ---
+        let max_minus_one_key = DataKey::AdminNonce(admin.clone(), domain);
+        env.storage().persistent().set(&max_minus_one_key, &(u64::MAX - 1));
+        assert_eq!(get_nonce(&env, &admin, domain), u64::MAX - 1);
+        assert_eq!(consume_nonce(&env, &admin, domain, u64::MAX - 1), Ok(()));
+        assert_eq!(get_nonce(&env, &admin, domain), u64::MAX);
+
+        // --- Boundary: u64::MAX cannot be advanced ---
+        assert_eq!(
+            consume_nonce(&env, &admin, domain, u64::MAX),
+            Err(Error::Overflow)
+        );
+        // State unchanged after overflow rejection
+        assert_eq!(get_nonce(&env, &admin, domain), u64::MAX);
+
+        // --- Pure helper boundary behavior ---
+        assert_eq!(compute_next_nonce(0, 0), Ok(1));
+        assert_eq!(compute_next_nonce(1, 1), Ok(2));
+        assert_eq!(compute_next_nonce(u64::MAX - 1, u64::MAX - 1), Ok(u64::MAX));
+        assert_eq!(compute_next_nonce(u64::MAX, u64::MAX), Err(Error::Overflow));
+    });
+}
+
+/// Verifies that the admin nonce domain is isolated from the other domains.
+#[test]
+fn test_admin_nonce_domain_isolation() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(crate::SubscriptionVault, ());
+
+    env.as_contract(&contract_id, || {
+        // Advance the admin domain by two nonces.
+        assert_eq!(consume_nonce(&env, &admin, DOMAIN_ADMIN_ROTATION, 0), Ok(()));
+        assert_eq!(consume_nonce(&env, &admin, DOMAIN_ADMIN_ROTATION, 1), Ok(()));
+        assert_eq!(get_nonce(&env, &admin, DOMAIN_ADMIN_ROTATION), 2);
+
+        // Other domains remain at zero for the same signer.
+        assert_eq!(get_nonce(&env, &admin, DOMAIN_BATCH_CHARGE), 0);
+        assert_eq!(get_nonce(&env, &admin, DOMAIN_OPERATOR_BATCH_CHARGE), 0);
+
+        // Consuming nonce 0 under a different domain must succeed.
+        assert_eq!(consume_nonce(&env, &admin, DOMAIN_BATCH_CHARGE, 0), Ok(()));
+        assert_eq!(get_nonce(&env, &admin, DOMAIN_BATCH_CHARGE), 1);
+
+        // Admin domain is unaffected by the other domain consumption.
+        assert_eq!(get_nonce(&env, &admin, DOMAIN_ADMIN_ROTATION), 2);
     });
 }

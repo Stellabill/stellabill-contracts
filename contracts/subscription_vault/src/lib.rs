@@ -3506,6 +3506,9 @@ mod test_merchant_whitelist;
 mod test_split_billing;
 
 #[cfg(test)]
+mod test_get_admin_nonce;
+
+#[cfg(test)]
 mod test_merchant_vacation;
 
 #[cfg(test)]
