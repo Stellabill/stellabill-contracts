@@ -55,6 +55,131 @@ fn test_add_and_remove_guardians() {
     assert_eq!(client.get_guardian_weight(&guardian2), 50);
 }
 
+// ── add_guardian adversarial coverage ──────────────────────────────────────
+
+/// Valid call: adding a guardian with a non-zero weight stores the weight and
+/// makes the guardian observable via get_guardian_weight and list_guardians.
+#[test]
+fn test_add_guardian_valid_call_stores_weight() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // Precondition: guardian is not registered.
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+    assert_eq!(client.list_guardians().len(), 0);
+
+    client.add_guardian(&admin, &guardian, &100);
+
+    // Postcondition: weight is stored and guardian is listed exactly once.
+    assert_eq!(client.get_guardian_weight(&guardian), 100);
+    let guardians = client.list_guardians();
+    assert_eq!(guardians.len(), 1);
+    let (listed, weight) = guardians.get(0).unwrap();
+    assert_eq!(listed, guardian);
+    assert_eq!(weight, 100);
+}
+
+/// Boundary: weight = 0 is accepted by add_guardian and stored as-is.
+/// This documents the current contract behavior for the lower boundary.
+#[test]
+fn test_add_guardian_zero_weight_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.add_guardian(&admin, &guardian, &0);
+
+    // Weight 0 is stored; guardian remains queryable.
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+}
+
+/// Boundary: weight = u32::MAX is accepted and stored without truncation.
+#[test]
+fn test_add_guardian_max_weight_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let max_weight = u32::MAX;
+    client.add_guardian(&admin, &guardian, &max_weight);
+
+    assert_eq!(client.get_guardian_weight(&guardian), max_weight);
+}
+
+/// Re-adding an existing guardian overwrites the stored weight rather than
+/// creating a duplicate entry, and the guardian list length stays stable.
+#[test]
+fn test_add_guardian_overwrites_existing_weight() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    client.add_guardian(&admin, &guardian, &100);
+    assert_eq!(client.get_guardian_weight(&guardian), 100);
+
+    client.add_guardian(&admin, &guardian, &250);
+    assert_eq!(client.get_guardian_weight(&guardian), 250);
+
+    // No duplicate entry should be created for the same guardian.
+    let guardians = client.list_guardians();
+    let occurrences = guardians.iter().filter(|(g, _)| g == guardian).count();
+    assert_eq!(occurrences, 1);
+}
+
+/// Unauthorized caller: a non-admin address must not be able to add a guardian.
+/// State must remain unchanged after the rejected call.
+#[test]
+fn test_add_guardian_unauthorized_caller_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    let result = client.try_add_guardian(&attacker, &guardian, &100);
+    assert!(result.is_err(), "non-admin must not add a guardian");
+
+    // State unchanged: no guardian registered.
+    assert_eq!(client.get_guardian_weight(&guardian), 0);
+    assert_eq!(client.list_guardians().len(), 0);
+}
+
+/// Unauthorized caller with a valid admin address but no auth signature must
+/// be rejected by the host auth layer, leaving state unchanged.
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn test_add_guardian_without_auth_rejected() {
+    let env = Env::default();
+    // No mock_all_auths — require_auth() without a signature triggers a host Auth error.
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    client.init(&token_address, &6, &admin, &10_000_000, &86400);
+
+    let _ = client.add_guardian(&admin, &guardian, &100);
+}
+
 #[test]
 fn test_submit_proposal_rotate_admin() {
     let env = Env::default();
