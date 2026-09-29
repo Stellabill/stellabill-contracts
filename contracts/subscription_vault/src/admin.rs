@@ -1248,3 +1248,139 @@ pub fn do_migrate(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+    use soroban_sdk::{token, Address, Env, String};
+    use crate::SubscriptionVault;
+
+    fn setup_env() -> (Env, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let admin = Address::generate(&env);
+        let token_addr = env.register_stellar_asset_contract_v2(admin.clone()).address();
+
+        env.as_contract(&contract_id, || {
+            write_config(&env, &DataKey::Admin, &admin);
+            env.storage().persistent().set(&DataKey::SchemaVersion, &3u32);
+        });
+
+        (env, contract_id, token_addr, admin)
+    }
+
+    #[test]
+    fn test_recover_stranded_funds_success() {
+        let (env, contract_id, token_addr, admin) = setup_env();
+        let recipient = Address::generate(&env);
+        let amount = 5000i128;
+        let recovery_id = String::from_str(&env, "rec_1");
+        let reason = RecoveryReason::UserOverpayment;
+
+        let token_client = token::StellarAssetClient::new(&env, &token_addr);
+        token_client.mint(&contract_id, &10000);
+
+        let res = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(
+                &env,
+                admin.clone(),
+                token_addr.clone(),
+                recipient.clone(),
+                amount,
+                recovery_id.clone(),
+                reason.clone(),
+            )
+        });
+
+        assert_eq!(res, Ok(()));
+
+        let balance = token::Client::new(&env, &token_addr).balance(&recipient);
+        assert_eq!(balance, amount);
+
+        env.as_contract(&contract_id, || {
+            let key = DataKey::Recovery(recovery_id);
+            assert!(env.storage().persistent().has(&key));
+        });
+    }
+
+    #[test]
+    fn test_recover_stranded_funds_unauthorized() {
+        let (env, contract_id, token_addr, _) = setup_env();
+        let fake_admin = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let res = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(
+                &env,
+                fake_admin,
+                token_addr,
+                recipient,
+                1000,
+                String::from_str(&env, "rec"),
+                RecoveryReason::SystemCorrection,
+            )
+        });
+
+        assert_eq!(res, Err(Error::Forbidden));
+    }
+
+    #[test]
+    fn test_recover_stranded_funds_invalid_amount() {
+        let (env, contract_id, token_addr, admin) = setup_env();
+        let recipient = Address::generate(&env);
+        let recovery_id = String::from_str(&env, "rec");
+
+        let token_client = token::StellarAssetClient::new(&env, &token_addr);
+        token_client.mint(&contract_id, &1000);
+
+        let res = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(&env, admin.clone(), token_addr.clone(), recipient.clone(), 0, recovery_id.clone(), RecoveryReason::UserOverpayment)
+        });
+        assert_eq!(res, Err(Error::InvalidRecoveryAmount));
+
+        let res2 = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(&env, admin.clone(), token_addr.clone(), recipient.clone(), -1, recovery_id.clone(), RecoveryReason::UserOverpayment)
+        });
+        assert_eq!(res2, Err(Error::InvalidRecoveryAmount));
+    }
+
+    #[test]
+    fn test_recover_stranded_funds_insufficient_balance() {
+        let (env, contract_id, token_addr, admin) = setup_env();
+        let recipient = Address::generate(&env);
+        
+        let token_client = token::StellarAssetClient::new(&env, &token_addr);
+        token_client.mint(&contract_id, &1000);
+
+        let res = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(&env, admin, token_addr, recipient, 1001, String::from_str(&env, "rec"), RecoveryReason::UserOverpayment)
+        });
+
+        assert_eq!(res, Err(Error::InsufficientBalance));
+    }
+
+    #[test]
+    fn test_recover_stranded_funds_replay() {
+        let (env, contract_id, token_addr, admin) = setup_env();
+        let recipient = Address::generate(&env);
+        let recovery_id = String::from_str(&env, "rec_replay");
+        let token_client = token::StellarAssetClient::new(&env, &token_addr);
+        token_client.mint(&contract_id, &10000);
+
+        let res1 = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(&env, admin.clone(), token_addr.clone(), recipient.clone(), 1000, recovery_id.clone(), RecoveryReason::UserOverpayment)
+        });
+        assert_eq!(res1, Ok(()));
+
+        let res2 = env.as_contract(&contract_id, || {
+            do_recover_stranded_funds(&env, admin.clone(), token_addr.clone(), recipient.clone(), 1000, recovery_id.clone(), RecoveryReason::UserOverpayment)
+        });
+        assert_eq!(res2, Err(Error::Replay));
+
+        assert_eq!(token::Client::new(&env, &token_addr).balance(&recipient), 1000);
+    }
+}
