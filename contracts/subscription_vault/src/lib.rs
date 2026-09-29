@@ -3655,6 +3655,9 @@ mod test_coupon;
 mod test_bulk_admin_ops;
 
 #[cfg(test)]
+mod test_bulk_cancel;
+
+#[cfg(test)]
 mod test_auto_pause;
 
 #[cfg(test)]
