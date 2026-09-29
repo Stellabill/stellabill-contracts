@@ -3590,4 +3590,7 @@ mod test_do_charge_subscription;
 mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
+mod test_set_protocol_fee;
+
+#[cfg(test)]
 mod test_do_propose_admin;
