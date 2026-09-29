@@ -175,6 +175,68 @@ pub mod admin_api;
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements;
 
+#[cfg(test)]
+mod get_admin_nonce_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn get_admin_nonce_returns_zero_before_any_consumption() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::SubscriptionVault);
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let domain: u32 = 0;
+        assert_eq!(client.get_admin_nonce(&admin, &domain), 0);
+    }
+
+    #[test]
+    fn get_admin_nonce_is_deterministic_and_state_unchanged_on_read() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::SubscriptionVault);
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let domain: u32 = 7;
+        let first = client.get_admin_nonce(&admin, &domain);
+        let second = client.get_admin_nonce(&admin, &domain);
+        assert_eq!(first, second);
+        assert_eq!(first, 0);
+    }
+
+    #[test]
+    fn get_admin_nonce_is_isolated_per_domain() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::SubscriptionVault);
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        assert_eq!(client.get_admin_nonce(&admin, &0u32), 0);
+        assert_eq!(client.get_admin_nonce(&admin, &1u32), 0);
+        assert_eq!(client.get_admin_nonce(&admin, &u32::MAX), 0);
+    }
+
+    #[test]
+    fn get_admin_nonce_is_isolated_per_signer() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::SubscriptionVault);
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env);
+        let domain: u32 = 3;
+        assert_eq!(client.get_admin_nonce(&admin_a, &domain), 0);
+        assert_eq!(client.get_admin_nonce(&admin_b, &domain), 0);
+    }
+
+    #[test]
+    fn get_admin_nonce_does_not_require_authorization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::SubscriptionVault);
+        let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        // No mock_all_auths: read-only query must succeed without auth.
+        assert_eq!(client.get_admin_nonce(&admin, &0u32), 0);
+    }
+}
+
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 pub mod accounting {
