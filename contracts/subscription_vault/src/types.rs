@@ -290,8 +290,12 @@ pub enum DataKey {
     MerchantSubAccountList(Address),
     /// Emergency withdraw intent keyed by subscription ID. Discriminant 83.
     EmergencyWithdrawIntent(u32),
-    /// Per-entrypoint reentrancy guard flag (instance). Discriminant 87.
+    /// Merchant vacation window storing (start_ts, end_ts) (instance). Discriminant 85.
+    MerchantVacation(Address),
+    /// Per-entrypoint reentrancy lock flag (instance). Discriminant 86.
     ReentrancyLock(Symbol),
+    /// Multi-beneficiary treasury split configuration. Discriminant 87.
+    TreasurySplit,
 }
 
 impl DataKey {
@@ -354,39 +358,39 @@ impl DataKey {
             DataKey::SubscriptionDispute(_) => 52,
             DataKey::PayoutSchedule(_) => 53,
             DataKey::PendingTreasuryChange => 54,
-            DataKey::TransferIntent(_) => 54,
-            DataKey::Kyc(_) => 55,
-            DataKey::Coupon(_) => 56,
-            DataKey::CouponRedemptions(_) => 57,
-            DataKey::Credential(_) => 58,
-            DataKey::SplitPayees(_) => 59,
-            DataKey::BuyoutPremiumBps => 60,
-            DataKey::MerchantVacation(_) => 62,
-            DataKey::AdminConfigLastChangedAt(_) => 59,
-            DataKey::SubscriberCreateCap => 60,
-            DataKey::SubscriberCreateWindow(_) => 61,
-            DataKey::MerchantWhitelistMode => 62,
-            DataKey::MerchantApproved(_) => 63,
-            DataKey::ChargeSalt(_) => 64,
-            DataKey::ChargeFailureCounter(_) => 65,
-            DataKey::AutoPauseThreshold => 66,
-            DataKey::BuyoutPremiumBps => 67,
-            DataKey::SubCoupon(_) => 68,
-            DataKey::MerchantMultiSig(_) => 69,
-            DataKey::SubscriberActiveCount(_) => 70,
-            DataKey::SubscriberActiveCapOverride(_) => 71,
-            DataKey::TagAllowlist => 72,
-            DataKey::MerchantTags(_) => 73,
-            DataKey::FeeToken => 74,
-            DataKey::CancellationEscrow(_) => 75,
-            DataKey::MerchantFeeBps(_) => 76,
-            DataKey::OraclePriceHistoryMeta(_) => 77,
-            DataKey::OraclePriceHistoryEntry(_, _) => 78,
-            DataKey::DelegatedPayerGrant(_, _) => 79,
-            DataKey::MerchantSubAccount(_, _) => 81,
-            DataKey::MerchantSubAccountList(_) => 82,
-            DataKey::EmergencyWithdrawIntent(_) => 83,
-            DataKey::ReentrancyLock(_) => 87,
+            DataKey::TransferIntent(_) => 55,
+            DataKey::Kyc(_) => 56,
+            DataKey::Coupon(_) => 57,
+            DataKey::CouponRedemptions(_) => 58,
+            DataKey::Credential(_) => 59,
+            DataKey::AdminConfigLastChangedAt(_) => 60,
+            DataKey::SubscriberCreateCap => 61,
+            DataKey::SubscriberCreateWindow(_) => 62,
+            DataKey::MerchantWhitelistMode => 63,
+            DataKey::MerchantApproved(_) => 64,
+            DataKey::ChargeSalt(_) => 65,
+            DataKey::ChargeFailureCounter(_) => 66,
+            DataKey::AutoPauseThreshold => 67,
+            DataKey::BuyoutPremiumBps => 68,
+            DataKey::SubCoupon(_) => 69,
+            DataKey::MerchantMultiSig(_) => 70,
+            DataKey::SubscriberActiveCount(_) => 71,
+            DataKey::SubscriberActiveCapOverride(_) => 72,
+            DataKey::TagAllowlist => 73,
+            DataKey::MerchantTags(_) => 74,
+            DataKey::FeeToken => 75,
+            DataKey::CancellationEscrow(_) => 76,
+            DataKey::MerchantFeeBps(_) => 77,
+            DataKey::OraclePriceHistoryMeta(_) => 78,
+            DataKey::OraclePriceHistoryEntry(_, _) => 79,
+            DataKey::DelegatedPayerGrant(_, _) => 80,
+            DataKey::SplitPayees(_) => 81,
+            DataKey::MerchantSubAccount(_, _) => 82,
+            DataKey::MerchantSubAccountList(_) => 83,
+            DataKey::EmergencyWithdrawIntent(_) => 84,
+            DataKey::MerchantVacation(_) => 85,
+            DataKey::ReentrancyLock(_) => 86,
+            DataKey::TreasurySplit => 87,
         }
     }
 
@@ -436,31 +440,30 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     51, // NextDisputeId
     52, // SubscriptionDispute(u32)
     53, // PayoutSchedule(Address)
-    54, // TransferIntent(u32)
-    59, // BuyoutPremiumBps
-    61, // MerchantMultiSig(Address)
-    62, // MerchantVacation(Address)
-    59, // AdminConfigLastChangedAt(BytesN<32>)
-    60, // SubscriberCreateCap
-    61, // SubscriberCreateWindow(Address)
-    62, // MerchantWhitelistMode
-    63, // MerchantApproved(Address)
-    64, // ChargeSalt(u32)
-    65, // ChargeFailureCounter(u32)
-    66, // AutoPauseThreshold
-    67, // BuyoutPremiumBps
-    69, // MerchantMultiSig(Address)
-    70, // SubscriberActiveCount(Address)
-    71, // SubscriberActiveCapOverride(Address)
-    72, // TagAllowlist
-    73, // MerchantTags(Address)
-    74, // FeeToken
-    76, // MerchantFeeBps(Address)
-    77, // OraclePriceHistoryMeta(Address)
-    78, // OraclePriceHistoryEntry(Address, u32)
-    81, // MerchantSubAccount(Address, Symbol)
-    82, // MerchantSubAccountList(Address)
-    83, // EmergencyWithdrawIntent(u32)
+    54, // PendingTreasuryChange
+    60, // AdminConfigLastChangedAt(BytesN<32>)
+    61, // SubscriberCreateCap
+    62, // SubscriberCreateWindow(Address)
+    63, // MerchantWhitelistMode
+    64, // MerchantApproved(Address)
+    65, // ChargeSalt(u32)
+    66, // ChargeFailureCounter(u32)
+    67, // AutoPauseThreshold
+    68, // BuyoutPremiumBps
+    70, // MerchantMultiSig(Address)
+    71, // SubscriberActiveCount(Address)
+    72, // SubscriberActiveCapOverride(Address)
+    73, // TagAllowlist
+    74, // MerchantTags(Address)
+    75, // FeeToken
+    77, // MerchantFeeBps(Address)
+    78, // OraclePriceHistoryMeta(Address)
+    79, // OraclePriceHistoryEntry(Address, u32)
+    82, // MerchantSubAccount(Address, Symbol)
+    83, // MerchantSubAccountList(Address)
+    85, // MerchantVacation(Address)
+    86, // ReentrancyLock(Symbol)
+    87, // TreasurySplit
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1286,19 +1289,6 @@ pub enum Error {
     /// The cancellation escrow release window has not elapsed yet.
     EscrowNotReleased = 15002,
 
-    // --- Emergency Withdraw (16000-16099) ---
-    /// Emergency withdraw cooldown is still active.
-    EmergencyWithdrawCooldownActive = 16001,
-    /// Emergency withdraw state is invalid for the requested operation.
-    EmergencyWithdrawInvalidState = 16002,
-    /// No emergency withdraw has been requested for this subscription.
-    EmergencyWithdrawNotRequested = 16003,
-    /// Subscription state changed since the emergency withdraw was requested.
-    EmergencyWithdrawStateChanged = 16004,
-
-    // --- Referral (17000-17099) ---
-    /// Self-referral is not allowed.
-    SelfReferralNotAllowed = 17001,
 }
 
 impl Error {
@@ -1547,7 +1537,7 @@ pub struct BillingStatement {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BillingStatementsPage {
     pub statements: Vec<BillingStatement>,
     pub next_cursor: Option<u32>,
@@ -3163,14 +3153,17 @@ pub struct PrepaidQueryResult {
 pub struct AcceptedToken {
     pub token: Address,
     pub decimals: u32,
+    pub added_at: u64,
 }
 
 /// Event emitted when the fee-token override is configured.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeTokenConfiguredEvent {
     pub admin: Address,
     pub fee_token: Option<Address>,
+    pub old_token: Option<Address>,
+    pub new_token: Option<Address>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -3215,14 +3208,16 @@ pub struct SubscriptionPausedEvent {
 pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CancellationEscrow {
     pub subscription_id: u32,
     pub amount: i128,
     pub token: Address,
     pub subscriber: Address,
     pub merchant: Address,
+    pub opened_at: u64,
     pub released_at: u64,
+    pub released: bool,
 }
 
 /// Event emitted when a cancellation escrow is opened.
@@ -3306,12 +3301,15 @@ pub struct SubscriptionTransferredEvent {
 
 /// Transfer intent for subscription transfer flow.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferIntent {
     pub subscription_id: u32,
+    pub from_subscriber: Address,
     pub from: Address,
     pub to: Address,
+    pub created_at: u64,
     pub expires_at: u64,
+    pub executed: bool,
 }
 
 /// Event emitted when a transfer intent is created.
@@ -3336,6 +3334,13 @@ pub struct TransferVetoedEvent {
     pub schema_version: u32,
 }
 
+/// Event emitted when a grace-period buyout is executed.
+// NOTE: GraceBuyoutEvent is already defined above with the canonical fields.
+
+/// Cancellation escrow window in seconds (7 days).
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
+
 
 #[cfg(test)]
 mod event_topic_tests {
@@ -3343,9 +3348,9 @@ mod event_topic_tests {
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
-    use soroban_sdk::{Env, FromVal, Symbol};
-    use soroban_sdk::xdr::ToXdr;
-    use soroban_sdk::testutils::Events;
+    use soroban_sdk::{
+        testutils::Events, xdr::ToXdr, Env, FromVal, Symbol,
+    };
 
     /// The emitted wire representation is part of the indexer-facing contract.
     /// Publish every cached short topic in one transaction and compare each
@@ -3401,3 +3406,4 @@ mod event_topic_tests {
         assert_ne!(long_topic.clone().to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
 }
+

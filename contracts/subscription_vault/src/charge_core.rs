@@ -248,6 +248,7 @@ fn convert_fee(
     }
 }
 
+
 /// Performs a single interval-based charge with optional replay protection.
 pub fn charge_one(
     env: &Env,
@@ -733,6 +734,7 @@ pub fn charge_one(
             sub.last_payment_timestamp = now.max(sub.last_payment_timestamp);
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
+
 
             // Recover from grace period or insufficient balance on successful charge.
             // Clear the grace clock so the next charge window uses fresh timestamps.

@@ -43,7 +43,7 @@ mod idempotency;
 mod invariants;
 mod merchant;
 mod metadata;
-mod nonce;
+pub mod nonce;
 pub mod queries;
 mod safe_math;
 pub mod subscription;
@@ -54,6 +54,7 @@ mod validation;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
+pub use types::NonceConsumedEvent;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
     EVENT_SCHEMA_VERSION,
@@ -61,8 +62,7 @@ pub use types::{
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, CANCELLATION_ESCROW_WINDOW_SECS,
-    is_known_instance_discriminant, AdminConfigChangedEvent,
+    ProtocolFeeConfiguredEvent, CANCELLATION_ESCROW_WINDOW_SECS, EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -971,39 +971,6 @@ impl SubscriptionVault {
         Ok(())
     }
 
-    // ── Merchant Whitelist ──────────────────────────────────────────────────
-
-    /// Set the merchant whitelist mode. Admin only.
-    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
-        merchant::set_whitelist_mode(&env, admin, enabled)
-    }
-
-    /// Get the current merchant whitelist mode.
-    pub fn get_whitelist_mode(env: Env) -> bool {
-        merchant::get_whitelist_mode(&env)
-    }
-
-    /// Check if a merchant is approved under whitelist mode.
-    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
-        merchant::is_merchant_approved(&env, &merchant)
-    }
-
-    /// Approve a merchant under whitelist mode. Admin only.
-    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::approve_merchant(&env, admin, merchant)
-    }
-
-    /// Revoke a merchant under whitelist mode. Admin only.
-    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::revoke_merchant(&env, admin, merchant)
-    }
-
-    // ── Auto-Pause Threshold ────────────────────────────────────────────────
-
-    /// Set the auto-pause threshold. Admin only.
-    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
-        admin::do_set_auto_pause_threshold(&env, admin, threshold)
-    }
 
     // ── Migration / Export ────────────────────────────────────────────────────
 
@@ -2216,36 +2183,7 @@ impl SubscriptionVault {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
         let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
-        let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
-        let new_sub = queries::get_subscription(&env, subscription_id)?;
-
-        let _period_start = old_sub.last_payment_timestamp;
-        let _period_end = timestamp;
-
-        env.events().publish(
-            (types::TOPIC_CHARGED,),
-            SubscriptionChargedEvent {
-                subscription_id,
-                subscriber: old_sub.subscriber,
-                merchant: old_sub.merchant,
-                token: old_sub.token,
-                amount: old_sub.amount,
-                lifetime_charged: new_sub.lifetime_charged,
-                timestamp,
-                period_start: old_sub.last_payment_timestamp,
-                period_end: timestamp,
-                salt: {
-                    let mut salt_buf = [0u8; 20];
-                    salt_buf[..4].copy_from_slice(&subscription_id.to_be_bytes());
-                    salt_buf[4..12].copy_from_slice(&old_sub.last_payment_timestamp.to_be_bytes());
-                    salt_buf[12..20].copy_from_slice(&(env.ledger().sequence() as u64).to_be_bytes());
-                    let salt_input = soroban_sdk::Bytes::from_slice(&env, &salt_buf);
-                    env.crypto().sha256(&salt_input).into()
-                },
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
-            },
-        );
-        Ok(result)
+        charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)
     }
 
     /// Charge metered usage. Admin only.
@@ -3387,6 +3325,8 @@ impl SubscriptionVault {
             .unwrap_or(0u32)
     }
 
+
+
     /// Internal ID allocator.
     fn _next_id(env: &Env) -> Result<u32, Error> {
         let current: u32 = env
@@ -3411,10 +3351,18 @@ mod test_utils;
 mod test_cancellation_escrow;
 
 #[cfg(test)]
+mod test_do_respond_dispute;
+
+#[cfg(test)]
+mod test_do_get_subscription_dispute;
+
+#[cfg(test)]
 mod test_usage_limits_required;
 
 #[cfg(test)]
 mod test_charge_invariants;
+#[cfg(test)]
+mod test_charge_core_adversarial;
 #[cfg(test)]
 mod test_metadata_signed;
 
@@ -3422,6 +3370,8 @@ mod test_metadata_signed;
 mod test_scheduled_cancel;
 #[cfg(test)]
 mod test_subscriber_active_cap;
+#[cfg(test)]
+mod test_subscriber_create_cap;
 #[cfg(test)]
 mod test_statement_compaction;
 
@@ -3438,6 +3388,8 @@ mod test_merchant_full_drain;
 
 #[cfg(test)]
 mod test_validation;
+#[cfg(test)]
+mod test_admin_require_auth_adversarial;
 
 #[cfg(test)]
 mod test_emergency_withdraw;
@@ -3445,16 +3397,36 @@ mod test_emergency_withdraw;
 #[cfg(test)]
 mod test_abi_validators_integration;
 #[cfg(test)]
+mod test_remove_guardian;
+#[cfg(test)]
 mod test_coupon;
+#[cfg(test)]
+mod test_compute_discount_adversarial;
+
+#[cfg(test)]
+mod test_admin_rotation_two_step;
 
 #[cfg(test)]
 mod test_bulk_admin_ops;
 
 #[cfg(test)]
+mod test_get_schema_version;
+
+#[cfg(test)]
 mod test_auto_pause;
+#[cfg(test)]
+mod test_auto_pause_threshold;
+
+#[cfg(test)]
+mod test_admin_auto_pause_threshold;
+
+#[cfg(test)]
+mod test_admin_get_token;
 
 #[cfg(test)]
 mod test_grace_buyout;
+#[cfg(test)]
+mod test_get_buyout_premium_bps;
 
 #[cfg(test)]
 mod test_subscription_transfer;
@@ -3483,7 +3455,81 @@ mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
 #[cfg(test)]
+mod test_do_vote_proposal;
+#[cfg(test)]
+mod test_treasury_split;
+#[cfg(test)]
+mod test_admin_treasury_change;
+#[cfg(test)]
 mod test_operator;
 
 #[cfg(test)]
-mod test_do_migrate;
+mod revoke_merchant_adversarial_tests {
+    use super::{Error, SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env};
+
+    fn setup() -> (Env, SubscriptionVaultClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+        (env, client, admin)
+    }
+
+    #[test]
+    fn admin_revokes_approval_and_repeated_revoke_is_stable() {
+        let (env, client, admin) = setup();
+        let merchant = Address::generate(&env);
+        client.approve_merchant(&admin, &merchant);
+        assert!(client.is_merchant_approved(&merchant));
+
+        client.revoke_merchant(&admin, &merchant);
+        assert!(!client.is_merchant_approved(&merchant));
+
+        client.revoke_merchant(&admin, &merchant);
+        assert!(!client.is_merchant_approved(&merchant));
+    }
+
+    #[test]
+    fn wrong_admin_cannot_revoke_or_change_approval() {
+        let (env, client, admin) = setup();
+        let merchant = Address::generate(&env);
+        let wrong_admin = Address::generate(&env);
+        client.approve_merchant(&admin, &merchant);
+
+        assert_eq!(
+            client.try_revoke_merchant(&wrong_admin, &merchant),
+            Err(Ok(Error::Forbidden))
+        );
+        assert!(client.is_merchant_approved(&merchant));
+    }
+
+    #[test]
+    fn revoke_in_uninitialized_environment_fails_without_approval_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+
+        assert_eq!(
+            client.try_revoke_merchant(&admin, &merchant),
+            Err(Ok(Error::NotInitialized))
+        );
+        assert!(!client.is_merchant_approved(&merchant));
+    }
+}
+mod test_do_charge_subscription;
+
+#[cfg(test)]
+mod test_blocklist_is_blocklisted;
+
+#[cfg(test)]
+mod test_do_propose_admin;
