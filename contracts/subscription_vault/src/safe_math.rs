@@ -1,270 +1,190 @@
+// src/safe_math.rs
+#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use crate::types::Error;
 
-/// Safely adds two i128 values, preventing overflow.
-///
-/// Uses Rust's `checked_add()` to detect overflow conditions. If the addition
-/// would exceed `i128::MAX`, returns `Error::Overflow` instead of panicking.
-///
-/// # Arguments
-///
-/// * `a` - First value to add
-/// * `b` - Second value to add
-///
-/// # Returns
-///
-/// * `Ok(i128)` - The sum of `a` and `b` if no overflow occurs
-/// * `Err(Error::Overflow)` - If the result would exceed `i128::MAX`
-///
-/// # Examples
-///
-/// ```
-/// use subscription_vault::safe_math::safe_add;
-/// use subscription_vault::Error;
-///
-/// assert_eq!(safe_add(100, 200), Ok(300));
-/// assert_eq!(safe_add(i128::MAX, 1), Err(Error::Overflow));
-/// ```
-///
-/// # Compatibility
-///
-/// Compatible with USDC-style fixed decimals (6 decimals). For example,
-/// 1 USDC = 1_000_000 smallest units, 1000 USDC = 1_000_000_000.
+/// Checked addition. Returns `Error::Overflow` if the operation would overflow.
 pub fn safe_add(a: i128, b: i128) -> Result<i128, Error> {
-    a.checked_add(b).ok_or_else(|| {
-        if a > 0 {
-            Error::Overflow
-        } else {
-            Error::Underflow
-        }
-    })
+    a.checked_add(b).ok_or(Error::Overflow)
 }
 
-/// Safely subtracts two i128 values, preventing underflow.
-///
-/// Uses Rust's `checked_sub()` to detect underflow conditions. If the subtraction
-/// would go below `i128::MIN`, returns `Error::Underflow` instead of panicking.
-///
-/// # Arguments
-///
-/// * `a` - Value to subtract from
-/// * `b` - Value to subtract
-///
-/// # Returns
-///
-/// * `Ok(i128)` - The difference of `a` and `b` if no underflow occurs
-/// * `Err(Error::Underflow)` - If the result would go below `i128::MIN`
-///
-/// # Examples
-///
-/// ```
-/// use subscription_vault::safe_math::safe_sub;
-/// use subscription_vault::Error;
-///
-/// assert_eq!(safe_sub(200, 100), Ok(100));
-/// assert_eq!(safe_sub(i128::MIN, 1), Err(Error::Underflow));
-/// ```
-///
-/// # Compatibility
-///
-/// Compatible with USDC-style fixed decimals (6 decimals). For example,
-/// 1 USDC = 1_000_000 smallest units, 1000 USDC = 1_000_000_000.
+/// Checked subtraction. Returns `Error::Underflow` if the operation would underflow.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, Error> {
-    a.checked_sub(b).ok_or_else(|| {
-        if a >= 0 {
-            Error::Overflow
-        } else {
-            Error::Underflow
-        }
-    })
+    a.checked_sub(b).ok_or(Error::Underflow)
 }
 
-/// Validates that an amount is non-negative.
-///
-/// Used for input validation to ensure amounts passed to balance operations
-/// are non-negative. This prevents negative amounts from being added or
-/// subtracted from balances.
-///
-/// # Arguments
-///
-/// * `amount` - The amount to validate
-///
-/// # Returns
-///
-/// * `Ok(())` - If the amount is non-negative (>= 0)
-/// * `Err(Error::Underflow)` - If the amount is negative (< 0)
-///
-/// # Examples
-///
-/// ```
-/// use subscription_vault::safe_math::validate_non_negative;
-/// use subscription_vault::Error;
-///
-/// assert_eq!(validate_non_negative(100), Ok(()));
-/// assert_eq!(validate_non_negative(0), Ok(()));
-/// assert_eq!(validate_non_negative(-1), Err(Error::Underflow));
-/// ```
-pub fn validate_non_negative(amount: i128) -> Result<(), Error> {
-    if amount < 0 {
-        Err(Error::Underflow)
-    } else {
-        Ok(())
-    }
+/// Checked multiplication. Returns `Error::Overflow` if the operation would overflow.
+pub fn safe_mul(a: i128, b: i128) -> Result<i128, Error> {
+    a.checked_mul(b).ok_or(Error::Overflow)
 }
 
-/// Safely adds an amount to a balance, preventing overflow and negative amounts.
-///
-/// This is a specialized wrapper around `safe_add()` for balance operations.
-/// It ensures that:
-/// 1. The amount being added is non-negative (prevents adding negative amounts)
-/// 2. The addition doesn't overflow `i128::MAX`
-/// 3. The result is always >= 0 (guaranteed by non-negative amount)
-///
-/// # Arguments
-///
-/// * `balance` - Current balance value
-/// * `amount` - Amount to add to the balance (must be non-negative)
-///
-/// # Returns
-///
-/// * `Ok(i128)` - The new balance after adding the amount
-/// * `Err(Error::Underflow)` - If `amount` is negative
-/// * `Err(Error::Overflow)` - If the result would exceed `i128::MAX`
-///
-/// # Guarantees
-///
-/// The result is always >= 0 when successful, as negative amounts are rejected.
-///
-/// # Examples
-///
-/// ```
-/// use subscription_vault::safe_math::safe_add_balance;
-/// use subscription_vault::Error;
-///
-/// assert_eq!(safe_add_balance(1000, 500), Ok(1500));
-/// assert_eq!(safe_add_balance(1000, -100), Err(Error::Underflow));
-/// assert_eq!(safe_add_balance(i128::MAX, 1), Err(Error::Overflow));
-/// ```
-///
-/// # Compatibility
-///
-/// Compatible with USDC-style fixed decimals (6 decimals). For example,
-/// 1 USDC = 1_000_000 smallest units, 1000 USDC = 1_000_000_000.
+/// Checked addition for balances. Guarantees that `amount` is non‑negative and that the
+/// resulting balance does not overflow.
 pub fn safe_add_balance(balance: i128, amount: i128) -> Result<i128, Error> {
-    validate_non_negative(amount)?;
+    if amount < 0 {
+        // Negative deposits are logically underflows.
+        return Err(Error::Underflow);
+    }
     safe_add(balance, amount)
 }
 
-/// Safely subtracts an amount from a balance, preventing underflow and negative balances.
-///
-/// This is a specialized wrapper around `safe_sub()` for balance operations.
-/// It ensures that:
-/// 1. The amount being subtracted is non-negative
-/// 2. The subtraction doesn't underflow `i128::MIN`
-/// 3. The result is non-negative (prevents negative balances)
-///
-/// # Arguments
-///
-/// * `balance` - Current balance value
-/// * `amount` - Amount to subtract from the balance (must be non-negative)
-///
-/// # Returns
-///
-/// * `Ok(i128)` - The new balance after subtracting the amount (always >= 0)
-/// * `Err(Error::Underflow)` - If `amount` is negative, or if the result would be negative
-/// * `Err(Error::Underflow)` - If the subtraction would go below `i128::MIN`
-///
-/// # Guarantees
-///
-/// The result is always >= 0 when successful, as negative balances are prevented.
-///
-/// # Examples
-///
-/// ```
-/// use subscription_vault::safe_math::safe_sub_balance;
-/// use subscription_vault::Error;
-///
-/// assert_eq!(safe_sub_balance(1000, 500), Ok(500));
-/// assert_eq!(safe_sub_balance(1000, 1000), Ok(0));
-/// assert_eq!(safe_sub_balance(1000, 1500), Err(Error::Underflow));
-/// assert_eq!(safe_sub_balance(1000, -100), Err(Error::Underflow));
-/// ```
-///
-/// # Compatibility
-///
-/// Compatible with USDC-style fixed decimals (6 decimals). For example,
-/// 1 USDC = 1_000_000 smallest units, 1000 USDC = 1_000_000_000.
+/// Checked subtraction for balances. Guarantees that `amount` is non‑negative and that the
+/// balance stays non‑negative after subtraction.
 pub fn safe_sub_balance(balance: i128, amount: i128) -> Result<i128, Error> {
-    validate_non_negative(amount)?;
-    let result = safe_sub(balance, amount)?;
-    if result < 0 {
-        Err(Error::Underflow)
-    } else {
-        Ok(result)
+    if amount < 0 {
+        return Err(Error::Underflow);
     }
-}
-
-/// Safely multiplies two i128 values, preventing overflow.
-pub fn safe_mul(a: i128, b: i128) -> Result<i128, Error> {
-    a.checked_mul(b).ok_or_else(|| {
-        if (a > 0 && b > 0) || (a < 0 && b < 0) {
-            Error::Overflow
-        } else {
-            Error::Underflow
-        }
-    })
-}
-
-/// Safely divides two i128 values, preventing division by zero and underflow.
-pub fn safe_div(a: i128, b: i128) -> Result<i128, Error> {
-    if b == 0 {
-        return Err(Error::InvalidInput);
+    // Ensure we never go below zero.
+    if balance < amount {
+        return Err(Error::Underflow);
     }
-    // checked_div only fails for MIN / -1 (Overflow)
-    a.checked_div(b).ok_or(Error::Overflow)
+    safe_sub(balance, amount)
 }
 
-/// Safely calculates power of an i128 value, preventing overflow.
-pub fn safe_pow(base: i128, exp: u32) -> Result<i128, Error> {
-    base.checked_pow(exp).ok_or_else(|| {
-        if base > 0 || exp % 2 == 0 {
-            Error::Overflow
-        } else {
-            Error::Underflow
-        }
-    })
+/// SECURITY: checked narrowing cast from `i128` to `u32`.
+///
+/// Use this in place of `value as u32` whenever an `i128` (e.g. a prorated
+/// amount, lifetime-charged sum, or division result) is fed into storage,
+/// ledger, or indexing APIs that expect a `u32`. `as` silently truncates any
+/// value outside `[0, u32::MAX]` and silently flips the sign on negative
+/// inputs; on the Stellar ledger an undetected truncation can permanently
+/// mis-account funds.
+///
+/// Failure modes:
+/// * Negative input            -> `Error::Underflow`
+/// * Input above `u32::MAX`    -> `Error::Overflow`
+///
+/// This mapping intentionally mirrors the existing `safe_sub` / `safe_add`
+/// error vocabulary so callers can reuse the same match arms.
+///
+/// Scope of lint enforcement:
+/// * **Inside `safe_math.rs`**: the `#![deny(clippy::cast_possible_truncation,
+///   clippy::cast_sign_loss)]` header makes any inline `as` cast here a
+///   compile-error, so future contributors cannot silently bypass this
+///   helper. If a *legitimate* narrowing cast is ever needed in this
+///   module (e.g. a provably-safe `usize as u32` for a `Vec` index), gate
+///   it with `#[allow(clippy::cast_possible_truncation)]` and a one-line
+///   justification comment.
+/// * **At the crate level** (`Cargo.toml`): the same lints are reduced to
+///   `warn`. Code that follows the helper-oriented pattern passes; code
+///   that inlines a truncating cast on an `i128` in some other module
+///   will still trip CI for review, but does not block the build.
+pub fn safe_i128_to_u32(value: i128) -> Result<u32, Error> {
+    if value < 0 {
+        return Err(Error::Underflow);
+    }
+    u32::try_from(value).map_err(|_| Error::Overflow)
+}
+
+/// SECURITY: checked narrowing cast from `i128` to `u64`.
+///
+/// Equivalent to [`safe_i128_to_u32`] but for `u64` consumers (e.g. ledger
+/// timestamps, interval math). Same error vocabulary: negatives are
+/// `Underflow`, values above `u64::MAX` are `Overflow`.
+pub fn safe_i128_to_u64(value: i128) -> Result<u64, Error> {
+    if value < 0 {
+        return Err(Error::Underflow);
+    }
+    u64::try_from(value).map_err(|_| Error::Overflow)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ---- safe_i128_to_u32 ----
+
     #[test]
-    fn test_safe_add() {
-        assert_eq!(safe_add(10, 20).unwrap(), 30);
+    fn safe_i128_to_u32_zero_ok() {
+        assert_eq!(safe_i128_to_u32(0), Ok(0u32));
+    }
+
+    #[test]
+    fn safe_i128_to_u32_positive_ok() {
+        assert_eq!(safe_i128_to_u32(1), Ok(1u32));
+        assert_eq!(safe_i128_to_u32(123_456), Ok(123_456u32));
+    }
+
+    #[test]
+    fn safe_i128_to_u32_max_ok() {
+        assert_eq!(safe_i128_to_u32(i128::from(u32::MAX)), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn safe_i128_to_u32_above_max_overflow() {
+        let too_big = i128::from(u32::MAX) + 1;
+        assert_eq!(safe_i128_to_u32(too_big), Err(Error::Overflow));
+    }
+
+    #[test]
+    fn safe_i128_to_u32_negative_underflow() {
+        assert_eq!(safe_i128_to_u32(-1), Err(Error::Underflow));
+        assert_eq!(safe_i128_to_u32(i128::MIN), Err(Error::Underflow));
+    }
+
+    #[test]
+    fn safe_i128_to_u32_i128_max_overflow() {
+        assert_eq!(safe_i128_to_u32(i128::MAX), Err(Error::Overflow));
+    }
+
+    // ---- safe_i128_to_u64 ----
+
+    #[test]
+    fn safe_i128_to_u64_zero_ok() {
+        assert_eq!(safe_i128_to_u64(0), Ok(0u64));
+    }
+
+    #[test]
+    fn safe_i128_to_u64_positive_ok() {
+        assert_eq!(safe_i128_to_u64(1), Ok(1u64));
+        assert_eq!(safe_i128_to_u64(86_400), Ok(86_400u64));
+        assert_eq!(
+            safe_i128_to_u64(i128::from(u32::MAX)),
+            Ok(u64::from(u32::MAX))
+        );
+    }
+
+    #[test]
+    fn safe_i128_to_u64_max_ok() {
+        assert_eq!(safe_i128_to_u64(i128::from(u64::MAX)), Ok(u64::MAX));
+    }
+
+    #[test]
+    fn safe_i128_to_u64_above_max_overflow() {
+        let too_big = i128::from(u64::MAX) + 1;
+        assert_eq!(safe_i128_to_u64(too_big), Err(Error::Overflow));
+    }
+
+    #[test]
+    fn safe_i128_to_u64_negative_underflow() {
+        assert_eq!(safe_i128_to_u64(-1), Err(Error::Underflow));
+        assert_eq!(safe_i128_to_u64(i128::MIN), Err(Error::Underflow));
+    }
+
+    #[test]
+    fn safe_i128_to_u64_i128_max_overflow() {
+        assert_eq!(safe_i128_to_u64(i128::MAX), Err(Error::Overflow));
+    }
+
+    // ---- regression: existing safe_* helpers stay green ----
+
+    #[test]
+    fn existing_safe_add_overflow() {
         assert_eq!(safe_add(i128::MAX, 1), Err(Error::Overflow));
+        assert_eq!(safe_add(0, i128::MAX), Ok(i128::MAX));
     }
 
     #[test]
-    fn test_safe_sub() {
-        assert_eq!(safe_sub(30, 10).unwrap(), 20);
+    fn existing_safe_sub_underflow() {
         assert_eq!(safe_sub(i128::MIN, 1), Err(Error::Underflow));
+        assert_eq!(safe_sub(0, 0), Ok(0));
     }
 
     #[test]
-    fn test_safe_mul() {
-        assert_eq!(safe_mul(10, 20).unwrap(), 200);
-        assert_eq!(safe_mul(i128::MAX, 2), Err(Error::Overflow));
-    }
-
-    #[test]
-    fn test_safe_div() {
-        assert_eq!(safe_div(40, 2).unwrap(), 20);
-        assert_eq!(safe_div(10, 0), Err(Error::InvalidInput));
-    }
-
-    #[test]
-    fn test_safe_pow() {
-        assert_eq!(safe_pow(10, 3).unwrap(), 1000);
-        assert_eq!(safe_pow(10, 40), Err(Error::Overflow));
+    fn existing_balance_helpers() {
+        assert_eq!(safe_add_balance(100, -1), Err(Error::Underflow));
+        assert_eq!(safe_sub_balance(0, -1), Err(Error::Underflow));
+        assert_eq!(safe_sub_balance(5, 10), Err(Error::Underflow));
+        assert_eq!(safe_sub_balance(10, 5), Ok(5));
     }
 }

@@ -1,0 +1,11 @@
+topic: ("created", <subscription_id>)
+data:
+  subscription_id: <u32>
+  subscriber: <Address>
+  merchant: <Address>
+  token: <Address>
+  amount: <i128>
+  interval_seconds: <u64>
+  lifetime_cap: <Option<i128>>
+  expires_at: <Option<u64>>
+  timestamp: <u64>

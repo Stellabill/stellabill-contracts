@@ -2,6 +2,12 @@
 members = ["contracts/subscription_vault"]
 resolver = "2"
 
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
 [profile.release]
 opt-level = "z"
 lto = true

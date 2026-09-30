@@ -1,0 +1,83 @@
+# cargo-deny configuration.
+#
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Keep the dependency graph as-is; do not merge duplicates.
+# Duplicate deps with differing semver are flagged separately.
+multiple-versions = "deny"
+
+[advisories]
+# The path where advisory databases are cloned.
+db-path = "~/.cargo/advisory-dbs"
+# URL of the advisory database to clone.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# If the advisory database is stale (older than this number of days),
+# cargo-deny will refuse to run. Set to 0 to disable staleness checks.
+db-staleness-backoff-days = 7
+# If a vulnerability has an unpatched advisory with a severity >= this,
+# the build fails. Legal values: "low", "medium", "high", "critical".
+severity-threshold = "low"
+# Ignore advisories that have been reviewed and accepted.
+# Format: "RUSTSEC-YYYY-NNNN"
+# This section is intentionally empty — we fail the build on any advisory.
+# As advisories are reviewed and addressed, they can be added here to unblock CI.
+ignore = []
+
+[licenses]
+# Deny any license not in the allow list below.
+unlicensed = "deny"
+# Blanket-allow common OSS licenses used by Stellar/Soroban tooling.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",
+    "ISC",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "Zlib",
+    "0BSD",
+    "MPL-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CC-BY-4.0",
+    "OpenSSL",
+    "Unlicense",
+]
+# Confidence threshold for license text detection (0.0 – 1.0).
+confidence-threshold = 0.8
+# Allow exceptions for specific crates with non-standard licenses.
+exceptions = [
+    # Allow ring to use its custom license (also ISC-like).
+    { name = "ring", allow = ["ISC"] },
+]
+
+[sources]
+# Deny crates from unknown or private registries.
+unknown-registry = "deny"
+# Deny crates from git sources unless explicitly allowed.
+unknown-git = "deny"
+# Allow-list of crates that may come from git sources.
+# Stellar/Soroban SDK pins may reference git repos during active development.
+allow-git = [
+    "https://github.com/stellar/rs-soroban-env",
+]
+
+[bans]
+# Deny if multiple versions of the same crate are found.
+multiple-versions = "deny"
+# Skip duplicates for crates that are intentionally kept at multiple versions
+# (e.g. because a major version bump is in progress).
+skip = [
+    # serde and friends — allow both 1.x to coexist during migration.
+    { name = "serde", versions = ">=1.0.0" },
+    { name = "serde_derive", versions = ">=1.0.0" },
+    # syn — widely used by proc-macros at varying versions.
+    { name = "syn", versions = ">=1.0.0" },
+    # quote, proc-macro2 — always paired with syn.
+    { name = "quote", versions = ">=1.0.0" },
+    { name = "proc-macro2", versions = ">=1.0.0" },
+]
+# Skip-tree allows entire subtrees to use duplicate versions.
+skip-tree = []
