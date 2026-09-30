@@ -48,8 +48,6 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &true,
         &None::<i128>,
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
 
@@ -68,9 +66,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    ),
+        ),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -83,9 +79,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &false,
             &None::<i128>,
             &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    ),
+        ),
         Err(Ok(Error::EmergencyStopActive))
     );
     assert_eq!(
@@ -181,8 +175,6 @@ fn test_emergency_stop_blocks_batch_charge() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -207,8 +199,6 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
         &false,
         &None::<i128>,
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -240,8 +230,6 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &false,
         &Some(cap),
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
     client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
@@ -283,8 +271,6 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &true,
         &Some(cap),
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
     client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
@@ -313,8 +299,6 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &true,
         &Some(cap),
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
     client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
@@ -356,8 +340,6 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
         &false,
         &Some(cap),
         &None::<u64>,
-    &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
     );
     // enforce_deposit_cap caps single deposit at `cap`.
     client.deposit_funds(&sub_id, &subscriber, &cap, &None::<soroban_sdk::BytesN<32>>);
