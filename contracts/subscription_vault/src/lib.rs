@@ -91,8 +91,6 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
@@ -116,6 +114,9 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+
+#[cfg(test)]
+mod test_admin_get_min_topup;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
