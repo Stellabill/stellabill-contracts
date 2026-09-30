@@ -3613,6 +3613,8 @@ impl SubscriptionVault {
 mod test_utils;
 #[cfg(test)]
 mod test_cancellation_escrow;
+#[cfg(test)]
+mod test_get_cancellation_escrow;
 
 #[cfg(test)]
 mod test_usage_limits_required;
