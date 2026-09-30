@@ -3591,3 +3591,9 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+
+#[cfg(test)]
+mod test_get_oracle_deviation_bps;
+
+#[cfg(test)]
+mod test_resolve_coupon_for_charge;
