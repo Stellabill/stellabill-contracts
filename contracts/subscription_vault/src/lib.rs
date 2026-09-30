@@ -3415,6 +3415,9 @@ mod test_do_respond_dispute;
 mod test_do_get_subscription_dispute;
 
 #[cfg(test)]
+mod test_do_get_dispute;
+
+#[cfg(test)]
 mod test_usage_limits_required;
 
 #[cfg(test)]
@@ -3480,6 +3483,9 @@ mod test_admin_auto_pause_threshold;
 
 #[cfg(test)]
 mod test_admin_get_token;
+
+#[cfg(test)]
+mod test_set_fee_token_adversarial;
 
 #[cfg(test)]
 mod test_grace_buyout;
