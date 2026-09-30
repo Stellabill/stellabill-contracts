@@ -4,6 +4,28 @@
 
 The Emergency Stop mechanism is a circuit breaker designed to halt critical financial operations in the Subscription Vault smart contract during incident response scenarios. When activated, it blocks new subscriptions, deposits, and charges while allowing safe operations like withdrawals and queries to continue.
 
+## Semantics and Lifetime
+
+The emergency stop has **no automatic expiry**. It remains active until an admin explicitly calls `disable_emergency_stop`. This is intentional: the stop should only be lifted after a human confirms the incident is resolved.
+
+- Toggling is **idempotent**: enabling when already enabled (or disabling when already disabled) is a no-op and emits no event.
+- Every real state transition emits an on-chain event (`EmergencyStopEnabledEvent` / `EmergencyStopDisabledEvent`) with the admin address and timestamp for audit purposes.
+- The stop flag is stored in instance storage under the key `"emergency_stop"` and defaults to `false` (not stopped) when unset.
+
+## Safe Recovery Behavior
+
+The following operations remain available during an active emergency stop to ensure **no fund loss and no permanent lockout**:
+
+| Operation | Reason allowed |
+|-----------|---------------|
+| `get_subscription`, `get_admin`, `get_emergency_stop_status`, all read queries | Read-only; no financial risk |
+| `cancel_subscription` | Subscribers can exit at any time |
+| `pause_subscription` / `resume_subscription` | State management; no fund movement |
+| `withdraw_subscriber_funds` | Subscribers can reclaim prepaid balance from cancelled subscriptions |
+| `withdraw_merchant_funds` / `withdraw_merchant_token_funds` | Merchants can collect already-earned balances |
+
+This ensures that even under a prolonged emergency stop, no party is permanently locked out of their funds.
+
 ## Purpose
 
 The emergency stop is intended for use when:
@@ -106,6 +128,7 @@ These operations will fail with `Error::EmergencyStopActive` (1009):
 | Charge Usage (Reference) | `charge_usage_with_reference` | Usage-based billing with caller-supplied reference/idempotency key |
 | One-off Charge | `charge_one_off` | Merchant-triggered ad-hoc prepaid debits |
 | Batch Charge | `batch_charge` | Bulk subscription charging |
+| Partial Refund | `partial_refund` | Admin-authorized partial refunds against prepaid balances |
 
 ### Allowed Operations (No Financial Risk)
 

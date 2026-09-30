@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "description": "Gas performance baseline budgets for charge_subscription cold vs warm storage benchmarks",
+  "max_delta_tolerance_pct": 10.0,
+  "scenarios": {
+    "standard_active": {
+      "cold_cpu": 1250000,
+      "warm_cpu": 1100000,
+      "expected_delta_pct": 12.0
+    },
+    "max_metadata": {
+      "cold_cpu": 1450000,
+      "warm_cpu": 1280000,
+      "expected_delta_pct": 11.7
+    },
+    "usage_enabled": {
+      "cold_cpu": 1400000,
+      "warm_cpu": 1220000,
+      "expected_delta_pct": 12.8
+    },
+    "grace_period": {
+      "cold_cpu": 1300000,
+      "warm_cpu": 1150000,
+      "expected_delta_pct": 11.5
+    }
+  }
+}

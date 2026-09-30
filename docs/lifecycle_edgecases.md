@@ -260,3 +260,23 @@ All lifecycle operations (`pause_subscription`, `resume_subscription`, `cancel_s
 - [State Machine Implementation](../contracts/subscription_vault/src/state_machine.rs)
 - [Subscription Types](../contracts/subscription_vault/src/types.rs)
 - [Test Suite](../contracts/subscription_vault/src/test.rs)
+## Canonical Insufficient-Balance Path
+
+When a charge fails due to insufficient prepaid balance:
+
+### State Transitions
+- `Active` → `GracePeriod` (charge fails, within grace window) — emits `grace_period_entered` + `charge_failed`
+- `GracePeriod` → `InsufficientBalance` (charge fails, grace expired) — emits `charge_failed`
+- `GracePeriod`/`InsufficientBalance` → `Active` (deposit ≥ amount + resume) — emits `sub_resumed`
+
+### Recovery Paths
+1. **Auto-resume**: `deposit_funds` transitions to `Active` when balance ≥ amount
+2. **Manual resume**: `resume_subscription` requires balance ≥ amount
+3. **Cancel**: Available from any non-terminal state
+
+### Security Guarantees
+- No merchant crediting on insufficient balance
+- No `lifetime_charged` increment
+- No `last_payment_timestamp` update
+- No billing statement generated
+- Deterministic: same inputs always produce same status

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "description": "Gas performance baseline budgets for dispute lifecycle benchmarks (open -> respond -> resolve)",
+  "max_delta_tolerance_pct": 10.0,
+  "scenarios": {
+    "standard": {
+      "open_cpu": 800000,
+      "respond_cpu": 500000,
+      "resolve_cpu": 900000,
+      "total_cpu": 2200000
+    },
+    "max_evidence": {
+      "open_cpu": 850000,
+      "respond_cpu": 520000,
+      "resolve_cpu": 920000,
+      "total_cpu": 2290000
+    },
+    "auto_close": {
+      "open_cpu": 800000,
+      "respond_cpu": 0,
+      "resolve_cpu": 950000,
+      "total_cpu": 1750000
+    },
+    "resolve_to_merchant": {
+      "open_cpu": 800000,
+      "respond_cpu": 500000,
+      "resolve_cpu": 920000,
+      "total_cpu": 2220000
+    }
+  }
+}
