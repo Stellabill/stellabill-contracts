@@ -574,6 +574,8 @@ mod tests {
             &false,
             &None,
             &None::<u64>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         
         te.env.as_contract(&te.client.address, || {
@@ -653,7 +655,7 @@ mod tests {
             assert!(!has_sub_dispute);
         });
         
-        let sub_balance = te.stellar_token_client().balance(&subscriber);
+        let sub_balance = soroban_sdk::token::Client::new(&te.env, &te.token).balance(&subscriber);
         assert_eq!(sub_balance, amount);
     }
 
@@ -696,7 +698,7 @@ mod tests {
             assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
         });
         
-        let sub_balance = te.stellar_token_client().balance(&subscriber);
+        let sub_balance = soroban_sdk::token::Client::new(&te.env, &te.token).balance(&subscriber);
         assert_eq!(sub_balance, amount);
     }
 }

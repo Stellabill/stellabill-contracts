@@ -13,12 +13,12 @@ use soroban_sdk::{
 
 fn find_event_data(env: &Env, topic: &Symbol) -> Option<Val> {
     let all = env.events().all();
-    let topic_val: Val = topic.clone().into_val(env);
     for i in 0..all.len() {
         let (_, topics, data): (Address, Vec<Val>, Val) = all.get(i).unwrap();
-        let first_topic = topics.get(0);
-        if first_topic == Some(topic_val.clone()) {
-            return Some(data);
+        if let Some(first) = topics.get(0) {
+            if Symbol::try_from_val(env, &first).ok() == Some(topic.clone()) {
+                return Some(data);
+            }
         }
     }
     None

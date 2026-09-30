@@ -178,7 +178,7 @@ mod test {
 
         env.as_contract(&contract_id, || {
             let key = DataKey::Blocklist(subscriber.clone());
-            let entry = crate::types::BlocklistEntry {
+            let entry = BlocklistEntry {
                 subscriber: subscriber.clone(),
                 added_by: Address::generate(&env),
                 added_at: 123456789,

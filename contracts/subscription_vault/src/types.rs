@@ -1956,7 +1956,7 @@ pub struct AdminRotatedEvent {
 ///
 /// The proposal must be claimed by `new_admin` before `expires_at`.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AdminProposal {
     pub new_admin: Address,
     pub proposed_at: u64,

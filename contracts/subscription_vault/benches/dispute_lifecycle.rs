@@ -162,6 +162,8 @@ fn setup_merchant_and_sub(
         &false,
         &None::<i128>,
         &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let token_admin = token::StellarAssetClient::new(env, &client.get_subscription(&sub_id).token);

@@ -2,9 +2,6 @@
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
-#[cfg(test)]
-mod tests;
-
 #![allow(dead_code)]
 
 use crate::types::{
@@ -964,6 +961,7 @@ pub fn get_auto_pause_threshold(env: &Env) -> u32 {
 #[cfg(test)]
 mod rotate_admin_adversarial_tests {
     use crate::{types::DataKey, Error, SubscriptionVault, SubscriptionVaultClient};
+    use super::CONFIG_COOLDOWN_SECS;
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},
         Address, Env,

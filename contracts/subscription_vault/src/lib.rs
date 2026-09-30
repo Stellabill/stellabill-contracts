@@ -3415,6 +3415,12 @@ mod test_do_respond_dispute;
 mod test_do_get_subscription_dispute;
 
 #[cfg(test)]
+mod test_do_open_dispute;
+
+#[cfg(test)]
+mod test_do_migrate_config_to_persistent_internal;
+
+#[cfg(test)]
 mod test_usage_limits_required;
 
 #[cfg(test)]
@@ -3584,6 +3590,7 @@ mod revoke_merchant_adversarial_tests {
         assert!(!client.is_merchant_approved(&merchant));
     }
 }
+#[cfg(test)]
 mod test_do_charge_subscription;
 
 #[cfg(test)]

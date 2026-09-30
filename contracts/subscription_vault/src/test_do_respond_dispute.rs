@@ -49,13 +49,7 @@ fn seed_merchant_balance(test_env: &TestEnv, subscription_id: u32, amount: i128)
 fn open_dispute(test_env: &TestEnv, subscriber: &Address, subscription_id: u32) -> u64 {
     test_env
         .client
-        .open_dispute(
-            subscriber,
-            &subscription_id,
-            &DISPUTE_AMOUNT,
-            &None::<BytesN<32>>,
-        )
-        .unwrap()
+        .open_dispute(subscriber, &subscription_id, &DISPUTE_AMOUNT, &None::<BytesN<32>>)
 }
 
 /// Read dispute directly from storage.
@@ -86,7 +80,7 @@ fn test_do_respond_dispute_success_no_evidence() {
     // Respond without evidence
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let dispute = test_env.client.get_dispute(&dispute_id);
@@ -105,7 +99,7 @@ fn test_do_respond_dispute_success_with_evidence() {
     // Respond with evidence
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
+        .try_respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
         .unwrap();
     
     let dispute = test_env.client.get_dispute(&dispute_id);
@@ -124,7 +118,7 @@ fn test_do_respond_dispute_sets_responded_at_timestamp() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let dispute = test_env.client.get_dispute(&dispute_id);
@@ -148,7 +142,7 @@ fn test_do_respond_dispute_transitions_from_open_to_responded() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let after = test_env.client.get_dispute(&dispute_id);
@@ -166,7 +160,6 @@ fn test_do_respond_dispute_requires_admin_auth() {
     
     // Non-admin caller should be rejected
     let non_admin = Address::generate(&test_env.env);
-    test_env.env.set_auths(&[non_admin.clone()]);
     
     let result = test_env
         .client
@@ -193,13 +186,10 @@ fn test_do_respond_dispute_rejects_wrong_admin() {
     let (id, subscriber, _merchant) = fixtures::create_subscription(&env, &client, SubscriptionStatus::Active);
     seed_merchant_balance_direct(&env, &client.address, id, &token, DISPUTE_AMOUNT * 2);
     
-    let dispute_id = client
-        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<BytesN<32>>)
-        .unwrap();
+    let dispute_id = client.open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &None::<BytesN<32>>);
     
     // Try with a different admin
     let wrong_admin = Address::generate(&env);
-    env.set_auths(&[wrong_admin.clone()]);
     
     let result = client.try_respond_dispute(&wrong_admin, &dispute_id, &None::<BytesN<32>>);
     assert_eq!(result, Err(Ok(Error::Forbidden)));
@@ -229,7 +219,6 @@ fn test_do_respond_dispute_rejects_subscriber_caller() {
     let dispute_id = open_dispute(&test_env, &subscriber, id);
     
     // Subscriber cannot respond to their own dispute
-    test_env.env.set_auths(&[subscriber.clone()]);
     
     let result = test_env
         .client
@@ -245,7 +234,6 @@ fn test_do_respond_dispute_rejects_merchant_caller() {
     let dispute_id = open_dispute(&test_env, &subscriber, id);
     
     // Merchant cannot respond directly (only admin can)
-    test_env.env.set_auths(&[merchant.clone()]);
     
     let result = test_env
         .client
@@ -280,7 +268,7 @@ fn test_do_respond_dispute_rejects_already_responded() {
     // First response succeeds
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Second response fails
@@ -302,12 +290,12 @@ fn test_do_respond_dispute_rejects_resolved_to_merchant() {
     // Respond and resolve to merchant
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     test_env
         .client
-        .resolve_dispute(&test_env.admin, &dispute_id, &false)
+        .try_resolve_dispute(&test_env.admin, &dispute_id, &false)
         .unwrap();
     
     // Try to respond again after resolution
@@ -329,12 +317,12 @@ fn test_do_respond_dispute_rejects_resolved_to_subscriber() {
     // Respond and resolve to subscriber
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     test_env
         .client
-        .resolve_dispute(&test_env.admin, &dispute_id, &true)
+        .try_resolve_dispute(&test_env.admin, &dispute_id, &true)
         .unwrap();
     
     // Try to respond again after resolution
@@ -359,7 +347,7 @@ fn test_do_respond_dispute_with_zero_dispute_id() {
     // Respond to dispute ID 0 (valid)
     let result = test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>);
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>);
     
     assert!(result.is_ok(), "Dispute ID 0 should be valid");
 }
@@ -389,7 +377,7 @@ fn test_do_respond_dispute_with_all_zeros_evidence_hash() {
     
     let result = test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &Some(zero_hash.clone()));
+        .try_respond_dispute(&test_env.admin, &dispute_id, &Some(zero_hash.clone()));
     
     assert!(result.is_ok());
     
@@ -407,7 +395,7 @@ fn test_do_respond_dispute_with_all_ones_evidence_hash() {
     
     let result = test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &Some(ones_hash.clone()));
+        .try_respond_dispute(&test_env.admin, &dispute_id, &Some(ones_hash.clone()));
     
     assert!(result.is_ok());
     
@@ -425,15 +413,14 @@ fn test_do_respond_dispute_preserves_other_dispute_fields() {
     
     let dispute_id = test_env
         .client
-        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &Some(initial_evidence.clone()))
-        .unwrap();
+        .open_dispute(&subscriber, &id, &DISPUTE_AMOUNT, &Some(initial_evidence.clone()));
     
     let before = test_env.client.get_dispute(&dispute_id);
     
     let admin_evidence = sample_evidence_hash(&test_env.env);
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &Some(admin_evidence.clone()))
+        .try_respond_dispute(&test_env.admin, &dispute_id, &Some(admin_evidence.clone()))
         .unwrap();
     
     let after = test_env.client.get_dispute(&dispute_id);
@@ -463,7 +450,7 @@ fn test_do_respond_dispute_does_not_affect_subscription() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let sub_after = test_env.client.get_subscription(&id);
@@ -471,7 +458,10 @@ fn test_do_respond_dispute_does_not_affect_subscription() {
     // Subscription should be unchanged
     assert_eq!(sub_before.status, sub_after.status);
     assert_eq!(sub_before.prepaid_balance, sub_after.prepaid_balance);
-    assert_eq!(sub_before.last_charged_at, sub_after.last_charged_at);
+    assert_eq!(
+        sub_before.last_payment_timestamp,
+        sub_after.last_payment_timestamp
+    );
 }
 
 #[test]
@@ -486,7 +476,7 @@ fn test_do_respond_dispute_does_not_affect_merchant_balance() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let balance_after = test_env
@@ -515,7 +505,7 @@ fn test_do_respond_dispute_does_not_affect_escrow() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Read escrow after
@@ -540,7 +530,7 @@ fn test_do_respond_dispute_does_not_clear_subscription_dispute_index() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Subscription dispute index should still point to this dispute
@@ -560,7 +550,7 @@ fn test_do_respond_dispute_emits_event() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let events = test_env.env.events().all();
@@ -589,7 +579,7 @@ fn test_do_respond_dispute_event_includes_evidence_hash() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
+        .try_respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
         .unwrap();
     
     let events = test_env.env.events().all();
@@ -615,7 +605,7 @@ fn test_do_respond_dispute_event_has_correct_timestamp() {
     
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     let events = test_env.env.events().all();
@@ -655,7 +645,7 @@ fn test_do_respond_dispute_with_multiple_open_disputes() {
     // Respond to first dispute
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id1, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id1, &None::<BytesN<32>>)
         .unwrap();
     
     // First should be responded, second still open
@@ -671,7 +661,7 @@ fn test_do_respond_dispute_with_multiple_open_disputes() {
     // Respond to second dispute
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id2, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id2, &None::<BytesN<32>>)
         .unwrap();
     
     // Both should now be responded
@@ -706,7 +696,7 @@ fn test_do_respond_dispute_responds_to_correct_dispute_among_many() {
     let target_id = dispute_ids[2];
     test_env
         .client
-        .respond_dispute(&test_env.admin, &target_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &target_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Check that only the target was responded
@@ -731,7 +721,7 @@ fn test_do_respond_dispute_not_idempotent() {
     // First call succeeds
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Second call with same parameters fails
@@ -767,13 +757,13 @@ fn test_do_respond_dispute_enables_immediate_resolution() {
     // Respond
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     // Can now resolve immediately
     let result_after = test_env
         .client
-        .resolve_dispute(&test_env.admin, &dispute_id, &true);
+        .try_resolve_dispute(&test_env.admin, &dispute_id, &true);
     assert!(result_after.is_ok());
 }
 
@@ -791,7 +781,7 @@ fn test_do_respond_dispute_full_lifecycle() {
     // 2. Respond to dispute
     test_env
         .client
-        .respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&test_env.admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     assert_eq!(
         test_env.client.get_dispute(&dispute_id).status,
@@ -801,7 +791,7 @@ fn test_do_respond_dispute_full_lifecycle() {
     // 3. Resolve dispute
     test_env
         .client
-        .resolve_dispute(&test_env.admin, &dispute_id, &false)
+        .try_resolve_dispute(&test_env.admin, &dispute_id, &false)
         .unwrap();
     assert_eq!(
         test_env.client.get_dispute(&dispute_id).status,
@@ -836,7 +826,7 @@ fn test_do_respond_dispute_with_different_evidence_values() {
             
             test_env
                 .client
-                .respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
+                .try_respond_dispute(&test_env.admin, &dispute_id, &Some(evidence.clone()))
                 .unwrap();
             
             let dispute = test_env.client.get_dispute(&dispute_id);
@@ -855,13 +845,13 @@ fn test_do_respond_dispute_after_admin_rotation() {
     let new_admin = Address::generate(&test_env.env);
     test_env
         .client
-        .rotate_admin(&test_env.admin, &new_admin, &0u64)
+        .try_rotate_admin(&test_env.admin, &new_admin, &0u64)
         .unwrap();
     
     // New admin should be able to respond
     test_env
         .client
-        .respond_dispute(&new_admin, &dispute_id, &None::<BytesN<32>>)
+        .try_respond_dispute(&new_admin, &dispute_id, &None::<BytesN<32>>)
         .unwrap();
     
     assert_eq!(
@@ -881,11 +871,10 @@ fn test_do_respond_dispute_old_admin_rejected_after_rotation() {
     let new_admin = Address::generate(&test_env.env);
     test_env
         .client
-        .rotate_admin(&test_env.admin, &new_admin, &0u64)
+        .try_rotate_admin(&test_env.admin, &new_admin, &0u64)
         .unwrap();
     
     // Old admin should be rejected
-    test_env.env.set_auths(&[old_admin.clone()]);
     let result = test_env
         .client
         .try_respond_dispute(&old_admin, &dispute_id, &None::<BytesN<32>>);

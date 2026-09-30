@@ -36,6 +36,13 @@ fn read_pending(env: &Env, contract: &Address) -> Option<PendingTreasuryChange> 
     })
 }
 
+/// Read the live treasury address via the internal admin getter, because the
+/// contract client does not expose a `get_treasury` entry point.
+fn get_treasury(t: &TestEnv) -> Option<Address> {
+    t.env
+        .as_contract(&t.client.address, || crate::admin::get_treasury(&t.env))
+}
+
 #[test]
 fn cancel_removes_pending_change_and_blocks_execution() {
     let t = TestEnv::default();
@@ -66,7 +73,7 @@ fn non_admin_cannot_cancel_and_pending_survives() {
     t.client
         .queue_treasury_change(&t.admin, &new_treasury, &500u32);
     let pending_before = read_pending(&t.env, &t.client.address).expect("queued change");
-    let treasury_before = t.client.get_treasury();
+    let treasury_before = get_treasury(&t);
     let fee_before = t.client.get_protocol_fee_bps();
 
     assert_eq!(
@@ -79,7 +86,7 @@ fn non_admin_cannot_cancel_and_pending_survives() {
     let pending_after =
         read_pending(&t.env, &t.client.address).expect("pending survives rejection");
     assert_eq!(pending_after, pending_before);
-    assert_eq!(t.client.get_treasury(), treasury_before);
+    assert_eq!(get_treasury(&t), treasury_before);
     assert_eq!(t.client.get_protocol_fee_bps(), fee_before);
 
     // The genuine admin still can cancel the change.
@@ -105,7 +112,7 @@ fn authorization_is_checked_before_pending_state() {
 fn cancel_without_pending_is_not_found_and_idempotent() {
     let t = TestEnv::default();
 
-    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(get_treasury(&t), None);
     assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 
     assert_eq!(
@@ -118,7 +125,7 @@ fn cancel_without_pending_is_not_found_and_idempotent() {
         Err(Ok(Error::NotFound))
     );
     assert!(read_pending(&t.env, &t.client.address).is_none());
-    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(get_treasury(&t), None);
     assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 }
 
@@ -130,7 +137,7 @@ fn cancel_emits_no_event_and_leaves_config_unchanged() {
     t.client
         .queue_treasury_change(&t.admin, &new_treasury, &700u32);
 
-    let treasury_after_queue = t.client.get_treasury();
+    let treasury_after_queue = get_treasury(&t);
     let fee_after_queue = t.client.get_protocol_fee_bps();
     let events_before_cancel = t.env.events().all().len();
 
@@ -141,7 +148,7 @@ fn cancel_emits_no_event_and_leaves_config_unchanged() {
         events_before_cancel,
         "cancel_treasury_change must not publish an event"
     );
-    assert_eq!(t.client.get_treasury(), treasury_after_queue);
+    assert_eq!(get_treasury(&t), treasury_after_queue);
     assert_eq!(t.client.get_protocol_fee_bps(), fee_after_queue);
 }
 
@@ -167,5 +174,5 @@ fn cancel_frees_pending_slot_for_a_new_change() {
     t.client.execute_treasury_change(&t.admin);
     assert!(read_pending(&t.env, &t.client.address).is_none());
     assert_eq!(t.client.get_protocol_fee_bps(), 200u32);
-    assert_eq!(t.client.get_treasury(), Some(second));
+    assert_eq!(get_treasury(&t), Some(second));
 }
