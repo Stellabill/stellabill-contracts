@@ -375,6 +375,27 @@ client.recover_stranded_funds(
 );
 ```
 
+## Snapshot export and restore (forensic recovery)
+
+The contract exposes paginated snapshot endpoints to capture and restore full state pages
+for incident response. These are admin-only operations.
+
+- `export_full_snapshot_page(admin, start_id, size) -> FullSnapshotPage` — returns a page
+   of `SubscriptionSummary` entries and `MerchantBalanceEntry` records. Use `next_start_id`
+   to iterate pages until none remain.
+
+- `restore_snapshot_page(admin, start_id, subscriptions, balances, next_start_id)` — restores
+   the provided subscription and balance records into the target contract instance. This
+   function requires the emergency stop to be active to prevent interleaving with live traffic.
+
+Usage notes:
+
+- Limit `size` to a reasonable value (<= 100) to avoid long-running calls.
+- Always enable emergency stop on the target deployment before running `restore_snapshot_page`.
+- Verify exported pages (checksums, counts) off-chain before restore.
+- Each export and restore emits `snapshot_exported` and `snapshot_restored` events respectively.
+
+
 ### Example 2: Expired Escrow Recovery
 
 **Scenario**: Subscriber cancels but loses keys before withdrawal.

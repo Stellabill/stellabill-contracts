@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "description": "Fixed-cost baseline for withdraw_merchant_funds. Fail if CPU exceeds baseline by more than tolerance_pct.",
+  "tolerance_pct": 10.0,
+  "scenarios": {
+    "standard": {
+      "cpu": 1200000
+    },
+    "multi_token": {
+      "cpu": 1350000
+    },
+    "cap_boundary": {
+      "cpu": 1200000
+    }
+  }
+}

@@ -1,3 +1,98 @@
+## Dispute / Chargeback workflow
+
+The subscription vault implements a two-step dispute workflow (`open_dispute`, `respond_dispute`,
+`resolve_dispute`) that mirrors payment-card chargeback semantics. Disputed funds are held in
+escrow for a configurable window (default: [`DISPUTE_WINDOW_SECS`] = 14 days), giving the
+merchant/admin time to respond.
+
+### Entry points
+
+| Method | Auth | Description |
+|--------|------|-------------|
+| `open_dispute(subscriber, subscription_id, amount, evidence_hash)` | subscriber | Moves `amount` from merchant balance to escrow; creates `Dispute` in `Open` status. |
+| `respond_dispute(admin, dispute_id, evidence_hash)` | admin | Transitions dispute to `Responded` status; admin provides evidence. |
+| `resolve_dispute(admin, dispute_id, resolve_to_subscriber)` | admin | Final resolution; routes escrowed funds to subscriber or merchant. |
+| `get_dispute(dispute_id)` | — | Returns the `Dispute` record. |
+| `get_subscription_dispute(subscription_id)` | — | Returns the active dispute ID for a subscription, if any. |
+
+### Resolution rules
+
+| Dispute status | Window elapsed | Allowed resolution |
+|:---|:---:|:---|
+| `Open` | No | Rejected — `DisputeNotResponded`. Admin must respond first. |
+| `Open` | Yes | Auto-resolve to **subscriber** (default win for subscriber). |
+| `Responded` | Either | Admin chooses: subscriber **or** merchant. |
+| Resolved (any) | — | Rejected — `DisputeAlreadyResolved`. |
+
+### Events
+
+Every successful dispute mutation emits a dedicated event:
+
+```text
+topic:   ("dispute_opened", dispute_id)
+payload: DisputeOpenedEvent { dispute_id, subscription_id, subscriber, merchant,
+         amount, evidence_hash, timestamp, schema_version }
+```
+
+```text
+topic:   ("dispute_responded", dispute_id)
+payload: DisputeRespondedEvent { dispute_id, subscription_id, admin_evidence_hash,
+         timestamp, schema_version }
+```
+
+```text
+topic:   ("dispute_resolved", dispute_id)
+payload: DisputeResolvedEvent { dispute_id, subscription_id, resolution,
+         timestamp, schema_version }
+```
+
+### Security invariants
+
+- **Double-open prevention**: `DataKey::SubscriptionDispute(u32)` tracks the active
+  dispute per subscription. A second `open_dispute` for the same subscription returns
+  `DisputeAlreadyOpen`.
+- **Escrow accounting**: The disputed amount is subtracted from
+  `MerchantBalance(merchant, token)` and held under `DisputeEscrow(dispute_id)` until
+  resolution. The sum `merchant_balance + escrow` is invariant after open and before
+  resolve.
+- **CEI ordering**: State (escrow deduction, dispute record) is written before any
+  external token transfer. For subscriber-win resolutions, the token transfer runs
+  after `add_total_accounted` is decremented.
+- **Admin-only gates**: `respond_dispute` and `resolve_dispute` require admin auth
+  via `require_admin_auth`.
+- **Evidence hashes**: Optional `BytesN<32>` hashes are stored on-chain but the
+  actual evidence is assumed to be off-chain (IPFS / blob store).
+
+### Dispute record
+
+```rust
+pub struct Dispute {
+    pub id: u64,
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub opened_at: u64,
+    pub status: DisputeStatus,  // Open | Responded | ResolvedToMerchant | ResolvedToSubscriber
+    pub evidence_hash: Option<BytesN<32>>,
+    pub responded_at: Option<u64>,
+    pub admin_evidence_hash: Option<BytesN<32>>,
+}
+```
+
+### Error codes
+
+| Code | Variant | Meaning |
+|:---:|:---|:---|
+| 10001 | `DisputeNotFound` | No dispute for the given ID. |
+| 10002 | `DisputeAlreadyResolved` | Dispute has already been resolved. |
+| 10003 | `DisputeNotResponded` | Cannot resolve before response (window not elapsed). |
+| 10004 | `DisputeWindowElapsed` | The dispute window has elapsed (advisory). |
+| 10005 | `DisputeAlreadyOpen` | A dispute is already open for this subscription. |
+| 10006 | `DisputeAlreadyResponded` | Dispute is not in `Open` status (already responded/resolved). |
+
+---
+
 ## Partial refunds for mid-period downgrades and cancellations
 
 The subscription vault supports controlled partial refunds so that merchants and operators can

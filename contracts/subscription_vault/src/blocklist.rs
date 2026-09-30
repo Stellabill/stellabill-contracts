@@ -1,189 +1,195 @@
-//! Subscriber blocklist management.
-//!
-//! Admins and merchants can blocklist subscriber addresses to prevent new subscription
-//! creation and deposits. Existing subscriptions and balances are preserved.
-//!
-//! **PRs that only change blocklist behavior should edit this file only.**
+use crate::admin::require_admin_auth;
+use crate::types::{DataKey, Error};
+use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 
-use crate::types::Error;
-use soroban_sdk::{Address, Env, Symbol};
-
-/// Storage key for blocklist entries: (Symbol("blocklist"), subscriber_address)
-fn blocklist_key(env: &Env, subscriber: &Address) -> (Symbol, Address) {
-    (Symbol::new(env, "blocklist"), subscriber.clone())
+#[contracttype]
+#[derive(Clone)]
+pub struct BlocklistEntry {
+    pub subscriber: Address,
+    pub added_by: Address,
+    pub added_at: u64,
+    pub reason: Option<String>,
 }
 
-/// Check if a subscriber is blocklisted.
-pub fn is_blocklisted(env: &Env, subscriber: &Address) -> bool {
-    let key = blocklist_key(env, subscriber);
-    env.storage().instance().has(&key)
+#[contracttype]
+#[derive(Clone)]
+pub struct BlocklistAddedEvent {
+    pub subscriber: Address,
+    pub added_by: Address,
+    pub timestamp: u64,
+    pub reason: Option<String>,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
-/// Reject subscriber-authored mutating flows while the subscriber is blocklisted.
-pub fn require_not_blocklisted(env: &Env, subscriber: &Address) -> Result<(), Error> {
-    if is_blocklisted(env, subscriber) {
-        return Err(Error::SubscriberBlocklisted);
-    }
-    Ok(())
+#[contracttype]
+#[derive(Clone)]
+pub struct BlocklistRemovedEvent {
+    pub subscriber: Address,
+    pub removed_by: Address,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
 }
 
-/// Add a subscriber to the blocklist. Admin or merchant only.
+/// Check whether `addr` is currently blocklisted.
 ///
-/// # Arguments
-/// * `authorizer` - The admin or merchant adding the subscriber to the blocklist
-/// * `subscriber` - The subscriber address to blocklist
-/// * `reason` - Optional reason for blocklisting (stored as metadata)
+/// O(1) persistent-storage lookup keyed by `DataKey::Blocklist(addr)`.
+pub fn is_blocklisted(env: &Env, addr: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::Blocklist(addr.clone()))
+}
+
+/// Return `Err(Error::SubscriberBlocklisted)` when `addr` is blocklisted.
+///
+/// This is the canonical guard used at the top of every mutating entry-point
+/// that should be blocked while the address is on the blocklist.
+pub fn require_not_blocklisted(env: &Env, addr: &Address) -> Result<(), Error> {
+    if is_blocklisted(env, addr) {
+        Err(Error::SubscriberBlocklisted)
+    } else {
+        Ok(())
+    }
+}
+
+/// Retrieve the full [`BlocklistEntry`] for `addr`.
+///
+/// Returns `Err(Error::NotFound)` when the address is not on the blocklist.
+pub fn get_blocklist_entry(env: &Env, addr: Address) -> Result<BlocklistEntry, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Blocklist(addr))
+        .ok_or(Error::NotFound)
+}
+
+/// Add `subscriber` to the blocklist. Admin only.
 ///
 /// # Authorization
-/// - Admin can blocklist any subscriber
-/// - Merchants can only blocklist subscribers they have active subscriptions with
+/// Caller must be the stored contract admin.
+///
+/// # Duplicate guard
+/// Returns `Err(Error::InvalidInput)` when `subscriber` is already blocklisted.
+/// This preserves the original entry (added_by, added_at, reason) so the audit
+/// trail is not overwritten.
+///
+/// # Events
+/// Emits `("blocklist_added", subscriber) -> BlocklistAddedEvent`.
 pub fn do_add_to_blocklist(
     env: &Env,
     authorizer: Address,
     subscriber: Address,
-    reason: Option<soroban_sdk::String>,
+    reason: Option<String>,
 ) -> Result<(), Error> {
-    authorizer.require_auth();
+    require_admin_auth(env, &authorizer)?;
 
-    // Check if authorizer is admin
-    let is_admin = if let Ok(admin) = crate::admin::require_admin(env) {
-        admin == authorizer
-    } else {
-        false
-    };
-
-    // If not admin, verify merchant has subscriptions with this subscriber
-    if !is_admin {
-        // Merchant authorization: must have at least one subscription with this subscriber
-        let has_subscription =
-            has_merchant_subscription_with_subscriber(env, &authorizer, &subscriber);
-        if !has_subscription {
-            return Err(Error::Forbidden);
-        }
-    }
-
-    let key = blocklist_key(env, &subscriber);
-    if env.storage().instance().has(&key) {
+    if is_blocklisted(env, &subscriber) {
         return Err(Error::InvalidInput);
     }
 
+    let timestamp = env.ledger().timestamp();
     let entry = BlocklistEntry {
         subscriber: subscriber.clone(),
         added_by: authorizer.clone(),
-        added_at: env.ledger().timestamp(),
+        added_at: timestamp,
         reason: reason.clone(),
     };
-
-    env.storage().instance().set(&key, &entry);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Blocklist(subscriber.clone()), &entry);
 
     env.events().publish(
-        (Symbol::new(env, "blocklist_added"),),
+        (Symbol::new(env, "blocklist_added"), subscriber.clone()),
         BlocklistAddedEvent {
             subscriber,
             added_by: authorizer,
-            timestamp: env.ledger().timestamp(),
+            timestamp,
             reason,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
     Ok(())
 }
 
-/// Remove a subscriber from the blocklist. Admin only.
+/// Remove `subscriber` from the blocklist. Admin only.
+///
+/// # Authorization
+/// Caller must be the stored contract admin.
+///
+/// # Errors
+/// - `Error::Forbidden` — caller is not the stored admin.
+/// - `Error::NotFound` — `subscriber` is not currently blocklisted.
+///
+/// # Events
+/// Emits `("blocklist_removed", subscriber) -> BlocklistRemovedEvent`.
 pub fn do_remove_from_blocklist(
     env: &Env,
     admin: Address,
     subscriber: Address,
 ) -> Result<(), Error> {
-    crate::admin::require_admin_auth(env, &admin)?;
+    require_admin_auth(env, &admin)?;
 
-    let key = blocklist_key(env, &subscriber);
-    if !env.storage().instance().has(&key) {
+    if !is_blocklisted(env, &subscriber) {
         return Err(Error::NotFound);
     }
 
-    env.storage().instance().remove(&key);
+    let timestamp = env.ledger().timestamp();
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Blocklist(subscriber.clone()));
 
     env.events().publish(
-        (Symbol::new(env, "blocklist_removed"),),
+        (Symbol::new(env, "blocklist_removed"), subscriber.clone()),
         BlocklistRemovedEvent {
             subscriber,
             removed_by: admin,
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
     Ok(())
 }
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::types::{DataKey, Error};
+    use crate::SubscriptionVault;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
-/// Get blocklist entry details for a subscriber.
-pub fn get_blocklist_entry(env: &Env, subscriber: Address) -> Result<BlocklistEntry, Error> {
-    let key = blocklist_key(env, &subscriber);
-    env.storage().instance().get(&key).ok_or(Error::NotFound)
-}
+    #[test]
+    fn test_require_not_blocklisted_valid() {
+        let env = Env::default();
+        let subscriber = Address::generate(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
 
-/// Helper to check if a merchant has an active relationship with a subscriber.
-///
-/// A relationship is considered active for any non-cancelled subscription state.
-fn has_merchant_subscription_with_subscriber(
-    env: &Env,
-    merchant: &Address,
-    subscriber: &Address,
-) -> bool {
-    use crate::types::DataKey;
-    use soroban_sdk::Vec;
-
-    let merchant_key = DataKey::MerchantSubs(merchant.clone());
-    let ids: Vec<u32> = env
-        .storage()
-        .instance()
-        .get(&merchant_key)
-        .unwrap_or(Vec::new(env));
-
-    for i in 0..ids.len() {
-        if let Some(sub_id) = ids.get(i) {
-            if let Ok(sub) = crate::queries::get_subscription(env, sub_id) {
-                if sub.subscriber == *subscriber
-                    && sub.status != crate::types::SubscriptionStatus::Cancelled
-                {
-                    return true;
-                }
-            }
-        }
+        env.as_contract(&contract_id, || {
+            let result = require_not_blocklisted(&env, &subscriber);
+            assert_eq!(result, Ok(()));
+        });
     }
 
-    false
-}
+    #[test]
+    fn test_require_not_blocklisted_invalid() {
+        let env = Env::default();
+        let subscriber = Address::generate(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+        env.as_contract(&contract_id, || {
+            let key = DataKey::Blocklist(subscriber.clone());
+            let entry = crate::types::BlocklistEntry {
+                subscriber: subscriber.clone(),
+                added_by: Address::generate(&env),
+                added_at: 123456789,
+                reason: None,
+            };
+            env.storage().instance().set(&key, &entry);
 
-use soroban_sdk::contracttype;
+            let result = require_not_blocklisted(&env, &subscriber);
+            assert_eq!(result, Err(Error::SubscriberBlocklisted));
 
-/// Blocklist entry with metadata.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlocklistEntry {
-    pub subscriber: Address,
-    pub added_by: Address,
-    pub added_at: u64,
-    pub reason: Option<soroban_sdk::String>,
-}
-
-/// Event emitted when a subscriber is added to the blocklist.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlocklistAddedEvent {
-    pub subscriber: Address,
-    pub added_by: Address,
-    pub timestamp: u64,
-    pub reason: Option<soroban_sdk::String>,
-}
-
-/// Event emitted when a subscriber is removed from the blocklist.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BlocklistRemovedEvent {
-    pub subscriber: Address,
-    pub removed_by: Address,
-    pub timestamp: u64,
+            assert!(env.storage().instance().has(&key));
+        });
+    }
 }

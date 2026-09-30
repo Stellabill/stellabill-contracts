@@ -34,7 +34,7 @@ The following operations require administrator authorization:
 
 #### `test_rotate_admin_successful()`
 
-- **Purpose**: Verify successful admin rotation from old to new admin
+- **Purpose**: Verify successful admin rotation from old to new admin.
 - **Coverage**: Basic rotation flow
 - **Expected Behavior**:
   - Old admin can initiate rotation
