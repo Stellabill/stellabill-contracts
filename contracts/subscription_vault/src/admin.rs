@@ -367,7 +367,7 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     let mut out = Vec::new(env);
     for token in tokens.iter() {
         if let Some(decimals) = storage.get::<_, u32>(&accepted_token_decimals_key(&token)) {
-            out.push_back(AcceptedToken { token, decimals, added_at: 0 });
+            out.push_back(AcceptedToken { token, decimals });
         }
     }
     out
@@ -728,9 +728,7 @@ pub fn set_fee_token(
         (Symbol::new(env, "fee_token_configured"),),
         FeeTokenConfiguredEvent {
             admin,
-            fee_token: fee_token.clone(),
-            old_token: None,
-            new_token: fee_token,
+            fee_token,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },

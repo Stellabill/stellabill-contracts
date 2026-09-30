@@ -57,6 +57,7 @@ pub use safe_math::*;
 pub use types::NonceConsumedEvent;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
+    EVENT_SCHEMA_VERSION,
     CancellationEscrowReleasedEvent,
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
@@ -494,7 +495,7 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    is_known_instance_discriminant,    AcceptedToken, AccruedTotals, AdminConfigChangedEvent, AdminProposal,
+    AcceptedToken, AccruedTotals, AdminProposal,
     AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
     ArrearsAccruedEvent, ArrearsSettledEvent,
@@ -2180,6 +2181,7 @@ impl SubscriptionVault {
         let _admin = admin::require_stored_admin_auth(&env)?;
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
         charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)
     }
@@ -2346,39 +2348,6 @@ impl SubscriptionVault {
     /// Returns `true` if the merchant is currently within a vacation window.
     pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
         merchant::is_merchant_in_vacation(&env, &merchant, now)
-    }
-
-    // ── Merchant allowlist mode ────────────────────────────────────────────────
-
-    /// Enable or disable merchant allowlist mode (admin only).
-    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
-        merchant::set_whitelist_mode(&env, admin, enabled)
-    }
-
-    /// Returns `true` if merchant allowlist mode is enabled.
-    pub fn get_whitelist_mode(env: Env) -> bool {
-        merchant::get_whitelist_mode(&env)
-    }
-
-    /// Approve a merchant under allowlist mode (admin only).
-    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::approve_merchant(&env, admin, merchant)
-    }
-
-    /// Revoke a merchant approval under allowlist mode (admin only).
-    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::revoke_merchant(&env, admin, merchant)
-    }
-
-    /// Returns `true` if the merchant is approved under allowlist mode.
-    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
-        merchant::is_merchant_approved(&env, &merchant)
-    }
-
-    /// Set the consecutive-failure auto-pause threshold (admin only).
-    /// `0` disables auto-pause.
-    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
-        admin::do_set_auto_pause_threshold(&env, admin, threshold)
     }
 
     /// direct merchant refund to subscriber.
@@ -3115,33 +3084,6 @@ impl SubscriptionVault {
     /// Get protocol fee bps.
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         admin::get_protocol_fee_bps(&env)
-    }
-
-    /// Set a multi-beneficiary treasury split for protocol fee routing.
-    ///
-    /// When configured, protocol fees are distributed across the listed
-    /// beneficiaries according to their basis-point allocation instead of
-    /// being sent to the single treasury address.
-    ///
-    /// The sum of all `bps` values must equal exactly 10_000. Duplicate
-    /// beneficiaries are rejected. Each entry must have `bps > 0`.
-    pub fn set_treasury_split(
-        env: Env,
-        admin: Address,
-        entries: Vec<types::TreasurySplitEntry>,
-    ) -> Result<(), Error> {
-        admin::set_treasury_split(&env, admin, entries)
-    }
-
-    /// Get the configured treasury split, or `None` if not set.
-    pub fn get_treasury_split(env: Env) -> Option<types::TreasurySplitConfig> {
-        admin::get_treasury_split(&env)
-    }
-
-    /// Clear the treasury split, reverting protocol fees to the single
-    /// treasury address. Admin only.
-    pub fn clear_treasury_split(env: Env, admin: Address) -> Result<(), Error> {
-        admin::clear_treasury_split(&env, admin)
     }
 
     // ── Governance (Quorum-based proposals) ──────────────────────────────────

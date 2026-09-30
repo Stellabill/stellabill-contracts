@@ -1251,9 +1251,7 @@ fn apply_cancellation(
             merchant: sub.merchant.clone(),
             token: token_addr.clone(),
             amount: refund_amount,
-            opened_at: now,
             released_at,
-            released: false,
         };
 
         env.storage()
@@ -3721,12 +3719,9 @@ pub fn do_initiate_transfer(
 
     let intent = crate::types::TransferIntent {
         subscription_id,
-        from_subscriber: from.clone(),
         from: from.clone(),
         to: to.clone(),
-        created_at: env.ledger().timestamp(),
         expires_at,
-        executed: false,
     };
 
     env.storage().instance().set(&DataKey::TransferIntent(subscription_id), &intent);

@@ -33,6 +33,7 @@ fn bench_ttl_extension_cost() {
         sub_account_label: None,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     };
     
     env.storage().persistent().set(&key, &sub);

@@ -59,17 +59,17 @@ fn bench_batch_charge_scaling() {
                 );
 
                 if scenario == "Success" || scenario == "WithPaused" {
-                    client.top_up_subscription(&subscriber, &id, &PREPAID);
+                    client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
                 }
 
                 if scenario == "WithPaused" && i % 2 == 0 {
-                    client.pause_subscription(&subscriber, &id);
+                    client.pause_subscription(&id, &subscriber);
                 }
 
                 if scenario == "SingleId" {
                     if i == 0 {
                         duplicate_id = id;
-                        client.top_up_subscription(&subscriber, &id, &PREPAID);
+                        client.deposit_funds(&id, &subscriber, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
                     }
                     ids.push_back(duplicate_id);
                 } else {

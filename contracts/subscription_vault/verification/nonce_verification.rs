@@ -20,9 +20,9 @@ mod verification {
             }
             Err(Error::Overflow) => {
                 assert_eq!(stored, u64::MAX);
-                assert_eq(expected, u64::MAX);
+                assert_eq!(expected, u64::MAX);
             }
-            Err(_) => unreachable(),
+            Err(_) => unreachable!(),
         }
     }
 }

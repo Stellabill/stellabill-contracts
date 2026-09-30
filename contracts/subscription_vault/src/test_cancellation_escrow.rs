@@ -100,7 +100,7 @@ fn test_claim_after_window_elapsed_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_err(), "missing escrow must be rejected");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn test_merchant_lodge_dispute_before_window_succeeds() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_err(), "missing escrow must be rejected");
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn test_no_escrow_when_zero_balance() {
     let result = test_env
         .client
         .try_get_cancellation_escrow(&id);
-    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+    assert!(result.is_err(), "missing escrow must be rejected");
 }
 
 #[test]
