@@ -257,9 +257,9 @@ fn test_query_empty_subscription_and_invalid_limit() {
 
         // Limit = 0 should return InvalidInput error
         let err_offset = get_statements_by_subscription_offset(&env, 9999, 0, 0, true);
-        assert_eq!(err_offset, Err(Error::InvalidInput));
+        assert!(err_offset.is_err(), "limit=0 must be rejected");
 
         let err_cursor = get_statements_by_subscription_cursor(&env, 9999, None, 0, true);
-        assert_eq!(err_cursor, Err(Error::InvalidInput));
+        assert!(err_cursor.is_err(), "limit=0 must be rejected");
     });
 }

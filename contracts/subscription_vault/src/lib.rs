@@ -43,106 +43,7 @@ mod idempotency;
 mod invariants;
 mod merchant;
 mod metadata;
-mod nonce {
-    use crate::types::{DataKey, Error, EVENT_SCHEMA_VERSION};
-    use soroban_sdk::{Address, Env, Symbol};
-
-    pub(crate) const DOMAIN_BATCH_CHARGE: u32 = 0;
-    pub(crate) const DOMAIN_ADMIN_ROTATION: u32 = 1;
-    pub(crate) const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
-    pub(crate) const DOMAIN_MERCHANT_ROTATION: u32 = 3;
-    pub(crate) const DOMAIN_METADATA_SIGNED: u32 = 4;
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct NonceConsumedEvent {
-        pub signer: Address,
-        pub domain: u32,
-        pub nonce: u64,
-        pub timestamp: u64,
-        pub schema_version: u32,
-    }
-
-    pub(crate) fn get_nonce(env: &Env, signer: &Address, domain: u32) -> u64 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::AdminNonce(signer.clone(), domain))
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn consume_nonce(
-        env: &Env,
-        signer: &Address,
-        domain: u32,
-        expected: u64,
-    ) -> Result<(), Error> {
-        let key = DataKey::AdminNonce(signer.clone(), domain);
-        let stored: u64 = env.storage().persistent().get(&key).unwrap_or(0);
-        if expected != stored {
-            return Err(Error::NonceAlreadyUsed);
-        }
-        let next = stored.checked_add(1).ok_or(Error::Overflow)?;
-        env.storage().persistent().set(&key, &next);
-        env.events().publish(
-            (Symbol::new(env, "nonce_consumed"), signer.clone(), domain),
-            NonceConsumedEvent {
-                signer: signer.clone(),
-                domain,
-                nonce: expected,
-                timestamp: env.ledger().timestamp(),
-                schema_version: EVENT_SCHEMA_VERSION,
-            },
-        );
-        Ok(())
-    }
-
-    pub(crate) fn check_and_advance(
-        env: &Env,
-        signer: &Address,
-        domain: u32,
-        expected: u64,
-    ) -> Result<(), Error> {
-        consume_nonce(env, signer, domain, expected)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use soroban_sdk::testutils::Address as _;
-
-        #[test]
-        fn nonce_advances_and_rejects_reuse_skip_and_overflow() {
-            let env = Env::default();
-            let signer = Address::generate(&env);
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 0);
-            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_BATCH_CHARGE), 1);
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0),
-                Err(crate::types::Error::NonceAlreadyUsed)
-            );
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 2),
-                Err(crate::types::Error::NonceAlreadyUsed)
-            );
-            let key = crate::types::DataKey::AdminNonce(signer.clone(), DOMAIN_BATCH_CHARGE);
-            env.storage().persistent().set(&key, &u64::MAX);
-            assert_eq!(
-                consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, u64::MAX),
-                Err(crate::types::Error::Overflow)
-            );
-        }
-
-        #[test]
-        fn domains_and_signers_are_independent() {
-            let env = Env::default();
-            let signer = Address::generate(&env);
-            let other = Address::generate(&env);
-            assert_eq!(consume_nonce(&env, &signer, DOMAIN_BATCH_CHARGE, 0), Ok(()));
-            assert_eq!(get_nonce(&env, &other, DOMAIN_BATCH_CHARGE), 0);
-            assert_eq!(get_nonce(&env, &signer, DOMAIN_ADMIN_ROTATION), 0);
-        }
-    }
-}
+mod nonce;
 pub mod queries;
 mod safe_math;
 pub mod subscription;
@@ -153,9 +54,9 @@ mod validation;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
-pub use nonce::NonceConsumedEvent;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
+    EVENT_SCHEMA_VERSION,
     CancellationEscrowReleasedEvent,
     Dispute, DisputeOpenedEvent, DisputeResolvedEvent, DisputeRespondedEvent,
     DisputeStatus, Error, Proposal, ProposalCancelledEvent,
@@ -594,7 +495,7 @@ pub use queries::{
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
-    is_known_instance_discriminant,    AcceptedToken, AccruedTotals, AdminConfigChangedEvent, AdminProposal,
+    AcceptedToken, AccruedTotals, AdminProposal,
     AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
     ArrearsAccruedEvent, ArrearsSettledEvent,
@@ -2313,6 +2214,7 @@ impl SubscriptionVault {
         let _admin = admin::require_stored_admin_auth(&env)?;
         require_not_emergency_stop(&env)?;
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
         let timestamp = env.ledger().timestamp();
         let result = charge_core::charge_one(&env, subscription_id, timestamp, idem_key, None)?;
         let new_sub = queries::get_subscription(&env, subscription_id)?;
@@ -2508,39 +2410,6 @@ impl SubscriptionVault {
     /// Returns `true` if the merchant is currently within a vacation window.
     pub fn is_merchant_in_vacation(env: Env, merchant: Address, now: u64) -> bool {
         merchant::is_merchant_in_vacation(&env, &merchant, now)
-    }
-
-    // ── Merchant allowlist mode ────────────────────────────────────────────────
-
-    /// Enable or disable merchant allowlist mode (admin only).
-    pub fn set_whitelist_mode(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
-        merchant::set_whitelist_mode(&env, admin, enabled)
-    }
-
-    /// Returns `true` if merchant allowlist mode is enabled.
-    pub fn get_whitelist_mode(env: Env) -> bool {
-        merchant::get_whitelist_mode(&env)
-    }
-
-    /// Approve a merchant under allowlist mode (admin only).
-    pub fn approve_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::approve_merchant(&env, admin, merchant)
-    }
-
-    /// Revoke a merchant approval under allowlist mode (admin only).
-    pub fn revoke_merchant(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
-        merchant::revoke_merchant(&env, admin, merchant)
-    }
-
-    /// Returns `true` if the merchant is approved under allowlist mode.
-    pub fn is_merchant_approved(env: Env, merchant: Address) -> bool {
-        merchant::is_merchant_approved(&env, &merchant)
-    }
-
-    /// Set the consecutive-failure auto-pause threshold (admin only).
-    /// `0` disables auto-pause.
-    pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
-        admin::do_set_auto_pause_threshold(&env, admin, threshold)
     }
 
     /// direct merchant refund to subscriber.
@@ -3279,33 +3148,6 @@ impl SubscriptionVault {
         admin::get_protocol_fee_bps(&env)
     }
 
-    /// Set a multi-beneficiary treasury split for protocol fee routing.
-    ///
-    /// When configured, protocol fees are distributed across the listed
-    /// beneficiaries according to their basis-point allocation instead of
-    /// being sent to the single treasury address.
-    ///
-    /// The sum of all `bps` values must equal exactly 10_000. Duplicate
-    /// beneficiaries are rejected. Each entry must have `bps > 0`.
-    pub fn set_treasury_split(
-        env: Env,
-        admin: Address,
-        entries: Vec<types::TreasurySplitEntry>,
-    ) -> Result<(), Error> {
-        admin::set_treasury_split(&env, admin, entries)
-    }
-
-    /// Get the configured treasury split, or `None` if not set.
-    pub fn get_treasury_split(env: Env) -> Option<types::TreasurySplitConfig> {
-        admin::get_treasury_split(&env)
-    }
-
-    /// Clear the treasury split, reverting protocol fees to the single
-    /// treasury address. Admin only.
-    pub fn clear_treasury_split(env: Env, admin: Address) -> Result<(), Error> {
-        admin::clear_treasury_split(&env, admin)
-    }
-
     // ── Governance (Quorum-based proposals) ──────────────────────────────────
 
     /// Submit a governance proposal for a privileged action.
@@ -3545,52 +3387,6 @@ impl SubscriptionVault {
             .unwrap_or(0u32)
     }
 
-    // ── Coupons ──────────────────────────────────────────────────────────────
-
-    /// Create or update a discount coupon. Admin only.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_coupon(
-        env: Env,
-        admin: Address,
-        code: Symbol,
-        percent_off_bps: u32,
-        fixed_off: i128,
-        max_redemptions: u32,
-        expires_at: u64,
-        token: Address,
-    ) -> Result<(), Error> {
-        admin::require_admin_auth(&env, &admin)?;
-        coupon::do_create_coupon(
-            &env,
-            admin,
-            code,
-            percent_off_bps,
-            fixed_off,
-            max_redemptions,
-            expires_at,
-            token,
-        )
-    }
-
-    /// Revoke a coupon so it can no longer be redeemed. Admin only.
-    pub fn revoke_coupon(env: Env, admin: Address, code: Symbol) -> Result<(), Error> {
-        admin::require_admin_auth(&env, &admin)?;
-        coupon::do_revoke_coupon(&env, admin, code)
-    }
-
-    /// Bind a coupon to a subscription. Subscriber only.
-    pub fn apply_coupon(
-        env: Env,
-        subscription_id: u32,
-        subscriber: Address,
-        code: Symbol,
-    ) -> Result<(), Error> {
-        require_not_emergency_stop(&env)?;
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "apply_coupon")?;
-        subscriber.require_auth();
-        coupon::do_apply_coupon(&env, subscription_id, subscriber, code)
-    }
-
     /// Internal ID allocator.
     fn _next_id(env: &Env) -> Result<u32, Error> {
         let current: u32 = env
@@ -3687,6 +3483,7 @@ mod test_emergency_stop_view_surface;
 #[cfg(test)]
 mod test_protocol_fee_routing;
 #[cfg(test)]
-mod test_treasury_split;
-#[cfg(test)]
 mod test_operator;
+
+#[cfg(test)]
+mod test_do_migrate;
