@@ -211,6 +211,7 @@ fn test_positive_lifecycle() {
         &env,
         subscriber.clone().into_val(&env),
         plan_id.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let sub_auth = vec![
         &env,
@@ -352,6 +353,8 @@ fn test_cancel_subscriber() {
         false.into_val(&env),
         Option::<i128>::None.into_val(&env),
         Option::<u64>::None.into_val(&env),
+        Option::<u32>::None.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let create_auth = vec![
         &env,
@@ -428,6 +431,8 @@ fn test_cancel_merchant() {
         false.into_val(&env),
         Option::<i128>::None.into_val(&env),
         Option::<u64>::None.into_val(&env),
+        Option::<u32>::None.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let create_auth = vec![
         &env,
@@ -500,6 +505,8 @@ fn test_mismatched_signed_args() {
         false.into_val(&env),
         Option::<i128>::None.into_val(&env),
         Option::<u64>::None.into_val(&env),
+        Option::<u32>::None.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let create_auth = vec![
         &env,
@@ -583,6 +590,8 @@ fn test_missing_nested_token_transfer() {
         false.into_val(&env),
         Option::<i128>::None.into_val(&env),
         Option::<u64>::None.into_val(&env),
+        Option::<u32>::None.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let create_auth = vec![
         &env,
@@ -660,6 +669,8 @@ fn test_replay_used_auth_entry() {
         false.into_val(&env),
         Option::<i128>::None.into_val(&env),
         Option::<u64>::None.into_val(&env),
+        Option::<u32>::None.into_val(&env),
+        Option::<Symbol>::None.into_val(&env),
     ];
     let create_auth = vec![
         &env,

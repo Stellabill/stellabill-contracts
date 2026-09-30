@@ -15,8 +15,8 @@
 //! The existing `src/test_governance.rs` suite covers the happy path of
 //! `cancel_proposal`; this file focuses on the failure and boundary paths.
 
-use soroban_sdk::testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke};
-use soroban_sdk::{Address, Env, IntoVal, String, Symbol, Vec};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke};
+use soroban_sdk::{Address, Env, IntoVal, String, Symbol, TryFromVal, Vec};
 use subscription_vault::{
     Error, ProposalCancelledEvent, ProposalKind, SubscriptionVault, SubscriptionVaultClient,
 };
@@ -187,8 +187,10 @@ fn cancel_proposal_id_at_u64_boundary_fails_with_not_found() {
 #[test]
 fn cancelling_one_proposal_leaves_sibling_proposals_intact() {
     let (env, client, admin) = setup();
-    let guardian = Address::generate(&env);
-    client.add_guardian(&admin, &guardian, &100u32);
+    // `do_vote_proposal` authorizes the *stored admin* and then reads that
+    // address's guardian weight, so the admin itself must hold weight for
+    // any vote to be recorded.
+    client.add_guardian(&admin, &admin, &100u32);
 
     let target_a = Address::generate(&env);
     let target_b = Address::generate(&env);
@@ -302,18 +304,21 @@ fn cancel_proposal_twice_fails_with_invalid_input() {
     let reason = String::from_str(&env, "first cancellation");
     client.cancel_proposal(&proposal_id, &reason);
 
+    // `Env::events().all()` reflects only the most recent invocation, so the
+    // event count must be asserted before the failing retry invocation runs.
+    assert_eq!(cancelled_events(&env).len(), 1);
+
     let second = client.try_cancel_proposal(&proposal_id, &reason);
     assert_eq!(second, Err(Ok(Error::InvalidInput)));
-
-    // Exactly one cancellation event must have been emitted.
-    assert_eq!(cancelled_events(&env).len(), 1);
 }
 
 #[test]
 fn cancelled_proposal_cannot_be_voted_on() {
     let (env, client, admin) = setup();
-    let guardian = Address::generate(&env);
-    client.add_guardian(&admin, &guardian, &100u32);
+    // `do_vote_proposal` authorizes the *stored admin* and then reads that
+    // address's guardian weight, so the admin itself must hold weight for
+    // any vote to be recorded.
+    client.add_guardian(&admin, &admin, &100u32);
 
     let new_admin = Address::generate(&env);
     let proposal_id = submit_rotate_proposal(&env, &client, &new_admin);
@@ -331,8 +336,10 @@ fn cancelled_proposal_cannot_be_voted_on() {
 #[test]
 fn cancelled_proposal_cannot_be_executed_even_with_quorum() {
     let (env, client, admin) = setup();
-    let guardian = Address::generate(&env);
-    client.add_guardian(&admin, &guardian, &100u32);
+    // `do_vote_proposal` authorizes the *stored admin* and then reads that
+    // address's guardian weight, so the admin itself must hold weight for
+    // any vote to be recorded.
+    client.add_guardian(&admin, &admin, &100u32);
 
     let new_admin = Address::generate(&env);
     let cancelled_id = submit_rotate_proposal(&env, &client, &new_admin);
@@ -363,8 +370,10 @@ fn cancelled_proposal_cannot_be_executed_even_with_quorum() {
 #[test]
 fn cannot_cancel_already_executed_proposal() {
     let (env, client, admin) = setup();
-    let guardian = Address::generate(&env);
-    client.add_guardian(&admin, &guardian, &100u32);
+    // `do_vote_proposal` authorizes the *stored admin* and then reads that
+    // address's guardian weight, so the admin itself must hold weight for
+    // any vote to be recorded.
+    client.add_guardian(&admin, &admin, &100u32);
 
     let new_admin = Address::generate(&env);
     let proposal_id = submit_rotate_proposal(&env, &client, &new_admin);
@@ -383,8 +392,10 @@ fn cannot_cancel_already_executed_proposal() {
 #[test]
 fn rejected_cancellations_leave_proposal_state_unchanged() {
     let (env, client, admin) = setup();
-    let guardian = Address::generate(&env);
-    client.add_guardian(&admin, &guardian, &100u32);
+    // `do_vote_proposal` authorizes the *stored admin* and then reads that
+    // address's guardian weight, so the admin itself must hold weight for
+    // any vote to be recorded.
+    client.add_guardian(&admin, &admin, &100u32);
 
     let new_admin = Address::generate(&env);
     let proposal_id = submit_rotate_proposal(&env, &client, &new_admin);

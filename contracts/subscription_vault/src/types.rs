@@ -1956,7 +1956,7 @@ pub struct AdminRotatedEvent {
 ///
 /// The proposal must be claimed by `new_admin` before `expires_at`.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AdminProposal {
     pub new_admin: Address,
     pub proposed_at: u64,
@@ -3371,9 +3371,14 @@ mod event_topic_tests {
             ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
         ];
 
-        for (_, topic) in topics.iter() {
-            env.events().publish((topic,), ());
-        }
+        // `Env::events().all()` only captures events emitted inside a contract
+        // invocation, so the publishing runs under `as_contract` on a stub.
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        env.as_contract(&contract_id, || {
+            for (_, topic) in topics.iter() {
+                env.events().publish((topic,), ());
+            }
+        });
 
         let emitted_events = env.events().all();
         assert_eq!(emitted_events.len(), topics.len() as u32);
