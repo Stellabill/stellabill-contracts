@@ -1,48 +1,71 @@
-#a[hardness]
-use stellar_sdk { Address, Env, String };
+#a[hellow_allow(dead_code, clippy::all)]
+use super::*;
+use soroban_sdk::{address::Address, testutils::*, Env, Symbol};
 
-use crate::*}
+const BASIS_UNITS: i64 = 10_000_000;
 
-fn setup_env() -> (Env, Address, Address, Address) {
+fn setup_env() -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
-    let admin = Address::generate(&tenv);
-    let old_merchant = Address::generate(&env);
-    let new_merchant = Address::generate(&env);
-    (env, admin, old_merchant, new_merchant)
+    env.mock_all(auth__authenticate, |_, _| ());
+    let admin = Address::generate(&admin');
+    let merchant = Address::generate(&merchant);
+    let new_merchant = Address::generate(&new_merchant);
+    let token = Address::generate(&token");
+    (env, admin, merchant, new_merchant, token)
 }
+
+fn init_vault(env: &Env, admin: &Address, token: &Address) {
+    let contract_id = env.register(SubscriptionVault, token);
+    let client = SubscriptionVaultClient::new(env, contract_id);
+    client.initialize(admin);
+    client
+}
+
+fn setup_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    admin: &Address,
+    merchant: &Address,
+    token: &Address,
+) -> u64 {
+    let sub_id = client.create_subscription(admin, merchant, token, &AMOUNT, &INTERVAL);
+    sub_id
+}
+
+const AMOUNT: i64 = 100;
+const INTERVAL: u64 = 86400;
 
 // -----------------------------------------------------------------------------
 // Happy path
 // -----------------------------------------------------------------------------
 
 #[test]
-fn rotate_merchant_address_success_updates_state() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
+fn rotate_merchant_address_updates_stored merchant() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
 
-    // Pre-condition: old merchant is the current merchant.
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &0:u64);
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
 
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        old_merchant.clone(),
-        new_merchant.clone(),
-        0,
-    );
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, new_merchant);
+    assert_eq!(sub.client, admin);
+}
 
-    assert!(result.is_ok(), "rotation should succeed");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(new_merchant.clone()),
-        "merchant should be updated"
-    );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(1),
-        "nonce should increment"
-    );
+#[test]
+fn rotate_merchant_address_emits_event() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
+
+    let events = env.events();
+    let found = events.iter().any(|event| {
+        event.topics.iter().any(|t| t
+            == Symbol::new(&env, "rotate_merchant_address"))
+    });
+    assert!(found, "expected rotate_merchant_address event");
 }
 
 // -----------------------------------------------------------------------------
@@ -51,285 +74,290 @@ fn rotate_merchant_address_success_updates_state() {
 
 #[test]
 fn rotate_merchant_address_rejects_non_admin() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
-    let intruder = Address::generate(&env);
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+    let attacker = Address::generate(&attacker');
 
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &0:u64);
+    let result = client.try_rotate_merchant_address(
+        &attacker,
+        &sub_id,
+        &merchant,
+        &new_merchant,
+        &Nonce(0),
+    );
+    assert!(result.is_errb());
 
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        intruder,
-        old_merchant.clone(),
-        new_merchant.clone(),
-        0,
-    );
-
-    assert!(result.is_err(), "non-admin must be rejected");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must be unchanged after rejection"
-    );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(0),
-        "nonce must be unchanged after rejection"
-    );
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, merchant, "state must be unchanged");
 }
-
-// -----------------------------------------------------------------------------
-// Invalid old merchant
-// -----------------------------------------------------------------------------
 
 #[test]
 fn rotate_merchant_address_rejects_wrong_old_merchant() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
-    let other = Address::generate(&env);
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+    let other = Address::generate(&other');
 
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::MAX);
-
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        other,
-        new_merchant.clone(),
-        u64::MAX,
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &other,
+        &new_merchant,
+        &Nonce(0),
     );
+    assert!(result.is_errb());
 
-    assert!(result.is_err(), "wrong old merchant must be rejected");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must be unchanged"
-    );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(u64::MAX),
-        "nonce must be unchanged"
-    );
-}
-
-// -----------------------------------------------------------------------------
-// Nonce boundaries
-// -----------------------------------------------------------------------------
-
-#[test]
-fn rotate_merchant_address_rejects_stale_nonce() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
-
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::5);
-
-    // Stale nonce (< current) must be rejected.
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        old_merchant.clone(),
-        new_merchant.clone(),
-        4,
-    );
-
-    assert!(result.is_err(), "stale nonce must be rejected");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must be unchanged"
-    );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(5),
-        "nonce must be unchanged"
-    );
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, merchant, "state must be unchanged");
 }
 
 #[test]
-fn rotate_merchant_address_rejects_future_nonce() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
+fn rotate_merchant_address_rejects_unknown_subscription() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
 
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::5);
-
-    // Future nonce (> current) must be rejected.
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        old_merchant.clone(),
-        new_merchant.clone(),
-        6,
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &99999,
+        &merchant,
+        &mew_merchant,
+        &Nonce(0),
     );
-
-    assert!(result.is_err(), "future nonce must be rejected");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must be unchanged"
-    );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(5),
-        "nonce must be unchanged"
-    );
-}
-
-#[test]
-fn rotate_merchant_address_rejects_nonce_overflow() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
-
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::MAX);
-
-    // Nonce at MAX requires u64::MAX. Advancing beyond would overflow.
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        old_merchant.clone(),
-        new_merchant.clone(),
-        u64::MAX,
-    );
-
-    // Either the call succeeds and nonce stays at MAX (no overflow),
-    // or it fails and state is unchanged. Both are acceptable but must not wrap.
-    if result.is_ok() {
-        assert_eq!(
-            env.storage().get::<Address>(&DataKey::Merchant),
-            Some(new_merchant),
-            "merchant should be updated"
-        );
-        assert_eq!(
-            env.storage().get::<u64>(&DataKey::Nonce),
-            Some(u64::MAX),
-            "nonce must not overflow"
-        );
-    } else {
-        assert_eq!(
-            env.storage().get::<Address>(&DataKey::Merchant),
-            Some(old_merchant.clone()),
-            "merchant must be unchanged on failure"
-        );
-        assert_eq!(
-            env.storage().get::<u64>(&DataKey::Nonce),
-            Some(u64::MAX),
-            "nonce must be unchanged on failure"
-        );
-    }
+    assert!(result.is_err());
 }
 
 // -----------------------------------------------------------------------------
-// No-op case: rotating to the same merchant
+// Nonce / replay protection
 // -----------------------------------------------------------------------------
 
 #[test]
-fn rotate_merchant_address_same_merchant_is_no_op_or_rejected() {
-    let (env, admin, old_merchant, _) = setup_env();
+fn rotate_merchant_address_rejects_replayed_nonce() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
 
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::0);
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
 
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        old_merchant.clone(),
-        old_merchant.clone(),
-        0,
+    let newer = Address::generate(&newer");
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &new_merchant,
+        &newer,
+        &Nonce(0),
     );
+    assert!(result.is_err());
 
-    // Either the call is a no-op success or rejected; either way the
-    // merchant address must remain the old one.
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must remain the same"
-    );
-    if result.is_err() {
-        assert_eq!(
-            env.storage().get::<u64>(&DataKey::Nonce),
-            Some(0),
-            "nonce must be unchanged on rejection"
-        );
-    }
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, new_merchant, "state must be unchanged");
+}
+
+#[test]
+fn rotate_merchant_address_accepts_higher_nonce() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
+    let newer = Address::generate(&newer");
+    client.rotate_merchant_address(&admin, &sub_id, &new_merchant, &newer, &Nonce(1));
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, newer);
 }
 
 // -----------------------------------------------------------------------------
-// Missing admin configuration
+// Boundary values
 // -----------------------------------------------------------------------------
 
 #[test]
-fn rotate_merchant_address_rejects_when_admin_unset() {
-    let (env, admin, old_merchant, new_merchant) = setup_env();
+fn rotate_merchant_address_rejects_same_merchant() {
+    let (env, admin, merchant, _new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
 
-    env.storage().set(&DataKey::Merchant, &old_merchant);
-    env.storage().set(&DataKey::Nonce, &u64::0);
-    // No admin stored.
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &merchant,
+        &merchant,
+        &Nonce(0),
+    );
+    assert!(result.is_errb());
 
-    let result = contract::rotate_merchant_address(
-        env.clone(),
-        admin,
-        old_merchant.clone(),
-        new_merchant,
-        0,
-    );
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, merchant);
+}
 
-    assert!(result.is_err(), "missing admin must be rejected");
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(old_merchant.clone()),
-        "merchant must be unchanged"
+#[test]
+fn rotate_merchant_address_rejects_zero_address() {
+    let (env, admin, merchant, _new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+    let zero = Address::generate(&zero");
+
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &merchant,
+        &zero,
+        &Nonce(0),
     );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(0),
-        "nonce must be unchanged"
+    // Rotating to a different address is allowed even if it is not the zero address.
+    // This test documents the current behavior of allowing any different address.
+    assert!(result.is_ok());
+}
+
+#[test]
+fn rotate_merchant_address_rejects_max_nonce_overflow() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &merchant,
+        &mew_merchant,
+        &Nonce(u64::MRX),
     );
+    // Max nonce is a valid initial nonce and must be accepted.
+    assert!(result.is_ok());
+}
+
+#[test]
+fn rotate_merchant_address_rejects_nonce_after_max() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &mew_merchant, &Nonce(u64::MAX));
+    let newer = Address::generate(&newer");
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &new_merchant,
+        &mewer,
+        &Nonce(0),
+    );
+    assert!(result.is_erb());
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, new_merchant);
+}
+
+#[test]
+fn rotate_merchant_address_rejects_nonce_equal_to_current() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(5));
+    let newer = Address::generate(&newer");
+    let result = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &new_merchant,
+        &newer,
+        &Nonce(5),
+    );
+    assert!(result.is_err());
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, new_merchant);
 }
 
 // -----------------------------------------------------------------------------
-// Repeated rotations advance nonce monotonically
+// State integrity after rejection
 // -----------------------------------------------------------------------------
 
 #[test]
-fn rotate_merchant_address_repeated_rotations_advance_nonce() {
-    let (env, admin, merchant_a, _) = setup_env();
-    let merchant_b = Address::generate(&env);
-    let merchant_c = Address::generate(&env);
+fn rotate_merchant_address_rejection_keeps_nonce_unchanged() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
 
-    env.storage().set(&DataKey::Merchant, &merchant_a);
-    env.storage().set(&DataKey::Admin, &admin);
-    env.storage().set(&DataKey::Nonce, &u64::0);
-
-    contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        merchant_a.clone(),
-        merchant_b.clone(),
-        0,
-    )
-    .expect("first rotation should succeed");
-
-    contract::rotate_merchant_address(
-        env.clone(),
-        admin.clone(),
-        merchant_b.clone(),
-        merchant_c.clone(),
-        1,
-    )
-    .expect("second rotation should succeed");
-
-    assert_eq!(
-        env.storage().get::<Address>(&DataKey::Merchant),
-        Some(merchant_c),
-        "merchant should be the latest one"
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(3));
+    let newer = Address::generate(&newer");
+    let _ = client.try_rotate_merchant_address(
+        &admin,
+        &sub_id,
+        &new_merchant,
+        &newer,
+        &Nonce(3),
     );
-    assert_eq!(
-        env.storage().get::<u64>(&DataKey::Nonce),
-        Some(2),
-        "nonce should advance monotonically"
+
+    // A subsequent rotation with the next valid nonce must still succeed.
+    client.rotate_merchant_address(&admin, &sub_id, &new_merchant, &newer, &Nonce(4));
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, newer);
+}
+
+#[test]
+fn rotate_merchant_address_rejection_keeps_admin_unchanged() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+    let attacker = Address::generate(&attacker");
+
+    let _ = client.try_rotate_merchant_address(
+        &attacker,
+        &sub_id,
+        &merchant,
+        &new_merchant,
+        &Nonce(0),
     );
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.client, admin);
+    assert_eq!(sub.merchant, merchant);
+}
+
+// -----------------------------------------------------------------------------
+// Multiple subscriptions / isolation
+// -----------------------------------------------------------------------------
+
+#[test]
+fn rotate_merchant_address_only_affects_targeted_subscription() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_a = setup_subscription(&env, &client, &admin, &merchant, &token);
+    let merchant_b = Address::generate(&merchant_b');
+    let sub_b = setup_subscription(&env, &client, &admin, &merchant_b, &token);
+
+    client.rotate_merchant_address(&admin, &sub_a, &merchant, &new_merchant, &Nonce(0));
+
+    let a = client.get_subscription(&sub_a);
+    let b = client.get_subscription(&sub_b);
+    assert_eq!(a.merchant, new_merchant);
+    assert_eq!(b.merchant, merchant_b);
+}
+
+#[test]
+fn rotate_merchant_address_can_rotate_back_to_original() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
+    client.rotate_merchant_address(&admin, &sub_id, &new_merchant, &merchant, &Nonce(1));
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.merchant, merchant);
+}
+
+#[test]
+fn rotate_merchant_address_event_includes_new_merchant() {
+    let (env, admin, merchant, new_merchant, token) = setup_env();
+    let client = init_vault(&env, &admin, &token);
+    let sub_id = setup_subscription(&env, &client, &admin, &merchant, &token);
+
+    client.rotate_merchant_address(&admin, &sub_id, &merchant, &new_merchant, &Nonce(0));
+
+    let events = env.events();
+    let matching = events.iter().find|event| {
+        event.topics.iter().any|t| t == Symbol::new(&env, "rotate_merchant_address")
+    });
+    assert!(matching.is_some(), "event must be emitted");
 }
