@@ -120,6 +120,11 @@ fn setup() -> Harness {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
+    // The per-subscriber active cap (#578) defaults to 10; this fuzz sequence
+    // intentionally accumulates up to MAX_CREATES_PER_SEED concurrent
+    // subscriptions, so lift the cap to keep the focus on credit limits.
+    client.set_subscriber_active_cap(&admin, &subscriber, &Some(MAX_CREATES_PER_SEED));
+
     Harness {
         env,
         client,

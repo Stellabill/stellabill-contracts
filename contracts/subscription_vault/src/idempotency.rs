@@ -113,57 +113,73 @@ mod test {
         BytesN::from_array(env, &arr)
     }
 
+    /// Instance storage is only reachable inside `env.as_contract`, so every
+    /// test body runs against a freshly registered contract instance.
+    fn contract_env() -> (Env, soroban_sdk::Address) {
+        let env = Env::default();
+        let contract_id = env.register(crate::SubscriptionVault, ());
+        (env, contract_id)
+    }
+
     #[test]
     fn test_check_key_empty_buffer() {
-        let env = Env::default();
+        let (env, contract_id) = contract_env();
         let sub_id = 1;
         let hashed = make_hash(&env, 1);
 
-        assert!(!check_key(&env, sub_id, &hashed));
+        env.as_contract(&contract_id, || {
+            assert!(!check_key(&env, sub_id, &hashed));
+        });
     }
 
     #[test]
     fn test_check_key_existing_key() {
-        let env = Env::default();
+        let (env, contract_id) = contract_env();
         let sub_id = 2;
         let hashed = make_hash(&env, 2);
 
-        push_key(&env, sub_id, &hashed);
+        env.as_contract(&contract_id, || {
+            push_key(&env, sub_id, &hashed);
 
-        assert!(check_key(&env, sub_id, &hashed));
+            assert!(check_key(&env, sub_id, &hashed));
+        });
     }
 
     #[test]
     fn test_check_key_missing_key_in_populated_buffer() {
-        let env = Env::default();
+        let (env, contract_id) = contract_env();
         let sub_id = 3;
         let hashed1 = make_hash(&env, 1);
         let hashed2 = make_hash(&env, 2);
 
-        push_key(&env, sub_id, &hashed1);
+        env.as_contract(&contract_id, || {
+            push_key(&env, sub_id, &hashed1);
 
-        assert!(!check_key(&env, sub_id, &hashed2));
+            assert!(!check_key(&env, sub_id, &hashed2));
+        });
     }
 
     #[test]
     fn test_check_key_state_unchanged() {
-        let env = Env::default();
+        let (env, contract_id) = contract_env();
         let sub_id = 4;
         let hashed1 = make_hash(&env, 1);
         let hashed2 = make_hash(&env, 2);
 
-        push_key(&env, sub_id, &hashed1);
-        
-        let buf_before = load_buffer(&env, sub_id);
+        env.as_contract(&contract_id, || {
+            push_key(&env, sub_id, &hashed1);
 
-        let _ = check_key(&env, sub_id, &hashed2);
-        
-        let buf_after = load_buffer(&env, sub_id);
-        
-        assert_eq!(buf_before.cursor, buf_after.cursor);
-        assert_eq!(buf_before.entries.len(), buf_after.entries.len());
-        for i in 0..buf_before.entries.len() {
-            assert_eq!(buf_before.entries.get(i), buf_after.entries.get(i));
-        }
+            let buf_before = load_buffer(&env, sub_id);
+
+            let _ = check_key(&env, sub_id, &hashed2);
+
+            let buf_after = load_buffer(&env, sub_id);
+
+            assert_eq!(buf_before.cursor, buf_after.cursor);
+            assert_eq!(buf_before.entries.len(), buf_after.entries.len());
+            for i in 0..buf_before.entries.len() {
+                assert_eq!(buf_before.entries.get(i), buf_after.entries.get(i));
+            }
+        });
     }
 }

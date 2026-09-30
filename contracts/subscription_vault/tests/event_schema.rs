@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     token::StellarAssetClient,
     Address, Env, FromVal,
 };
@@ -118,6 +118,18 @@ fn test_subscription_charged_event_emitted() {
 
     client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
 
+    // Charging routes the merchant's earnings through merchant config
+    // (fee bps, earnings keys); without it charge/withdraw fail with a
+    // merchant-domain error and no `charged` event is emitted.
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None::<Address>,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
+
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
         &None::<u32>, &None::<soroban_sdk::Symbol>,
@@ -125,6 +137,8 @@ fn test_subscription_charged_event_emitted() {
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
 
+    // A charge only lands once the billing interval has elapsed.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 30 * 24 * 60 * 60 + 1);
     client.batch_charge(&soroban_sdk::vec![&env, sub_id], &0u64);
 
     let events = env.events().all();
@@ -167,14 +181,30 @@ fn test_merchant_withdrawal_event_emitted() {
 
     client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
 
+    // Withdrawal settles from per-token merchant earnings; the merchant
+    // config must exist for the earnings keys and payout path to resolve.
+    client.initialize_merchant_config(
+        &merchant,
+        &merchant,
+        &0i32,
+        &0x1Fi32,
+        &None::<Address>,
+        &soroban_sdk::String::from_str(&env, "https://example.com"),
+    );
+
     let sub_id = client.create_subscription(
         &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
         &None::<u32>, &None::<soroban_sdk::Symbol>,
     );
     
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
+
+    // The withdrawal settles from *earned* merchant balance, so charge first:
+    // advance past the billing interval (else the charge is rejected with
+    // IntervalNotElapsed) and let the merchant accrue earnings.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 30 * 24 * 60 * 60 + 1);
     client.batch_charge(&soroban_sdk::vec![&env, sub_id], &0u64);
-    
+
     client.withdraw_merchant_token_funds(&merchant, &token_address, &500_000i128);
 
     let events = env.events().all();

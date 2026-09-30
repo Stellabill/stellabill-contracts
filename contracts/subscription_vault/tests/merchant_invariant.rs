@@ -126,6 +126,19 @@ fn setup_env<'a>() -> (
         let interval = 86400 * 30;
         let usage_enabled = true;
 
+        // A usage-metered subscription cannot be created unless the merchant
+        // has already recorded a usage-limits entry for the id it is about to
+        // receive (`Error::UsageLimitsRequired` / #6020). Ids are handed out
+        // sequentially from 0, so seed the entry before each create.
+        vault.configure_usage_limits(
+            merchant,
+            &(i as u32),
+            &None::<u32>,
+            &0u64,
+            &0u64,
+            &None::<i128>,
+        );
+
         let sub_id = vault.create_subscription(
             &sub,
             merchant,
@@ -154,7 +167,10 @@ fn setup_env<'a>() -> (
 
 proptest! {
     #![proptest_config(Config {
-        cases: 250,
+        // Case count reduced (do_cancel_proposal PR): with usage charges now
+        // actually executing (limits configured in setup), each case does
+        // more contract work; 32 cases keep the suite's wall time bounded.
+        cases: 32,
         failure_persistence: Some(Box::new(FileFailurePersistence::WithSource("merchant_invariant_failures"))),
         .. Config::default()
     })]

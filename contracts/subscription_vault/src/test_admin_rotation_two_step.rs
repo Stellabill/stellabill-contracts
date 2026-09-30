@@ -17,7 +17,8 @@ fn find_event_data(env: &Env, topic: &Symbol) -> Option<Val> {
     for i in 0..all.len() {
         let (_, topics, data): (Address, Vec<Val>, Val) = all.get(i).unwrap();
         let first_topic = topics.get(0);
-        if first_topic == Some(topic_val.clone()) {
+        // `Option<Val>` has no `PartialEq`; compare raw payloads instead.
+        if first_topic.map(|v| v.get_payload()) == Some(topic_val.get_payload()) {
             return Some(data);
         }
     }

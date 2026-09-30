@@ -167,12 +167,26 @@ pub fn patch_status(
 }
 
 /// Directly seed the prepaid balance of a subscription in storage.
+///
+/// Withdrawal paths settle with a real token transfer from the vault, so the
+/// contract must also hold spendable tokens, not just a bumped accounting
+/// field. The token address is read from the contract's own config so the
+/// fixture stays self-contained.
 pub fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balance: i128) {
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
         env.storage().persistent().set(&DataKey::Sub(id), &sub);
     });
+
+    // Keep the vault's real token balance in sync with the accounting entry.
+    let token = env.as_contract(&client.address, || {
+        crate::admin::read_config(env, &DataKey::Token)
+    });
+    if let Some(token) = token {
+        use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
+        TokenAdminClient::new(env, &token).mint(&client.address, &balance);
+    }
 }
 
 /// Seed the `next_id` counter to an arbitrary value.

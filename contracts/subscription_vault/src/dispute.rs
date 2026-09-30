@@ -560,6 +560,7 @@ mod tests {
     use super::*;
     use crate::test_utils::setup::TestEnv;
     use crate::types::{DisputeStatus, DISPUTE_WINDOW_SECS, DataKey};
+    use soroban_sdk::token::Client as TokenClient;
     use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, BytesN};
 
     fn setup_dispute(te: &TestEnv, amount: i128) -> (u32, u64, Address, Address) {
@@ -574,11 +575,18 @@ mod tests {
             &false,
             &None,
             &None::<u64>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         
         te.env.as_contract(&te.client.address, || {
             crate::merchant::set_merchant_balance(&te.env, &merchant, &te.token, &100_000);
         });
+
+        // Resolutions settle refunds with a real token transfer from the
+        // vault, so the contract itself must hold spendable balance.
+        te.stellar_token_client()
+            .mint(&te.client.address, &1_000_000);
 
         let evidence = Some(BytesN::from_array(&te.env, &[1; 32]));
         let dispute_id = te.client.open_dispute(&subscriber, &sub_id, &amount, &evidence);
@@ -653,7 +661,8 @@ mod tests {
             assert!(!has_sub_dispute);
         });
         
-        let sub_balance = te.stellar_token_client().balance(&subscriber);
+        // `balance()` lives on the token client, not the asset-admin client.
+        let sub_balance = TokenClient::new(&te.env, &te.token).balance(&subscriber);
         assert_eq!(sub_balance, amount);
     }
 
@@ -696,7 +705,8 @@ mod tests {
             assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
         });
         
-        let sub_balance = te.stellar_token_client().balance(&subscriber);
+        // `balance()` lives on the token client, not the asset-admin client.
+        let sub_balance = TokenClient::new(&te.env, &te.token).balance(&subscriber);
         assert_eq!(sub_balance, amount);
     }
 }
