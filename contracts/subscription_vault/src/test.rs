@@ -1375,7 +1375,6 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
         &INTERVAL,
         &false,
         &None::<i128>,
-        &None::<u64>,
     );
     let plan_sub = test_env
         .client
@@ -1395,6 +1394,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &INTERVAL,
             &false,
             &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::SubscriberBlocklisted))
     );
@@ -1407,6 +1407,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &INTERVAL,
             &false,
             &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::SubscriberBlocklisted))
     );
@@ -2377,6 +2378,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         lifetime_charged: 0,
         start_time: 0,
         expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -3054,7 +3056,6 @@ fn test_migrate_subscription_rejects_cross_template_family() {
         &INTERVAL,
         &false,
         &None::<i128>,
-        &None::<u64>,
     );
 
     let sub_id = test_env
@@ -3203,7 +3204,7 @@ fn test_migrate_subscription_requires_plan_origin() {
      &None::<u64>);
     let plan_id = test_env.client.create_plan_template(
         &merchant,
-        &AMOUNT * 2,
+        &(&AMOUNT * 2),
         &INTERVAL,
         &false,
         &None::<i128>,
@@ -4852,6 +4853,7 @@ fn test_create_subscription_lifetime_cap_less_than_amount_rejected() {
         &INTERVAL,
         &false,
         &Some(9i128),
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -4926,6 +4928,7 @@ fn test_create_subscription_with_token_lifetime_cap_less_than_amount_rejected() 
         &INTERVAL,
         &false,
         &Some(9i128),
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -4964,6 +4967,7 @@ fn test_create_subscription_max_amount_and_cap_succeeds() {
         &INTERVAL,
         &false,
         &Some(i128::MAX),
+        &None::<u64>,
     );
     let sub = test_env.client.get_subscription(&id);
     assert_eq!(sub.amount, i128::MAX);
@@ -4982,6 +4986,7 @@ fn test_create_subscription_max_amount_cap_smaller_rejected() {
         &INTERVAL,
         &false,
         &Some(i128::MAX - 1),
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
@@ -5125,8 +5130,10 @@ fn test_admin_rotation_affects_recovery_operations() {
     // Old admin can recover before rotation.
     test_env.client.recover_stranded_funds(
         &test_env.admin,
+        &test_env.token,
         &recipient,
         &1_000_000i128,
+        &String::from_str(&test_env.env, "recovery-1"),
         &RecoveryReason::AccidentalTransfer,
     );
 
@@ -5168,8 +5175,10 @@ fn test_all_admin_operations_after_rotation() {
     test_env.client.set_min_topup(&new_admin, &3_000_000i128);
     test_env.client.recover_stranded_funds(
         &new_admin,
+        &test_env.token,
         &recipient,
         &1_000_000i128,
+        &String::from_str(&test_env.env, "recovery-2"),
         &RecoveryReason::AccidentalTransfer,
     );
     test_env.client.rotate_admin(&new_admin, &next_admin);
@@ -6460,14 +6469,14 @@ fn test_pause_with_varying_intervals() {
 
     let id1 = test_env
         .client
-        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>);
+        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, &None::<u64>);
     let id2 = test_env
         .client
-        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>);
+        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, &None::<u64>);
     let id3 =
         test_env
             .client
-            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>);
+            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, &None::<u64>);
 
     // All three should pause without error regardless of interval.
     test_env.client.pause_subscription(&id1, &s1);
@@ -6637,7 +6646,7 @@ fn setup_oracle_env<'a>(
         &None::<i128>,
         &None::<u64>,
     );
-    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    client.deposit_funds(&id, &subscriber, &200_000_000i128);
     (id, subscriber, merchant, oracle)
 }
 
@@ -7104,6 +7113,7 @@ mod storage_layout {
             lifetime_charged: 10_000_000,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -7208,6 +7218,7 @@ mod storage_layout {
             lifetime_charged: 0,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&client.address, || {
@@ -7983,6 +7994,7 @@ fn test_oneoff_lifetime_cap_boundary() {
         &INTERVAL,
         &false,
         &Some(20_000_000i128),
+        &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 

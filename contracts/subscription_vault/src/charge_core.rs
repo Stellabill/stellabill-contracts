@@ -182,7 +182,7 @@ pub fn charge_one(
                             subscription_id,
                             treasury: treasury.clone(),
                             fee_amount,
-                            merchant_amount,
+                            merchant: sub.merchant.clone(),
                             timestamp: now,
                         },
                     );

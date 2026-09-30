@@ -54,7 +54,6 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &INTERVAL,
         &false,
         &None::<i128>,
-        &None::<u64>,
     );
 
     client.enable_emergency_stop(&admin);
@@ -67,7 +66,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -79,7 +79,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::EmergencyStopActive))
     );

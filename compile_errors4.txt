@@ -1,0 +1,214 @@
+    Checking subscription_vault v0.1.0 (C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\contracts\subscription_vault)
+warning: unused import: `Subscription`
+  --> contracts\subscription_vault\src\charge_core.rs:39:30
+   |
+39 |     LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+   |                              ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias` and `UsageState`
+  --> contracts\subscription_vault\src\subscription.rs:50:5
+   |
+50 |     SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+51 |     UsageLimits, UsageState,
+   |                  ^^^^^^^^^^
+
+warning: unused import: `Symbol`
+ --> contracts\subscription_vault\src\test_admin.rs:4:58
+  |
+4 | use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+  |                                                          ^^^^^^
+
+warning: unused import: `Val`
+ --> contracts\subscription_vault\src\test_auth_fuzz.rs:8:47
+  |
+8 |     Address, Env, Vec as SorobanVec, IntoVal, Val,
+  |                                               ^^^
+
+warning: unused import: `Ledger as _`
+ --> contracts\subscription_vault\src\test_recovery.rs:6:57
+  |
+6 | use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+  |                                                         ^^^^^^^^^^^
+
+warning: unused imports: `IntoVal` and `Symbol`
+ --> contracts\subscription_vault\src\test_recovery.rs:7:48
+  |
+7 | use soroban_sdk::{token, Address, Env, String, Symbol, IntoVal};
+  |                                                ^^^^^^  ^^^^^^^
+
+error[E0061]: this method takes 6 arguments but 7 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:1371:35
+     |
+1371 |     let plan_v2 = test_env.client.update_plan_template(
+     |                                   ^^^^^^^^^^^^^^^^^^^^
+...
+1378 |         &None::<u64>,
+     |         ------------ unexpected argument #7 of type `&core::option::Option<u64>`
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:917:12
+     |
+ 917 |     pub fn update_plan_template(
+     |            ^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+1377 -         &None::<i128>,
+1378 -         &None::<u64>,
+1377 +         &None::<i128>,
+     |
+
+error[E0061]: this method takes 5 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:51:26
+    |
+ 51 |     let plan_id = client.create_plan_template(
+    |                          ^^^^^^^^^^^^^^^^^^^^
+...
+ 57 |         &None::<u64>,
+    |         ------------ unexpected argument #6 of type `&core::option::Option<u64>`
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:781:12
+    |
+781 |     pub fn create_plan_template(
+    |            ^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+ 56 -         &None::<i128>,
+ 57 -         &None::<u64>,
+ 56 +         &None::<i128>,
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:64:16
+    |
+ 64 |           client.try_create_subscription(
+    |  ________________^^^^^^^^^^^^^^^^^^^^^^^-
+ 65 | |             &subscriber,
+ 66 | |             &merchant,
+ 67 | |             &1_000_000i128,
+...   |
+ 70 | |             &None::<i128>
+ 71 | |         ),
+    | |_________- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+ 64 |         client.try_create_subscription(
+...
+ 69 |             &false,
+ 70 ~             &None::<i128>,
+ 71 +             /* &core::option::Option<u64> */,
+    |
+
+error[E0061]: this method takes 8 arguments but 7 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:75:16
+    |
+ 75 |           client.try_create_subscription_with_token(
+    |  ________________^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+ 76 | |             &subscriber,
+ 77 | |             &merchant,
+ 78 | |             &token,
+...   |
+ 82 | |             &None::<i128>
+ 83 | |         ),
+    | |_________- argument #8 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:678:12
+    |
+678 |     pub fn create_subscription_with_token(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+687 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+ 75 |         client.try_create_subscription_with_token(
+...
+ 81 |             &false,
+ 82 ~             &None::<i128>,
+ 83 +             /* &core::option::Option<u64> */,
+    |
+
+warning: unused variable: `token_addr`
+   --> contracts\subscription_vault\src\subscription.rs:829:9
+    |
+829 |     let token_addr = sub.token.clone();
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_addr`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tracked_batch`
+    --> contracts\subscription_vault\src\test.rs:1838:9
+     |
+1838 |     let tracked_batch = [valid_batch, low_batch, paused_batch];
+     |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tracked_batch`
+
+warning: unused variable: `tracked_single`
+    --> contracts\subscription_vault\src\test.rs:1839:9
+     |
+1839 |     let tracked_single = [valid_single, low_single, paused_single];
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tracked_single`
+
+warning: unused variable: `id1`
+    --> contracts\subscription_vault\src\test.rs:3082:9
+     |
+3082 |     let id1 = test_env.client.create_subscription(
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_id1`
+
+warning: unused variable: `cap`
+    --> contracts\subscription_vault\src\test.rs:3232:9
+     |
+3232 |     let cap = 2 * AMOUNT;
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_cap`
+
+warning: unused variable: `admin`
+  --> contracts\subscription_vault\src\test_admin.rs:64:31
+   |
+64 |     let (env, contract_id, _, admin) = setup_admin_env();
+   |                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_admin`
+
+warning: unused variable: `deposit_balance`
+   --> contracts\subscription_vault\src\test_expiration.rs:118:9
+    |
+118 |     let deposit_balance = (min_topup * 5) - 0; // no charges made before expiry
+    |         ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_deposit_balance`
+
+warning: unused variable: `token_admin`
+   --> contracts\subscription_vault\src\test_expiration.rs:129:30
+    |
+129 |     let (env, client, token, token_admin, _) = setup_test_env();
+    |                              ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_admin`
+
+warning: unused variable: `expires_at`
+   --> contracts\subscription_vault\src\test_expiration.rs:133:9
+    |
+133 |     let expires_at = T0 + 2 * INTERVAL;
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_expires_at`
+
+warning: unused variable: `token_admin`
+  --> contracts\subscription_vault\src\test_recovery.rs:35:9
+   |
+35 |     let token_admin = admin.clone();
+   |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_admin`
+
+warning: unused variable: `admin`
+  --> contracts\subscription_vault\src\test_recovery.rs:72:30
+   |
+72 |     let (env, client, token, admin) = setup_env();
+   |                              ^^^^^ help: if this is intentional, prefix it with an underscore: `_admin`
+
+For more information about this error, try `rustc --explain E0061`.
+warning: `subscription_vault` (lib test) generated 17 warnings
+error: could not compile `subscription_vault` (lib test) due to 4 previous errors; 17 warnings emitted
