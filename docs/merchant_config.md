@@ -211,3 +211,203 @@ let updated = client.update_merchant_config(
 ## Upgradability
 
 The config struct includes `version` field for forward-compatible upgrades. New fields can be added with migration logic while preserving existing storage layout.
+
+---
+
+## KYC Attestation
+
+### Overview
+
+The vault supports an optional, admin-controlled KYC (Know Your Customer) gate on
+merchant withdrawals. When the global `kyc_required` flag is `true`, every merchant
+must have an active attestation record before they can call `withdraw_merchant_funds`
+or `withdraw_merchant_token_funds`. When the flag is `false` (the default), no KYC
+check is performed and the feature is completely invisible to existing integrations.
+
+### Storage
+
+```text
+DataKey::KycRequired               => bool           (instance, global flag)
+DataKey::Kyc(KycKey::MerchantStatus(Address)) => MerchantKyc  (instance, per merchant)
+```
+
+### KYC record type
+
+```rust
+pub struct MerchantKyc {
+    /// Opaque attestation hash supplied by the off-chain compliance provider.
+    pub attestation_hash: Bytes,
+    /// UNIX timestamp (ledger seconds) when the attestation was issued.
+    pub issued_at: u64,
+    /// `true` = active/valid, `false` = revoked/inactive.
+    pub status: bool,
+}
+```
+
+### Entry points
+
+#### set_kyc_required (admin-only)
+
+Enables or disables the global KYC gate.
+
+```rust
+pub fn set_kyc_required(env: Env, admin: Address, required: bool) -> Result<(), Error>
+```
+
+Errors:
+- `NotInitialized` — contract not initialised.
+- `Forbidden` — caller is not the stored admin.
+
+#### get_kyc_required
+
+Returns the current value of the global KYC-required flag (defaults to `false`).
+
+```rust
+pub fn get_kyc_required(env: Env) -> bool
+```
+
+#### attach_merchant_kyc (admin-only)
+
+Attaches a new KYC attestation to a merchant. If the merchant already has an
+**active** attestation the call returns `KycAlreadyAttached`. A previously-revoked
+attestation may be overwritten by a new one.
+
+```rust
+pub fn attach_merchant_kyc(
+    env: Env,
+    admin: Address,
+    merchant: Address,
+    attestation_hash: Bytes,
+    issued_at: u64,
+) -> Result<(), Error>
+```
+
+Errors:
+- `NotInitialized` — contract not initialised.
+- `Forbidden` — caller is not the stored admin.
+- `KycAlreadyAttached` — an active attestation already exists; revoke it first.
+
+#### revoke_merchant_kyc (admin-only)
+
+Revokes a merchant's KYC attestation (sets `status = false`). Revoking a merchant
+that has no attestation record is a silent no-op (idempotent).
+
+```rust
+pub fn revoke_merchant_kyc(env: Env, admin: Address, merchant: Address) -> Result<(), Error>
+```
+
+Errors:
+- `NotInitialized` — contract not initialised.
+- `Forbidden` — caller is not the stored admin.
+
+#### get_merchant_kyc
+
+Returns the current KYC record for a merchant, or `None` if none exists.
+
+```rust
+pub fn get_merchant_kyc(env: Env, merchant: Address) -> Option<MerchantKyc>
+```
+
+### Events
+
+#### KycRequiredSetEvent
+
+Emitted by `set_kyc_required`. Topic: `("kyc_required_set", admin)`.
+
+```rust
+pub struct KycRequiredSetEvent {
+    pub required: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+```
+
+#### MerchantKycAttachedEvent
+
+Emitted by `attach_merchant_kyc`. Topic: `("kyc_attached", merchant)`.
+
+```rust
+pub struct MerchantKycAttachedEvent {
+    pub merchant: Address,
+    pub attestation_hash: Bytes,
+    pub issued_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+```
+
+#### MerchantKycRevokedEvent
+
+Emitted by `revoke_merchant_kyc`. Topic: `("kyc_revoked", merchant)`.
+
+```rust
+pub struct MerchantKycRevokedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+```
+
+### Error codes
+
+| Code | Variant | When |
+|------|---------|------|
+| 7007 | `KycNotAttached` | `kyc_required` is `true` but the merchant has no active attestation. |
+| 7008 | `KycAlreadyAttached` | `attach_merchant_kyc` called while an active attestation exists. |
+
+### State machine
+
+```
+              attach_merchant_kyc
+  (none) ────────────────────────────► active (status=true)
+                                              │
+                                   revoke_merchant_kyc
+                                              │
+                                              ▼
+                                       revoked (status=false)
+                                              │
+                                   attach_merchant_kyc (new hash)
+                                              │
+                                              ▼
+                                        active (status=true)
+```
+
+### Security assumptions
+
+1. **Admin-only writes**: Only the stored admin may set/clear the flag or attach/revoke
+   attestations. The same `require_admin_auth` guard used elsewhere in the contract
+   applies here.
+2. **Opt-in by design**: The feature is off by default (`kyc_required = false`). Existing
+   deployments and integrations are unaffected until an admin explicitly enables it.
+3. **No balance mutation**: Attaching or revoking a KYC record never touches merchant
+   balances, subscription state, or any other storage beyond the attestation record itself.
+4. **Idempotent revocation**: Revoking a merchant that has no record is a silent no-op,
+   preventing admin scripts from failing on unexpected state.
+5. **Withdrawal gate only**: The KYC check applies exclusively to `withdraw_merchant_funds`
+   and `withdraw_merchant_token_funds`. Charge, refund, and subscription operations are
+   not affected.
+
+### Usage examples
+
+```rust
+// Enable KYC globally
+client.set_kyc_required(&admin, &true);
+
+// Attach an attestation (hash from off-chain provider)
+let hash = Bytes::from_slice(&env, compliance_provider_hash_bytes);
+client.attach_merchant_kyc(&admin, &merchant, &hash, &issued_at_unix_ts);
+
+// Merchant can now withdraw
+client.withdraw_merchant_token_funds(&merchant, &token, &amount);
+
+// Revoke attestation (e.g. on compliance failure)
+client.revoke_merchant_kyc(&admin, &merchant);
+
+// Merchant is now blocked from withdrawing
+// client.withdraw_merchant_token_funds(&merchant, &token, &amount)
+//   → Err(Error::KycNotAttached)
+
+// Disable KYC gate entirely (unblocks all merchants)
+client.set_kyc_required(&admin, &false);
+```

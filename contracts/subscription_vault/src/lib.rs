@@ -30,7 +30,7 @@
 //! Discriminant order MUST be preserved to maintain backwards compatibility with live
 //! storage on-chain.
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Symbol, Vec};
 
 mod admin;
 pub mod blocklist;
@@ -2375,6 +2375,63 @@ impl SubscriptionVault {
         merchant::is_merchant_approved(&env, &merchant)
     }
 
+    // ── KYC Attestation ─────────────────────────────────────────────────────
+
+    /// Set or clear the global KYC-required flag. Admin-only.
+    ///
+    /// When `required` is `true`, all merchants must have an active KYC
+    /// attestation before they can withdraw funds.
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] — contract not initialised.
+    /// * [`Error::Forbidden`] — caller is not the stored admin.
+    pub fn set_kyc_required(env: Env, admin: Address, required: bool) -> Result<(), Error> {
+        merchant::set_kyc_required(&env, admin, required)
+    }
+
+    /// Returns the current global KYC-required flag (defaults to `false`).
+    pub fn get_kyc_required(env: Env) -> bool {
+        merchant::get_kyc_required(&env)
+    }
+
+    /// Attach a KYC attestation to a merchant. Admin-only.
+    ///
+    /// The attestation record activates immediately. If the merchant already
+    /// has an **active** attestation, the call returns [`Error::KycAlreadyAttached`].
+    /// A previously-revoked attestation may be replaced by a new one.
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] — contract not initialised.
+    /// * [`Error::Forbidden`] — caller is not the stored admin.
+    /// * [`Error::KycAlreadyAttached`] — an active attestation already exists.
+    pub fn attach_merchant_kyc(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        attestation_hash: Bytes,
+        issued_at: u64,
+    ) -> Result<(), Error> {
+        merchant::attach_merchant_kyc(&env, admin, merchant, attestation_hash, issued_at)
+    }
+
+    /// Revoke a merchant's KYC attestation. Admin-only.
+    ///
+    /// After revocation the merchant is blocked from withdrawing when the
+    /// global KYC-required flag is set. Revoking a merchant that has no
+    /// attestation record is a silent no-op (idempotent).
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] — contract not initialised.
+    /// * [`Error::Forbidden`] — caller is not the stored admin.
+    pub fn revoke_merchant_kyc(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
+        merchant::revoke_merchant_kyc(&env, admin, merchant)
+    }
+
+    /// Returns the current KYC record for a merchant, or `None` if none exists.
+    pub fn get_merchant_kyc(env: Env, merchant: Address) -> Option<crate::types::MerchantKyc> {
+        merchant::get_merchant_kyc(&env, &merchant)
+    }
+
     /// Set the consecutive-failure auto-pause threshold (admin only).
     /// `0` disables auto-pause.
     pub fn set_auto_pause_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
@@ -3593,3 +3650,6 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+
+#[cfg(test)]
+mod test_merchant_kyc;
