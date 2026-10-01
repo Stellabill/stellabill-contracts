@@ -133,7 +133,8 @@ fn setup_env<'a>() -> (
 
     for token in &tokens {
         vault.add_accepted_token(&admin, token, &7u32);
-        env.ledger().with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
+        env.ledger()
+            .with_mut(|li| li.timestamp += subscription_vault::CONFIG_COOLDOWN_SECS + 1);
     }
 
     // Create subscriptions using some tokens to exercise subscription count path

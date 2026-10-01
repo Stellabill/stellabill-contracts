@@ -81,7 +81,13 @@ fn setup_with(
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
-    client.init(&token_address, &7u32, &admin, &MIN_TOPUP, &(3 * 24 * 60 * 60));
+    client.init(
+        &token_address,
+        &7u32,
+        &admin,
+        &MIN_TOPUP,
+        &(3 * 24 * 60 * 60),
+    );
 
     token_admin_client.mint(&subscriber, &1_000_000_000);
 
@@ -91,14 +97,7 @@ fn setup_with(
     // disabled so the default fixture exercises the plain debit path; the
     // limit-specific tests re-configure it afterwards.
     if usage_enabled {
-        client.configure_usage_limits(
-            &merchant,
-            &0u32,
-            &None::<u32>,
-            &0u64,
-            &0u64,
-            &None::<i128>,
-        );
+        client.configure_usage_limits(&merchant, &0u32, &None::<u32>, &0u64, &0u64, &None::<i128>);
     }
 
     let sub_id = client.create_subscription(
@@ -115,7 +114,16 @@ fn setup_with(
 
     client.deposit_funds(&sub_id, &subscriber, &deposit, &None);
 
-    Fixture { env, client, admin, operator, stranger, subscriber, merchant, sub_id }
+    Fixture {
+        env,
+        client,
+        admin,
+        operator,
+        stranger,
+        subscriber,
+        merchant,
+        sub_id,
+    }
 }
 
 fn setup() -> Fixture {
@@ -164,7 +172,10 @@ fn a_usage_charge_debits_the_balance_and_credits_the_merchant() {
     assert_eq!(result, UsageChargeResult::Charged);
     assert_eq!(balance(&f), DEPOSIT - 2_000_000);
     assert_eq!(f.client.get_merchant_balance(&f.merchant), 2_000_000);
-    assert_eq!(f.client.get_subscription(&f.sub_id).lifetime_charged, 2_000_000);
+    assert_eq!(
+        f.client.get_subscription(&f.sub_id).lifetime_charged,
+        2_000_000
+    );
 }
 
 #[test]
@@ -254,7 +265,8 @@ fn the_operator_entry_point_uses_a_different_idempotency_key_than_charge_usage()
         UsageChargeResult::Charged
     );
     assert_eq!(
-        f.client.operator_charge_usage(&f.operator, &f.sub_id, &1_000_000i128),
+        f.client
+            .operator_charge_usage(&f.operator, &f.sub_id, &1_000_000i128),
         UsageChargeResult::Charged
     );
 
@@ -350,7 +362,10 @@ fn a_usage_charge_on_a_cancelled_subscription_is_rejected() {
         Err(Ok(Error::NotActive))
     );
 
-    assert_eq!(f.client.get_subscription(&f.sub_id).status, SubscriptionStatus::Cancelled);
+    assert_eq!(
+        f.client.get_subscription(&f.sub_id).status,
+        SubscriptionStatus::Cancelled
+    );
     assert_eq!(balance(&f), after_cancel);
 }
 
@@ -367,7 +382,10 @@ fn a_usage_charge_on_an_expired_subscription_is_rejected_and_rolled_back() {
     // The branch attempts an `Active -> Expired` transition, but it returns an
     // error, so the host rolls the whole invocation back: the stored status is
     // still the pre-call value and no metadata was rewritten.
-    assert_eq!(f.client.get_subscription(&f.sub_id).status, SubscriptionStatus::Active);
+    assert_eq!(
+        f.client.get_subscription(&f.sub_id).status,
+        SubscriptionStatus::Active
+    );
     assert_eq!(balance(&f), before);
     assert_eq!(f.client.get_merchant_balance(&f.merchant), 0);
 }
@@ -446,7 +464,9 @@ fn the_lifetime_cap_is_enforced_at_deposit_time_not_only_at_charge_time() {
     // ...but nothing more may be loaded: `enforce_deposit_cap` allows only the
     // remaining chargeable capacity (`cap - lifetime_charged - prepaid_balance`),
     // and the amount still has to clear `min_topup` to reach that guard.
-    let extra = f.client.try_deposit_funds(&f.sub_id, &f.subscriber, &1_000_000i128, &None);
+    let extra = f
+        .client
+        .try_deposit_funds(&f.sub_id, &f.subscriber, &1_000_000i128, &None);
     assert_eq!(extra, Err(Ok(Error::LifetimeCapReached)));
     assert_eq!(balance(&f), 6_000_000);
 }
@@ -505,9 +525,9 @@ fn a_charge_attempt_past_the_lifetime_cap_is_rejected_without_any_further_change
     // The cap is checked *before* the status, usage-enabled, amount and balance
     // guards, so this is `LifetimeCapReached` rather than
     // `InsufficientPrepaidBalance` even though the balance is already zero.
-    let result = f
-        .client
-        .try_charge_usage_with_reference(&f.sub_id, &1i128, &reference(&f.env, "b"));
+    let result =
+        f.client
+            .try_charge_usage_with_reference(&f.sub_id, &1i128, &reference(&f.env, "b"));
 
     assert_eq!(result, Err(Ok(Error::LifetimeCapReached)));
 
@@ -540,8 +560,11 @@ fn the_burst_interval_blocks_a_second_charge_at_the_same_instant() {
 
     // Same ledger timestamp: elapsed (0) < burst_min_interval_secs (60).
     assert_eq!(
-        f.client
-            .try_charge_usage_with_reference(&f.sub_id, &1_000_000i128, &reference(&f.env, "b")),
+        f.client.try_charge_usage_with_reference(
+            &f.sub_id,
+            &1_000_000i128,
+            &reference(&f.env, "b")
+        ),
         Ok(Ok(UsageChargeResult::BurstLimitExceeded))
     );
     assert_eq!(balance(&f), DEPOSIT - 1_000_000);
@@ -581,8 +604,11 @@ fn the_rate_limit_trips_and_recovers_after_its_window() {
 
     // Third call inside the window: window_call_count (2) >= max_calls (2).
     assert_eq!(
-        f.client
-            .try_charge_usage_with_reference(&f.sub_id, &1_000_000i128, &reference(&f.env, "c")),
+        f.client.try_charge_usage_with_reference(
+            &f.sub_id,
+            &1_000_000i128,
+            &reference(&f.env, "c")
+        ),
         Ok(Ok(UsageChargeResult::RateLimitExceeded))
     );
     assert_eq!(balance(&f), DEPOSIT - 2_000_000);
@@ -617,8 +643,11 @@ fn the_per_interval_usage_cap_rejects_an_over_budget_charge_without_consuming_it
 
     // 3_000_000 used + 3_000_000 requested > 5_000_000 budget.
     assert_eq!(
-        f.client
-            .try_charge_usage_with_reference(&f.sub_id, &3_000_000i128, &reference(&f.env, "b")),
+        f.client.try_charge_usage_with_reference(
+            &f.sub_id,
+            &3_000_000i128,
+            &reference(&f.env, "b")
+        ),
         Ok(Ok(UsageChargeResult::UsageCapExceeded))
     );
     assert_eq!(balance(&f), DEPOSIT - 3_000_000);

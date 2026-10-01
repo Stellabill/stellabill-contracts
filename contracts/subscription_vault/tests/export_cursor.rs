@@ -60,7 +60,7 @@ fn create_subs(
             &None::<u64>,
             &None::<u32>,
             &None::<soroban_sdk::Symbol>,
-);
+        );
         ids.push(id);
     }
     ids

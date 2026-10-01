@@ -107,7 +107,9 @@ fn new_funded_sub<'a>(
         &(30 * 86_400u64),
         &false,
         &None,
-        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &None,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, subscriber, &50_000i128, &None);
     sub_id
@@ -198,7 +200,9 @@ fn perf_create_subscription_at_scale() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         created += 1;
     }
@@ -236,7 +240,9 @@ fn perf_get_subscription_large_id_range() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
     }
 
@@ -287,7 +293,9 @@ fn perf_get_subscription_constant_time_across_range() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         ids.push(id);
     }
@@ -336,7 +344,9 @@ fn perf_list_by_subscriber_paginated() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }
@@ -414,7 +424,9 @@ fn perf_get_subscriptions_by_token() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
     }
 

@@ -239,7 +239,11 @@ fn all_grouped_discriminants() -> Vec<u32> {
     let mut discriminants: Vec<u32> = SubscriptionKey::ALL
         .iter()
         .map(|key| key.claimed_discriminant())
-        .chain(MerchantKey::ALL.iter().map(|key| key.claimed_discriminant()))
+        .chain(
+            MerchantKey::ALL
+                .iter()
+                .map(|key| key.claimed_discriminant()),
+        )
         .chain(
             GovernanceKey::ALL
                 .iter()

@@ -14,7 +14,7 @@ fn test_emit_after_write_convention() {
     // This test documents the expected emit-after-write pattern.
     // Manual code review is required to ensure compliance.
     // See CONTRIBUTING.md for the convention details.
-    
+
     // The following functions MUST emit events AFTER state writes:
     // - charge_core.rs::charge_one: protocol_fee_charged, charged, lifetime_cap_reached, grace_period_entered
     // - charge_core.rs::charge_usage_one: protocol_fee_charged, usage_charged, lifetime_cap_reached
@@ -33,7 +33,7 @@ fn test_emit_after_write_convention() {
     // - subscription.rs::do_withdraw_merchant_funds: merchant_withdrawn
     // - subscription.rs::create_subscription: subscription_created, credential_issued
     // - subscription.rs::transfer_subscription: subscription_transferred
-    
+
     // This test always passes - it serves as documentation and a reminder
     // to review event ordering when modifying these functions.
     assert!(true);

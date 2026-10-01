@@ -293,6 +293,8 @@ pub enum DataKey {
     ReentrancyLock(Symbol),
     /// Multi-beneficiary treasury split configuration. Discriminant 87.
     TreasurySplit,
+    /// Global KYC-required flag; when true, merchants must have active KYC to withdraw. Discriminant 88.
+    KycRequired,
 }
 
 impl DataKey {
@@ -387,6 +389,7 @@ impl DataKey {
             DataKey::MerchantVacation(_) => 85,
             DataKey::ReentrancyLock(_) => 86,
             DataKey::TreasurySplit => 87,
+            DataKey::KycRequired => 88,
         }
     }
 
@@ -460,6 +463,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     85, // MerchantVacation(Address)
     86, // ReentrancyLock(Symbol)
     87, // TreasurySplit
+    88, // KycRequired
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -553,10 +557,7 @@ pub const ALLOWED_STATUS_TRANSITIONS: &[(SubscriptionStatus, &[SubscriptionStatu
     ),
     (
         SubscriptionStatus::Expired,
-        &[
-            SubscriptionStatus::Cancelled,
-            SubscriptionStatus::Archived,
-        ],
+        &[SubscriptionStatus::Cancelled, SubscriptionStatus::Archived],
     ),
 ];
 
@@ -603,7 +604,10 @@ pub fn can_transition(from: SubscriptionStatus, to: SubscriptionStatus) -> bool 
 
 /// Applies a transition only when the matrix permits it. Same-state calls are
 /// accepted as idempotent no-ops.
-pub fn transition_to(current: &mut SubscriptionStatus, next: SubscriptionStatus) -> Result<(), Error> {
+pub fn transition_to(
+    current: &mut SubscriptionStatus,
+    next: SubscriptionStatus,
+) -> Result<(), Error> {
     if *current == next {
         return Ok(());
     }
@@ -1221,6 +1225,10 @@ pub enum Error {
     UnknownMerchantTag = 7005,
     /// The same tag appears more than once in a single `set_merchant_tags` call.
     DuplicateMerchantTag = 7006,
+    /// Merchant has no active KYC attestation and kyc_required is enabled.
+    KycNotAttached = 7007,
+    /// A KYC attestation is already attached and active for this merchant.
+    KycAlreadyAttached = 7008,
 
     // --- Token (8000-8099) ---
     /// Token decimals value is invalid (e.g. zero).
@@ -1294,7 +1302,6 @@ pub enum Error {
     EscrowNotFound = 15001,
     /// The cancellation escrow release window has not elapsed yet.
     EscrowNotReleased = 15002,
-
 }
 
 impl Error {
@@ -1897,7 +1904,6 @@ pub struct OraclePrice {
     pub price: i128,
     pub timestamp: u64,
 }
-
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3343,7 +3349,39 @@ pub struct TransferVetoedEvent {
 /// Cancellation escrow window in seconds (7 days).
 pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
+/// Event emitted when admin sets or clears the global KYC-required flag.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct KycRequiredSetEvent {
+    /// New value of the global KYC-required flag.
+    pub required: bool,
+    /// Admin address who changed the setting.
+    pub admin: Address,
+    /// Ledger timestamp when the flag was changed.
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
 
+/// Event emitted when a merchant KYC attestation is attached.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantKycAttachedEvent {
+    pub merchant: Address,
+    pub attestation_hash: soroban_sdk::Bytes,
+    pub issued_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant KYC attestation is revoked.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantKycRevokedEvent {
+    pub merchant: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
 
 #[cfg(test)]
 mod event_topic_tests {
@@ -3351,9 +3389,7 @@ mod event_topic_tests {
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
-    use soroban_sdk::{
-        testutils::Events, xdr::ToXdr, Env, FromVal, Symbol,
-    };
+    use soroban_sdk::{testutils::Events, xdr::ToXdr, Env, FromVal, Symbol};
 
     /// The emitted wire representation is part of the indexer-facing contract.
     /// Publish every cached short topic in one transaction and compare each
@@ -3409,4 +3445,3 @@ mod event_topic_tests {
         assert_ne!(long_topic.clone().to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
     }
 }
-

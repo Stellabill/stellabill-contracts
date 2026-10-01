@@ -165,7 +165,9 @@ fn budget_create_subscription() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &None,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     let resources = env.cost_estimate().resources();
@@ -198,7 +200,9 @@ fn budget_deposit_funds() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &None,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
 
     env.cost_estimate().budget().reset_unlimited();
@@ -240,7 +244,9 @@ fn budget_charge_subscription() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &None,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -280,7 +286,9 @@ fn budget_withdraw_merchant_funds() {
         &(30 * 86_400u64),
         &false,
         &None,
-        &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &None,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
     vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     env.ledger().set_timestamp(1_000_000 + 30 * 86_400 + 1);
@@ -338,7 +346,9 @@ fn budget_charge_subscription_high_id() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&last_id, &subscriber, &50_000i128, &None);
     }
@@ -385,7 +395,9 @@ fn budget_withdraw_dense_merchant_earnings() {
             &(30 * 86_400u64),
             &false,
             &None,
-            &None, &None::<u32>, &None::<soroban_sdk::Symbol>,
+            &None,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
         );
         vault.deposit_funds(&sub_id, &subscriber, &50_000i128, &None);
     }

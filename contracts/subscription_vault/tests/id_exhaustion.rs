@@ -244,7 +244,8 @@ fn create_subscription_from_plan_last_id_succeeds() {
     seed_next_id(&env, &client.address, u32::MAX - 1);
 
     let subscriber = Address::generate(&env);
-    let id = client.create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>);
+    let id =
+        client.create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>);
 
     assert_eq!(id, u32::MAX - 1);
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
@@ -280,7 +281,11 @@ fn create_subscription_from_plan_counter_unchanged_after_failure() {
     seed_next_id(&env, &client.address, u32::MAX);
 
     let subscriber = Address::generate(&env);
-    let _ = client.try_create_subscription_from_plan(&subscriber, &plan_id, &None::<soroban_sdk::Symbol>);
+    let _ = client.try_create_subscription_from_plan(
+        &subscriber,
+        &plan_id,
+        &None::<soroban_sdk::Symbol>,
+    );
 
     assert_eq!(read_next_id(&env, &client.address), u32::MAX);
 }

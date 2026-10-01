@@ -86,7 +86,16 @@ fn setup() -> Fixture {
         &None::<soroban_sdk::Symbol>,
     );
 
-    Fixture { env, client, admin, operator, stranger, subscriber, merchant, sub_id }
+    Fixture {
+        env,
+        client,
+        admin,
+        operator,
+        stranger,
+        subscriber,
+        merchant,
+        sub_id,
+    }
 }
 
 fn advance_seconds(env: &Env, seconds: u64) {
@@ -143,13 +152,19 @@ fn set_min_topup_persists_the_new_value_and_emits_both_audit_events() {
     // `min_topup_updated` carries the new threshold verbatim.
     let updated = event_data(&f.env, "min_topup_updated");
     assert_eq!(updated.len(), 1);
-    assert_eq!(i128::try_from_val(&f.env, &updated.get(0).unwrap()).unwrap(), 2_500_000);
+    assert_eq!(
+        i128::try_from_val(&f.env, &updated.get(0).unwrap()).unwrap(),
+        2_500_000
+    );
 
     // `admin_config_changed` carries the per-key audit trail.
     let changed = event_data(&f.env, "admin_config_changed");
     assert_eq!(changed.len(), 1);
     let parsed = AdminConfigChangedEvent::try_from_val(&f.env, &changed.get(0).unwrap()).unwrap();
-    assert_eq!(parsed.key_label, soroban_sdk::String::from_str(&f.env, "MinTopup"));
+    assert_eq!(
+        parsed.key_label,
+        soroban_sdk::String::from_str(&f.env, "MinTopup")
+    );
     assert_eq!(parsed.prev_ts, 0); // first change: no previous mutation recorded
     assert_eq!(parsed.timestamp, f.env.ledger().timestamp());
 
@@ -346,12 +361,18 @@ fn a_deposit_of_exactly_the_threshold_is_accepted_and_one_unit_below_is_not() {
     f.client.set_min_topup(&f.admin, &10_000_000i128);
     assert_eq!(f.client.get_min_topup(), 10_000_000);
 
-    let below = f.client.try_deposit_funds(&f.sub_id, &f.subscriber, &9_999_999i128, &None);
+    let below = f
+        .client
+        .try_deposit_funds(&f.sub_id, &f.subscriber, &9_999_999i128, &None);
     assert_eq!(below, Err(Ok(Error::BelowMinimumTopup)));
     assert_eq!(f.client.get_subscription(&f.sub_id).prepaid_balance, 0);
 
-    f.client.deposit_funds(&f.sub_id, &f.subscriber, &10_000_000i128, &None);
-    assert_eq!(f.client.get_subscription(&f.sub_id).prepaid_balance, 10_000_000);
+    f.client
+        .deposit_funds(&f.sub_id, &f.subscriber, &10_000_000i128, &None);
+    assert_eq!(
+        f.client.get_subscription(&f.sub_id).prepaid_balance,
+        10_000_000
+    );
 }
 
 #[test]
@@ -359,12 +380,14 @@ fn lowering_the_threshold_reopens_deposits_below_the_previous_floor() {
     let f = setup();
 
     assert_eq!(
-        f.client.try_deposit_funds(&f.sub_id, &f.subscriber, &500i128, &None),
+        f.client
+            .try_deposit_funds(&f.sub_id, &f.subscriber, &500i128, &None),
         Err(Ok(Error::BelowMinimumTopup))
     );
 
     f.client.set_min_topup(&f.admin, &500i128);
-    f.client.deposit_funds(&f.sub_id, &f.subscriber, &500i128, &None);
+    f.client
+        .deposit_funds(&f.sub_id, &f.subscriber, &500i128, &None);
 
     assert_eq!(f.client.get_subscription(&f.sub_id).prepaid_balance, 500);
 }

@@ -40,7 +40,9 @@ fn baseline_cpu(scenario: &str) -> u64 {
     let pos = json.find(&marker).expect("scenario not found in baseline");
     let block = &json[pos..];
     let cpu_key = "\"cpu\":";
-    let kpos = block.find(cpu_key).expect("cpu key not found in scenario block");
+    let kpos = block
+        .find(cpu_key)
+        .expect("cpu key not found in scenario block");
     let rest = &block[kpos + cpu_key.len()..];
     rest.chars()
         .skip_while(|c| c.is_whitespace())
@@ -68,7 +70,10 @@ fn assert_within_budget(scenario: &str, measured: u64) {
     let tol = tolerance_pct();
     std::println!(
         "[withdraw_fixed_cost] {}: measured={} baseline={} tolerance={:.0}%",
-        scenario, measured, baseline, tol
+        scenario,
+        measured,
+        baseline,
+        tol
     );
     if baseline > 0 {
         let over = measured.saturating_sub(baseline) as f64 / baseline as f64 * 100.0;
@@ -77,7 +82,11 @@ fn assert_within_budget(scenario: &str, measured: u64) {
             "[{}] CPU cost {} exceeds baseline {} by {:.1}% (limit {:.0}%). \
              Update the baseline in fixtures/withdraw_fixed_cost_budget.json \
              with a documented rationale if the increase is intentional.",
-            scenario, measured, baseline, over, tol
+            scenario,
+            measured,
+            baseline,
+            over,
+            tol
         );
     }
     assert!(measured > 0, "CPU cost must be non-zero");
@@ -142,7 +151,8 @@ fn fund_merchant_balance(
     );
     token::StellarAssetClient::new(env, token).mint(&subscriber, &DEPOSIT);
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT, &None);
-    env.ledger().set_timestamp(env.ledger().timestamp() + INTERVAL + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + INTERVAL + 1);
     client.charge_subscription(&sub_id, &None);
 }
 
@@ -205,7 +215,8 @@ fn bench_withdraw_multi_token() {
     );
     token::StellarAssetClient::new(&env, &token2).mint(&subscriber2, &DEPOSIT);
     client.deposit_funds(&sub2, &subscriber2, &DEPOSIT, &None);
-    env.ledger().set_timestamp(env.ledger().timestamp() + INTERVAL + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + INTERVAL + 1);
     client.charge_subscription(&sub2, &None);
 
     let bal1 = client.get_merchant_balance_by_token(&merchant, &token1);

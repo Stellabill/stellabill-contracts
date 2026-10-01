@@ -76,7 +76,7 @@ fn test_subscription_created_event_emitted() {
         &None::<u64>,
         &None::<u32>,
         &None::<soroban_sdk::Symbol>,
-);
+    );
 
     let events = env.events().all();
     assert!(
@@ -84,27 +84,28 @@ fn test_subscription_created_event_emitted() {
         "create_subscription must emit at least one event"
     );
 
-    let event = &events.last().expect("subscription created event must be emitted");
+    let event = &events
+        .last()
+        .expect("subscription created event must be emitted");
     let topics = event.1.clone();
     let topic0: soroban_sdk::Symbol = FromVal::from_val(&env, &topics.get(0).unwrap());
     assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "created"));
 
-    let created: SubscriptionCreatedEvent = FromVal::from_val(
-        &env,
-        &event.2,
-    );
+    let created: SubscriptionCreatedEvent = FromVal::from_val(&env, &event.2);
     assert_eq!(created.schema_version, EVENT_SCHEMA_VERSION);
 }
 
 #[test]
 fn test_subscription_charged_event_emitted() {
     use subscription_vault::SubscriptionChargedEvent;
-    
+
     let env = Env::default();
     env.mock_all_auths();
 
     let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
 
     let admin = Address::generate(&env);
@@ -119,16 +120,23 @@ fn test_subscription_charged_event_emitted() {
     client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
 
     let sub_id = client.create_subscription(
-        &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
-        &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &subscriber,
+        &merchant,
+        &1_000_000i128,
+        &(30 * 24 * 60 * 60u64),
+        &false,
+        &None,
+        &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
-    
+
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
 
     client.batch_charge(&soroban_sdk::vec![&env, sub_id], &0u64);
 
     let events = env.events().all();
-    
+
     let mut found = false;
     for event in events.iter() {
         let topics = event.1.clone();
@@ -148,12 +156,14 @@ fn test_subscription_charged_event_emitted() {
 #[test]
 fn test_merchant_withdrawal_event_emitted() {
     use subscription_vault::MerchantWithdrawalEvent;
-    
+
     let env = Env::default();
     env.mock_all_auths();
 
     let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
 
     let admin = Address::generate(&env);
@@ -168,17 +178,24 @@ fn test_merchant_withdrawal_event_emitted() {
     client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
 
     let sub_id = client.create_subscription(
-        &subscriber, &merchant, &1_000_000i128, &(30 * 24 * 60 * 60u64), &false, &None, &None::<u64>,
-        &None::<u32>, &None::<soroban_sdk::Symbol>,
+        &subscriber,
+        &merchant,
+        &1_000_000i128,
+        &(30 * 24 * 60 * 60u64),
+        &false,
+        &None,
+        &None::<u64>,
+        &None::<u32>,
+        &None::<soroban_sdk::Symbol>,
     );
-    
+
     client.deposit_funds(&sub_id, &subscriber, &5_000_000i128, &None);
     client.batch_charge(&soroban_sdk::vec![&env, sub_id], &0u64);
-    
+
     client.withdraw_merchant_token_funds(&merchant, &token_address, &500_000i128);
 
     let events = env.events().all();
-    
+
     let mut found = false;
     for event in events.iter() {
         let topics = event.1.clone();

@@ -22,16 +22,17 @@
 
 use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
-    MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
-    MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
+    is_valid_allowed_operations, AccruedTotals, BillingChargeKind, DataKey, Error, KycKey,
+    MerchantApprovedEvent, MerchantBalanceSnapshotEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
+    MerchantKyc, MerchantKycAttachedEvent, MerchantKycRevokedEvent, MerchantMultiSigConfig,
     MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
     MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
-    TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
-    is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
+    TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS, OP_CHARGE,
+    TOPIC_WITHDRAWN,
 };
-use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{token, Address, Bytes, Env, String, Symbol, Vec};
 
 pub fn get_merchant_paused(env: &Env, merchant: Address) -> bool {
     // Check both legacy Pause state and new Config state if they overlap
@@ -178,7 +179,11 @@ pub fn clear_merchant_vacation(env: &Env, merchant: Address) -> Result<(), Error
     merchant.require_auth();
 
     let key = DataKey::MerchantVacation(merchant.clone());
-    let existed = env.storage().instance().get::<_, MerchantVacation>(&key).is_some();
+    let existed = env
+        .storage()
+        .instance()
+        .get::<_, MerchantVacation>(&key)
+        .is_some();
     env.storage().instance().remove(&key);
 
     if existed {
@@ -386,6 +391,160 @@ fn require_whitelist_approval(env: &Env, merchant: &Address) -> Result<(), Error
         return Err(Error::MerchantNotApproved);
     }
     Ok(())
+}
+
+// ── Merchant KYC attestation ────────────────────────────────────────────────
+//
+// Admins can require KYC globally via `set_kyc_required`. When the flag is
+// set, `withdraw_merchant_funds_for_token` rejects merchants that do not have
+// an active (non-revoked) KYC attestation record.
+//
+// `attach_merchant_kyc` — admin-only, stores a `MerchantKyc` record with
+//   `status = true` under `DataKey::Kyc(KycKey::MerchantStatus(merchant))`.
+//   Rejects if an active attestation already exists (`KycAlreadyAttached`).
+//
+// `revoke_merchant_kyc` — admin-only, sets `status = false` on the existing
+//   record. A missing record is treated as already-revoked (idempotent write).
+
+/// Returns the current global KYC-required flag (defaults to `false`).
+pub fn get_kyc_required(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::KycRequired)
+        .unwrap_or(false)
+}
+
+/// Set or clear the global KYC-required flag. Admin-only.
+///
+/// When `required` is `true` every merchant must have an active KYC
+/// attestation before they can withdraw funds.
+///
+/// # Errors
+/// - [`Error::NotInitialized`] — contract not initialised.
+/// - [`Error::Forbidden`] — caller is not the stored admin.
+pub fn set_kyc_required(env: &Env, admin: Address, required: bool) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    env.storage()
+        .instance()
+        .set(&DataKey::KycRequired, &required);
+
+    env.events().publish(
+        (Symbol::new(env, "kyc_required_set"), admin.clone()),
+        crate::types::KycRequiredSetEvent {
+            required,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Returns the `MerchantKyc` record for `merchant`, or `None` if none exists.
+pub fn get_merchant_kyc(env: &Env, merchant: &Address) -> Option<MerchantKyc> {
+    let key = DataKey::Kyc(KycKey::MerchantStatus(merchant.clone()));
+    env.storage().instance().get(&key)
+}
+
+/// Attach (or replace a revoked) KYC attestation to a merchant. Admin-only.
+///
+/// # Errors
+/// - [`Error::NotInitialized`] — contract not initialised.
+/// - [`Error::Forbidden`] — caller is not the stored admin.
+/// - [`Error::KycAlreadyAttached`] — an active attestation already exists.
+pub fn attach_merchant_kyc(
+    env: &Env,
+    admin: Address,
+    merchant: Address,
+    attestation_hash: Bytes,
+    issued_at: u64,
+) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    // Reject if an active attestation already exists.
+    if let Some(existing) = get_merchant_kyc(env, &merchant) {
+        if existing.status {
+            return Err(Error::KycAlreadyAttached);
+        }
+    }
+
+    let record = MerchantKyc {
+        attestation_hash: attestation_hash.clone(),
+        issued_at,
+        status: true,
+    };
+
+    let key = DataKey::Kyc(KycKey::MerchantStatus(merchant.clone()));
+    env.storage().instance().set(&key, &record);
+
+    env.events().publish(
+        (Symbol::new(env, "kyc_attached"), merchant.clone()),
+        MerchantKycAttachedEvent {
+            merchant,
+            attestation_hash,
+            issued_at,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Revoke a merchant's KYC attestation. Admin-only.
+///
+/// If no attestation record exists the call succeeds silently (idempotent).
+///
+/// # Errors
+/// - [`Error::NotInitialized`] — contract not initialised.
+/// - [`Error::Forbidden`] — caller is not the stored admin.
+pub fn revoke_merchant_kyc(env: &Env, admin: Address, merchant: Address) -> Result<(), Error> {
+    crate::admin::require_admin_auth(env, &admin)?;
+
+    let key = DataKey::Kyc(KycKey::MerchantStatus(merchant.clone()));
+
+    // Update existing record's status to false, or write a revoked sentinel.
+    let revoked = if let Some(mut record) = get_merchant_kyc(env, &merchant) {
+        record.status = false;
+        record
+    } else {
+        // No prior record — write a revoked sentinel so the storage key exists.
+        MerchantKyc {
+            attestation_hash: Bytes::new(env),
+            issued_at: 0,
+            status: false,
+        }
+    };
+
+    env.storage().instance().set(&key, &revoked);
+
+    env.events().publish(
+        (Symbol::new(env, "kyc_revoked"), merchant.clone()),
+        MerchantKycRevokedEvent {
+            merchant,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+
+    Ok(())
+}
+
+/// Gate check: when global KYC is required, verifies the merchant has an
+/// active attestation.
+///
+/// # Errors
+/// - [`Error::KycNotAttached`] — KYC required but merchant has no active attestation.
+fn require_kyc_if_required(env: &Env, merchant: &Address) -> Result<(), Error> {
+    if !get_kyc_required(env) {
+        return Ok(());
+    }
+    match get_merchant_kyc(env, merchant) {
+        Some(record) if record.status => Ok(()),
+        _ => Err(Error::KycNotAttached),
+    }
 }
 
 // ── Merchant compliance-category tags (#564) ────────────────────────────────
@@ -617,7 +776,10 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-pub fn get_merchant_multisig_config(env: &Env, merchant: Address) -> Option<MerchantMultiSigConfig> {
+pub fn get_merchant_multisig_config(
+    env: &Env,
+    merchant: Address,
+) -> Option<MerchantMultiSigConfig> {
     let key = DataKey::MerchantMultiSig(merchant);
     env.storage().instance().get(&key)
 }
@@ -861,6 +1023,10 @@ pub fn withdraw_merchant_funds_for_token(
 
     crate::blocklist::require_not_blocklisted(env, &merchant)?;
 
+    // KYC gate: when kyc_required is enabled the merchant must have an active
+    // attestation before withdrawing any funds.
+    require_kyc_if_required(env, &merchant)?;
+
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
@@ -905,11 +1071,7 @@ pub fn withdraw_merchant_funds_for_token(
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
-        (
-            TOPIC_WITHDRAWN,
-            merchant.clone(),
-            token_addr.clone(),
-        ),
+        (TOPIC_WITHDRAWN, merchant.clone(), token_addr.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
@@ -1099,11 +1261,7 @@ fn flush_merchant_token(
     crate::accounting::sub_total_accounted(env, token, balance)?;
 
     env.events().publish(
-        (
-            TOPIC_WITHDRAWN,
-            merchant.clone(),
-            token.clone(),
-        ),
+        (TOPIC_WITHDRAWN, merchant.clone(), token.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token.clone(),
@@ -1433,7 +1591,11 @@ pub fn do_emit_merchant_balance_snapshot(
     let timestamp = env.ledger().timestamp();
 
     env.events().publish(
-        (Symbol::new(env, "merchant_balance_snapshot"), merchant.clone(), token.clone()),
+        (
+            Symbol::new(env, "merchant_balance_snapshot"),
+            merchant.clone(),
+            token.clone(),
+        ),
         crate::types::MerchantBalanceSnapshotEvent {
             merchant,
             token,
@@ -1504,7 +1666,11 @@ pub fn do_emit_all_balances_snapshot(
                 };
 
                 env.events().publish(
-                    (Symbol::new(env, "merchant_balance_snapshot"), pair.0.clone(), pair.1.clone()),
+                    (
+                        Symbol::new(env, "merchant_balance_snapshot"),
+                        pair.0.clone(),
+                        pair.1.clone(),
+                    ),
                     ev.clone(),
                 );
                 out.push_back(ev);
@@ -1634,11 +1800,7 @@ pub fn do_register_plan(
 ///   cannot deprecate another merchant's plan even with admin credentials.
 /// - Uses the canonical `DataKey::Plan(plan_id)` storage key (not a raw tuple)
 ///   so that `get_plan_template` immediately reflects the deprecated state.
-pub fn do_deprecate_plan(
-    env: &Env,
-    merchant: Address,
-    plan_id: u32,
-) -> Result<(), Error> {
+pub fn do_deprecate_plan(env: &Env, merchant: Address, plan_id: u32) -> Result<(), Error> {
     // ── Auth ──
     merchant.require_auth();
 
@@ -1694,7 +1856,11 @@ pub fn do_deprecate_plan(
 // 4. Withdrawals follow CEI (Checks-Effects-Interactions).
 
 /// Return `Ok(())` if `label` is a registered sub-account for `merchant`.
-pub fn require_sub_account_exists(env: &Env, merchant: &Address, label: &Symbol) -> Result<(), Error> {
+pub fn require_sub_account_exists(
+    env: &Env,
+    merchant: &Address,
+    label: &Symbol,
+) -> Result<(), Error> {
     let key = DataKey::MerchantSubAccount(merchant.clone(), label.clone());
     if !env.storage().instance().has(&key) {
         return Err(Error::NotFound);
@@ -1727,11 +1893,7 @@ pub fn get_sub_account_list(env: &Env, merchant: &Address) -> Vec<Symbol> {
 ///
 /// # Events
 /// Emits [`SubAccountCreatedEvent`] with topics `("sub_account_created", merchant, label)`.
-pub fn register_sub_account(
-    env: &Env,
-    merchant: Address,
-    label: Symbol,
-) -> Result<(), Error> {
+pub fn register_sub_account(env: &Env, merchant: Address, label: Symbol) -> Result<(), Error> {
     merchant.require_auth();
 
     // Reject empty labels
@@ -1745,7 +1907,11 @@ pub fn register_sub_account(
 
     // Reject duplicate
     let list_key = DataKey::MerchantSubAccountList(merchant.clone());
-    let mut labels: Vec<Symbol> = env.storage().instance().get(&list_key).unwrap_or(Vec::new(env));
+    let mut labels: Vec<Symbol> = env
+        .storage()
+        .instance()
+        .get(&list_key)
+        .unwrap_or(Vec::new(env));
     if labels.contains(&label) {
         return Err(Error::InvalidInput);
     }

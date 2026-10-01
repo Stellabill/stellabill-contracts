@@ -56,7 +56,9 @@ fn seed_guardians(env: &Env, count: u32, weight: u32) -> Vec<Address> {
         guardians.set(addr.clone(), weight);
         addresses.push_back(addr);
     }
-    env.storage().persistent().set(&DataKey::Guardians, &guardians);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Guardians, &guardians);
     addresses
 }
 
@@ -100,12 +102,13 @@ fn measure_tally(env: &Env, proposal: &Proposal) -> (u64, u32, u32) {
 
 #[test]
 fn bench_gov_tally_scaling() {
-    let mut output = String::from("Scenario,Voters,CPU_Cost,Cost_Per_Voter,VotesFor,VotesAgainst\n");
+    let mut output =
+        String::from("Scenario,Voters,CPU_Cost,Cost_Per_Voter,VotesFor,VotesAgainst\n");
 
     let scenarios: &[(&str, u32, u32)] = &[
         ("all-yes", u32::MAX, 0), // yes_count = all, no_count = 0
         ("all-no", 0, u32::MAX),  // no_count = all
-        ("all-abstain", 0, 0),     // no votes cast
+        ("all-abstain", 0, 0),    // no votes cast
     ];
 
     for &count in VOTER_COUNTS {
@@ -117,8 +120,16 @@ fn bench_gov_tally_scaling() {
 
         // ── Named scenarios ──────────────────────────────────────────────
         for &(label, yes_req, no_req) in scenarios {
-            let yes = if yes_req == u32::MAX { actual_count } else { yes_req };
-            let no = if no_req == u32::MAX { actual_count } else { no_req };
+            let yes = if yes_req == u32::MAX {
+                actual_count
+            } else {
+                yes_req
+            };
+            let no = if no_req == u32::MAX {
+                actual_count
+            } else {
+                no_req
+            };
 
             let proposal = build_proposal(&env, &guardians, yes, no);
             env.budget().reset_default();
@@ -153,7 +164,11 @@ fn bench_gov_tally_scaling() {
 
             // Correctness assertions
             assert_eq!(votes_for, yes * DEFAULT_WEIGHT, "mixed votes_for mismatch");
-            assert_eq!(votes_against, no * DEFAULT_WEIGHT, "mixed votes_against mismatch");
+            assert_eq!(
+                votes_against,
+                no * DEFAULT_WEIGHT,
+                "mixed votes_against mismatch"
+            );
         }
     }
 
@@ -182,7 +197,11 @@ fn bench_gov_tally_scaling() {
         ));
 
         // With u32::MAX weights, the first checked_add saturates.
-        assert_eq!(votes_for, u32::MAX, "large weights must saturate to u32::MAX");
+        assert_eq!(
+            votes_for,
+            u32::MAX,
+            "large weights must saturate to u32::MAX"
+        );
         assert_eq!(votes_against, 0);
     }
 
@@ -197,7 +216,9 @@ fn bench_gov_tally_scaling() {
         // Seed only guardian_b as a current guardian
         let mut guardians: Map<Address, u32> = Map::new(&env);
         guardians.set(guardian_b.clone(), 100);
-        env.storage().persistent().set(&DataKey::Guardians, &guardians);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Guardians, &guardians);
 
         // Create a proposal where guardian_a (removed) voted yes.
         let mut votes: Map<Address, bool> = Map::new(&env);
@@ -225,9 +246,11 @@ fn bench_gov_tally_scaling() {
         let total_votes_in_proposal = 2u32;
         output.push_str(&format!(
             "removed-guardian,{},{},{},{},{}\n",
-            total_votes_in_proposal, cpu_cost,
+            total_votes_in_proposal,
+            cpu_cost,
             cpu_cost / total_votes_in_proposal as u64,
-            votes_for, votes_against
+            votes_for,
+            votes_against
         ));
 
         // Only guardian_b's vote counts; guardian_a is ignored.

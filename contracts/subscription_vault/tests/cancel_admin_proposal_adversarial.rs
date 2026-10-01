@@ -69,12 +69,25 @@ fn setup() -> Fixture {
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    client.init(&token_address, &7u32, &admin, &1_000_000i128, &(3 * 24 * 60 * 60));
+    client.init(
+        &token_address,
+        &7u32,
+        &admin,
+        &1_000_000i128,
+        &(3 * 24 * 60 * 60),
+    );
     client.set_operator(&admin, &operator);
 
     token_admin_client.mint(&admin, &100_000_000);
 
-    Fixture { env, client, admin, operator, proposed, stranger }
+    Fixture {
+        env,
+        client,
+        admin,
+        operator,
+        proposed,
+        stranger,
+    }
 }
 
 fn advance_seconds(env: &Env, seconds: u64) {
@@ -276,7 +289,8 @@ fn a_successful_cancel_emits_exactly_one_event_carrying_the_caller_and_timestamp
 
     let payloads = event_data(&f.env, "admin_proposal_cancelled");
     assert_eq!(payloads.len(), 1);
-    let parsed = AdminProposalCancelledEvent::try_from_val(&f.env, &payloads.get(0).unwrap()).unwrap();
+    let parsed =
+        AdminProposalCancelledEvent::try_from_val(&f.env, &payloads.get(0).unwrap()).unwrap();
     assert_eq!(parsed.admin, f.admin);
     assert_eq!(parsed.timestamp, expected_ts);
 }

@@ -23,16 +23,16 @@ fn test_datakey_discriminants_snapshot() {
     let addr2 = Address::generate(&env);
 
     let cases: &[(u32, DataKey)] = &[
-        (0,  DataKey::MerchantSubs(addr.clone())),
-        (1,  DataKey::Token),
-        (2,  DataKey::Admin),
-        (3,  DataKey::MinTopup),
-        (4,  DataKey::NextId),
-        (5,  DataKey::SchemaVersion),
-        (6,  DataKey::Sub(0)),
-        (7,  DataKey::ChargedPeriod(0)),
-        (8,  DataKey::IdemKey(0)),
-        (9,  DataKey::EmergencyStop),
+        (0, DataKey::MerchantSubs(addr.clone())),
+        (1, DataKey::Token),
+        (2, DataKey::Admin),
+        (3, DataKey::MinTopup),
+        (4, DataKey::NextId),
+        (5, DataKey::SchemaVersion),
+        (6, DataKey::Sub(0)),
+        (7, DataKey::ChargedPeriod(0)),
+        (8, DataKey::IdemKey(0)),
+        (9, DataKey::EmergencyStop),
         (10, DataKey::MerchantPaused(addr.clone())),
         (11, DataKey::BillingStatement(0, 0)),
         (12, DataKey::BillingStatementsBySubscription(0)),
@@ -83,7 +83,10 @@ fn test_datakey_discriminants_snapshot() {
         (57, DataKey::Coupon(Symbol::new(&env, "c"))),
         (58, DataKey::CouponRedemptions(Symbol::new(&env, "c"))),
         (59, DataKey::Credential(0)),
-        (60, DataKey::AdminConfigLastChangedAt(BytesN::from_array(&env, &[0u8; 32]))),
+        (
+            60,
+            DataKey::AdminConfigLastChangedAt(BytesN::from_array(&env, &[0u8; 32])),
+        ),
         (61, DataKey::SubscriberCreateCap),
         (62, DataKey::SubscriberCreateWindow(addr.clone())),
         (63, DataKey::MerchantWhitelistMode),
@@ -103,15 +106,22 @@ fn test_datakey_discriminants_snapshot() {
         (77, DataKey::MerchantFeeBps(addr.clone())),
         (78, DataKey::OraclePriceHistoryMeta(addr.clone())),
         (79, DataKey::OraclePriceHistoryEntry(addr.clone(), 0)),
-        (80, DataKey::DelegatedPayerGrant(addr.clone(), addr2.clone())),
+        (
+            80,
+            DataKey::DelegatedPayerGrant(addr.clone(), addr2.clone()),
+        ),
         (81, DataKey::SplitPayees(0)),
         // Restored variants (botched-merge repair) — appended at the end.
-        (82, DataKey::MerchantSubAccount(addr.clone(), Symbol::new(&env, "l"))),
+        (
+            82,
+            DataKey::MerchantSubAccount(addr.clone(), Symbol::new(&env, "l")),
+        ),
         (83, DataKey::MerchantSubAccountList(addr.clone())),
         (84, DataKey::EmergencyWithdrawIntent(0)),
         (85, DataKey::MerchantVacation(addr.clone())),
         (86, DataKey::ReentrancyLock(Symbol::new(&env, "l"))),
         (87, DataKey::TreasurySplit),
+        (88, DataKey::KycRequired),
     ];
 
     for (expected, key) in cases {
@@ -221,6 +231,7 @@ fn test_datakey_no_duplicate_discriminants() {
         DataKey::MerchantVacation(addr.clone()),
         DataKey::ReentrancyLock(Symbol::new(&env, "l")),
         DataKey::TreasurySplit,
+        DataKey::KycRequired,
     ];
 
     let mut seen = std::collections::HashSet::new();
