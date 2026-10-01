@@ -3515,6 +3515,8 @@ mod test_protocol_fee_routing;
 #[cfg(test)]
 mod test_do_vote_proposal;
 #[cfg(test)]
+mod test_do_execute_proposal;
+#[cfg(test)]
 mod test_treasury_split;
 #[cfg(test)]
 mod test_admin_treasury_change;
@@ -3591,3 +3593,9 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+
+#[cfg(test)]
+mod test_get_oracle_deviation_bps;
+
+#[cfg(test)]
+mod test_resolve_coupon_for_charge;
