@@ -3591,3 +3591,9 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+#[cfg(test)]
+mod test_admin_proposal_adversarial;
+#[cfg(test)]
+mod test_operator_batch_charge_adversarial;
+#[cfg(test)]
+mod test_blocklist_entry_adversarial;
