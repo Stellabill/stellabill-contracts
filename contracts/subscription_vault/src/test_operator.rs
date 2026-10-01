@@ -57,6 +57,20 @@ fn make_usage_enabled_subscription(
     sub_id
 }
 
+/// Read the raw operator nonce slot to prove view calls don't create or
+/// mutate persistent state.
+fn stored_operator_nonce(te: &TestEnv, operator: &Address) -> Option<u64> {
+    te.env.as_contract(&te.client.address, || {
+        te.env
+            .storage()
+            .persistent()
+            .get::<_, u64>(&crate::types::DataKey::AdminNonce(
+                operator.clone(),
+                crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE,
+            ))
+    })
+}
+
 // ── set_operator ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -808,6 +822,63 @@ fn get_operator_nonce_increments_per_call() {
         te.client.deposit_funds(&sub_id, &subscriber, &AMOUNT, &None::<soroban_sdk::BytesN<32>>);
     }
     assert_eq!(te.client.get_operator_nonce(&operator), 3u64);
+}
+
+#[test]
+fn get_operator_nonce_is_permissionless_and_does_not_create_storage() {
+    let te = TestEnv::default();
+    let operator = Address::generate(&te.env);
+    let unrelated = Address::generate(&te.env);
+
+    assert_eq!(stored_operator_nonce(&te, &operator), None);
+    // This view has no caller parameter and must not require any signature.
+    te.env.mock_auths(&[]);
+    for _ in 0..3 {
+        assert_eq!(te.client.get_operator_nonce(&operator), 0);
+    }
+    // An arbitrary valid address has its own independent default nonce.
+    assert_eq!(te.client.get_operator_nonce(&unrelated), 0);
+    assert_eq!(stored_operator_nonce(&te, &operator), None);
+    assert_eq!(stored_operator_nonce(&te, &unrelated), None);
+}
+
+#[test]
+fn get_operator_nonce_returns_max_boundary_without_mutating_it() {
+    let te = TestEnv::default();
+    let operator = Address::generate(&te.env);
+    let key = crate::types::DataKey::AdminNonce(
+        operator.clone(),
+        crate::nonce::DOMAIN_OPERATOR_BATCH_CHARGE,
+    );
+    te.env.as_contract(&te.client.address, || {
+        te.env.storage().persistent().set(&key, &u64::MAX);
+    });
+
+    te.env.mock_auths(&[]);
+    assert_eq!(te.client.get_operator_nonce(&operator), u64::MAX);
+    assert_eq!(stored_operator_nonce(&te, &operator), Some(u64::MAX));
+}
+
+#[test]
+fn rejected_wrong_nonce_leaves_operator_nonce_storage_unchanged() {
+    let te = TestEnv::default();
+    let subscriber = Address::generate(&te.env);
+    let merchant = Address::generate(&te.env);
+    let operator = Address::generate(&te.env);
+    let sub_id = make_funded_subscription(&te, &subscriber, &merchant);
+    te.client.set_operator(&te.admin, &operator);
+    let subscription_before = te.client.get_subscription(&sub_id);
+
+    assert_eq!(stored_operator_nonce(&te, &operator), None);
+    te.jump(INTERVAL + 1);
+    assert_eq!(
+        te.client
+            .try_operator_batch_charge(&operator, &vec![&te.env, sub_id], &u64::MAX),
+        Err(Ok(Error::NonceAlreadyUsed))
+    );
+    assert_eq!(te.client.get_operator_nonce(&operator), 0);
+    assert_eq!(stored_operator_nonce(&te, &operator), None);
+    assert_eq!(te.client.get_subscription(&sub_id), subscription_before);
 }
 
 // ── operator_charge_usage_with_reference ─────────────────────────────────────
