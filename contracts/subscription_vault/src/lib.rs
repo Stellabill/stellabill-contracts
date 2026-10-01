@@ -3520,6 +3520,276 @@ mod test_treasury_split;
 mod test_admin_treasury_change;
 #[cfg(test)]
 mod test_operator;
+#[cfg(test)]
+mod is_merchant_approved_adversarial_tests {
+    use crate::types::DataKey;
+    use crate::{Error, SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env, String};
+
+    fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+        (env, client, admin, contract_id)
+    }
+
+    /// Raw storage entry behind the view: `Some(true)` approved, `Some(false)`
+    /// explicitly revoked, `None` never touched.
+    fn approved_entry(
+        env: &Env,
+        contract_id: &Address,
+        merchant: &Address,
+    ) -> Option<bool> {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .instance()
+                .get::<_, bool>(&DataKey::MerchantApproved(merchant.clone()))
+        })
+    }
+
+    // ── the view is read-only ───────────────────────────────────────────────
+
+    #[test]
+    fn repeated_view_calls_never_create_a_storage_entry() {
+        let (env, client, _admin, contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        for _ in 0..5 {
+            assert!(!client.is_merchant_approved(&merchant));
+        }
+
+        assert_eq!(
+            approved_entry(&env, &contract_id, &merchant),
+            None,
+            "reading approval state must not write to storage"
+        );
+    }
+
+    // ── default and explicit-false are distinct in storage ──────────────────
+
+    #[test]
+    fn default_is_an_absent_entry_while_revoke_stores_an_explicit_false() {
+        let (env, client, admin, contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), None);
+        assert!(!client.is_merchant_approved(&merchant));
+
+        client.approve_merchant(&admin, &merchant);
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), Some(true));
+
+        client.revoke_merchant(&admin, &merchant);
+        assert_eq!(
+            approved_entry(&env, &contract_id, &merchant),
+            Some(false),
+            "revoke_merchant overwrites with false instead of deleting the key"
+        );
+        assert!(!client.is_merchant_approved(&merchant));
+    }
+
+    // ── no cross-merchant leakage ───────────────────────────────────────────
+
+    #[test]
+    fn approvals_are_scoped_to_a_single_merchant() {
+        let (env, client, admin, contract_id) = setup();
+        let approved = Address::generate(&env);
+        let untouched = Address::generate(&env);
+
+        client.approve_merchant(&admin, &approved);
+
+        assert!(client.is_merchant_approved(&approved));
+        assert!(!client.is_merchant_approved(&untouched));
+        assert_eq!(approved_entry(&env, &contract_id, &untouched), None);
+    }
+
+    #[test]
+    fn revoking_one_merchant_leaves_the_others_approved() {
+        let (env, client, admin, _contract_id) = setup();
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+
+        client.approve_merchant(&admin, &first);
+        client.approve_merchant(&admin, &second);
+
+        client.revoke_merchant(&admin, &first);
+
+        assert!(!client.is_merchant_approved(&first));
+        assert!(client.is_merchant_approved(&second));
+    }
+
+    // ── idempotency ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn approving_twice_does_not_toggle_the_flag_back_off() {
+        let (env, client, admin, _contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        client.approve_merchant(&admin, &merchant);
+        client.approve_merchant(&admin, &merchant);
+
+        assert!(client.is_merchant_approved(&merchant));
+    }
+
+    #[test]
+    fn revoking_twice_does_not_raise_or_flip_the_flag_on() {
+        let (env, client, admin, contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        client.approve_merchant(&admin, &merchant);
+        client.revoke_merchant(&admin, &merchant);
+        client.revoke_merchant(&admin, &merchant);
+
+        assert!(!client.is_merchant_approved(&merchant));
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), Some(false));
+    }
+
+    #[test]
+    fn revoking_a_never_approved_merchant_does_not_create_an_approval() {
+        let (env, client, admin, contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        client.revoke_merchant(&admin, &merchant);
+
+        assert!(!client.is_merchant_approved(&merchant));
+        // The revoke still materialises the explicit-false entry.
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), Some(false));
+    }
+
+    // ── independence from the whitelist-mode flag ───────────────────────────
+
+    #[test]
+    fn approval_state_survives_toggling_whitelist_mode_off_and_on() {
+        let (env, client, admin, _contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        client.approve_merchant(&admin, &merchant);
+        client.set_whitelist_mode(&admin, &true);
+        assert!(client.is_merchant_approved(&merchant));
+
+        client.set_whitelist_mode(&admin, &false);
+        assert!(
+            client.is_merchant_approved(&merchant),
+            "disabling whitelist mode must not auto-revoke an approval"
+        );
+
+        client.set_whitelist_mode(&admin, &true);
+        assert!(client.is_merchant_approved(&merchant));
+    }
+
+    #[test]
+    fn a_revocation_is_not_undone_by_toggling_whitelist_mode() {
+        let (env, client, admin, _contract_id) = setup();
+        let merchant = Address::generate(&env);
+
+        client.approve_merchant(&admin, &merchant);
+        client.revoke_merchant(&admin, &merchant);
+
+        client.set_whitelist_mode(&admin, &true);
+        client.set_whitelist_mode(&admin, &false);
+
+        assert!(!client.is_merchant_approved(&merchant));
+    }
+
+    // ── rejected operations leave state untouched ───────────────────────────
+
+    #[test]
+    fn a_rejected_approval_writes_nothing() {
+        let (env, client, _admin, contract_id) = setup();
+        let non_admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+
+        let res = client.try_approve_merchant(&non_admin, &merchant);
+        assert_eq!(res.err().unwrap().unwrap().to_code(), Error::Unauthorized.to_code());
+
+        assert!(!client.is_merchant_approved(&merchant));
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), None);
+    }
+
+    #[test]
+    fn a_rejected_revocation_leaves_an_existing_approval_intact() {
+        let (env, client, admin, contract_id) = setup();
+        let non_admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+
+        client.approve_merchant(&admin, &merchant);
+
+        let res = client.try_revoke_merchant(&non_admin, &merchant);
+        assert_eq!(res.err().unwrap().unwrap().to_code(), Error::Unauthorized.to_code());
+
+        assert!(client.is_merchant_approved(&merchant));
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), Some(true));
+    }
+
+    // ── approval is orthogonal to merchant configuration ────────────────────
+
+    #[test]
+    fn approval_does_not_imply_a_merchant_config_exists() {
+        let (_env, client, admin, _contract_id) = setup();
+        let merchant = Address::generate(&_env);
+
+        client.approve_merchant(&admin, &merchant);
+
+        assert!(client.is_merchant_approved(&merchant));
+        assert!(client.get_merchant_config(&merchant).is_none());
+    }
+
+    #[test]
+    fn registering_a_config_while_whitelist_is_off_does_not_approve_the_merchant() {
+        let (env, client, _admin, contract_id) = setup();
+        let merchant = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        assert!(!client.get_whitelist_mode());
+        client.initialize_merchant_config(
+            &merchant,
+            &payout,
+            &0,
+            &1,
+            &None,
+            &String::from_str(&env, ""),
+        );
+
+        assert!(client.get_merchant_config(&merchant).is_some());
+        assert!(
+            !client.is_merchant_approved(&merchant),
+            "initializing a config is not an approval"
+        );
+        assert_eq!(approved_entry(&env, &contract_id, &merchant), None);
+    }
+
+    #[test]
+    fn revoking_approval_does_not_delete_an_existing_merchant_config() {
+        let (env, client, admin, _contract_id) = setup();
+        let merchant = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.set_whitelist_mode(&admin, &true);
+        client.approve_merchant(&admin, &merchant);
+        client.initialize_merchant_config(
+            &merchant,
+            &payout,
+            &0,
+            &1,
+            &None,
+            &String::from_str(&env, ""),
+        );
+
+        client.revoke_merchant(&admin, &merchant);
+
+        assert!(!client.is_merchant_approved(&merchant));
+        assert!(
+            client.get_merchant_config(&merchant).is_some(),
+            "revoking approval must not unwind existing merchant state"
+        );
+    }
+}
 
 #[cfg(test)]
 mod revoke_merchant_adversarial_tests {
