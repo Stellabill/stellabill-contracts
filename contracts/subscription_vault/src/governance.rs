@@ -390,3 +390,325 @@ pub fn list_guardians(env: &Env) -> Vec<(Address, u32)> {
     }
     result
 }
+
+// ── Adversarial coverage for `get_current_proposal_id` ──────────────────────
+//
+// `get_current_proposal_id` is a permissionless view over the instance
+// `DataKey::NextProposalId` counter. It must be pure (no ID consumption), it
+// must be monotonic across successful submissions only, rejected operations
+// must leave the counter byte-for-byte unchanged, and reads must stay
+// deterministic at the `u64` boundary. These tests pin all four properties.
+#[cfg(test)]
+mod get_current_proposal_id_tests {
+    use super::*;
+    use crate::{SubscriptionVault, SubscriptionVaultClient};
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    /// Register and initialize a fresh vault. Returns the contract address
+    /// (needed to seed instance storage directly) and the generated client.
+    fn init_vault<'a>(env: &'a Env) -> (Address, SubscriptionVaultClient<'a>) {
+        let admin = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(env, &contract_id);
+        client.init(&token, &6, &admin, &10_000_000, &86_400);
+
+        (contract_id, client)
+    }
+
+    /// Overwrite the raw instance counter without going through allocation.
+    fn seed_counter(env: &Env, contract_id: &Address, value: u64) {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::NextProposalId, &value);
+        });
+    }
+
+    /// Submit a `RotateAdmin` proposal against `target`.
+    fn submit(
+        client: &SubscriptionVaultClient,
+        target: &Address,
+        quorum_bps: u32,
+        eta: u64,
+    ) -> u64 {
+        client.submit_proposal(
+            &ProposalKind::RotateAdmin,
+            target,
+            &None,
+            &0,
+            &quorum_bps,
+            &eta,
+        )
+    }
+
+    /// A fresh, uninitialized contract reports `0`; `init` must not touch the
+    /// proposal counter.
+    #[test]
+    fn defaults_to_zero_before_and_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+        // Never allocates: the instance key has not been written yet.
+        assert_eq!(client.get_current_proposal_id(), 0);
+
+        let admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.init(&token, &6, &admin, &10_000_000, &86_400);
+
+        // init configures payments only; governance state is untouched.
+        assert_eq!(client.get_current_proposal_id(), 0);
+    }
+
+    /// The view is pure: calling it repeatedly must not consume an ID, so the
+    /// first real submission still receives ID `0`.
+    #[test]
+    fn read_is_pure_and_does_not_consume_an_id() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client) = init_vault(&env);
+        for _ in 0..8 {
+            assert_eq!(client.get_current_proposal_id(), 0);
+        }
+
+        let target = Address::generate(&env);
+        assert_eq!(
+            submit(&client, &target, 5_000, 2_000),
+            0,
+            "reads must not consume the first proposal id"
+        );
+        assert_eq!(client.get_current_proposal_id(), 1);
+    }
+
+    /// The reported value is always exactly the ID the next successful
+    /// submission will return, and it advances by exactly one per success.
+    #[test]
+    fn reported_value_equals_next_allocated_id() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        for expected in 0u64..3 {
+            assert_eq!(client.get_current_proposal_id(), expected);
+            let id = submit(&client, &target, 5_000, 10_000);
+            assert_eq!(id, expected, "allocated id must match the pre-read value");
+            assert_eq!(client.get_current_proposal_id(), expected + 1);
+        }
+    }
+
+    /// A submission rejected for an out-of-range quorum must not burn an ID,
+    /// and the next valid submission must reuse the same ID.
+    #[test]
+    fn rejected_quorum_does_not_advance_counter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        let rejected = client.try_submit_proposal(
+            &ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &10_001, // MAX_QUORUM_BPS + 1
+            &2_000,
+        );
+        assert_eq!(rejected, Err(Ok(Error::InvalidInput)));
+        assert_eq!(client.get_current_proposal_id(), 0);
+
+        assert_eq!(submit(&client, &target, 5_000, 2_000), 0);
+        assert_eq!(client.get_current_proposal_id(), 1);
+    }
+
+    /// ETA validation is `eta > now`: equal-to-now, past, and zero ETAs are all
+    /// rejected before the counter is read, so none of them advance it.
+    #[test]
+    fn rejected_eta_does_not_advance_counter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(5_000);
+
+        let (_, client) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        for eta in [5_000u64, 4_999, 0] {
+            let rejected = client.try_submit_proposal(
+                &ProposalKind::RotateAdmin,
+                &target,
+                &None,
+                &0,
+                &5_000,
+                &eta,
+            );
+            assert_eq!(
+                rejected,
+                Err(Ok(Error::InvalidInput)),
+                "eta {eta} must be rejected"
+            );
+            assert_eq!(client.get_current_proposal_id(), 0);
+        }
+    }
+
+    /// Quorum accepts the inclusive `[0, 10_000]` range. Both boundaries must
+    /// consume exactly one ID, and `10_001` must consume none.
+    #[test]
+    fn quorum_boundaries_are_inclusive_and_rejection_is_free() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        assert_eq!(submit(&client, &target, 0, 2_000), 0);
+        assert_eq!(submit(&client, &target, 10_000, 2_000), 1);
+        assert_eq!(client.get_current_proposal_id(), 2);
+
+        let rejected = client.try_submit_proposal(
+            &ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &10_001,
+            &2_000,
+        );
+        assert_eq!(rejected, Err(Ok(Error::InvalidInput)));
+        assert_eq!(client.get_current_proposal_id(), 2);
+    }
+
+    /// Rejected vote / execute / cancel calls against real and non-existent
+    /// proposals must not move the counter, and must not create records.
+    #[test]
+    fn failed_lifecycle_operations_leave_counter_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        let id = submit(&client, &target, 5_000, 2_000);
+        assert_eq!(client.get_current_proposal_id(), 1);
+
+        // The admin holds no guardian weight, so the vote is rejected as
+        // unauthorized. The weight check runs *before* the proposal lookup, so
+        // a non-guardian cannot probe whether a proposal id exists.
+        assert_eq!(
+            client.try_vote_proposal(&id, &true),
+            Err(Ok(Error::Unauthorized))
+        );
+        assert_eq!(
+            client.try_vote_proposal(&999u64, &true),
+            Err(Ok(Error::Unauthorized))
+        );
+        // ETA has not been reached yet.
+        assert_eq!(
+            client.try_execute_proposal(&id),
+            Err(Ok(Error::InvalidInput))
+        );
+
+        // Cancelling a proposal that was never allocated is NotFound.
+        let reason = String::from_str(&env, "does not exist");
+        assert_eq!(
+            client.try_cancel_proposal(&999u64, &reason),
+            Err(Ok(Error::NotFound))
+        );
+
+        // Promote the admin to a guardian so the vote clears the weight check
+        // and reaches the proposal lookup, which must then report NotFound.
+        let admin = client.get_admin();
+        client.add_guardian(&admin, &admin, &1);
+        assert_eq!(
+            client.try_vote_proposal(&999u64, &true),
+            Err(Ok(Error::NotFound))
+        );
+
+        // None of the rejected calls (nor guardian registration) may have
+        // consumed or advanced a proposal id.
+        assert_eq!(client.get_current_proposal_id(), 1);
+        assert!(client.get_proposal(&999u64).is_none());
+    }
+
+    /// Reads at the `u64::MAX` boundary must be exact and overflow-free.
+    #[test]
+    fn reads_max_u64_without_overflow_and_without_mutation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (contract_id, client) = init_vault(&env);
+        seed_counter(&env, &contract_id, u64::MAX);
+
+        assert_eq!(client.get_current_proposal_id(), u64::MAX);
+        // Repeated reads are stable: no arithmetic on the counter happens.
+        assert_eq!(client.get_current_proposal_id(), u64::MAX);
+        // The read is side-effect free.
+        assert!(client.get_proposal(&u64::MAX).is_none());
+    }
+
+    /// One step before exhaustion the final ID (`u64::MAX - 1`) is allocated
+    /// and the counter lands exactly on `u64::MAX` — no wrap, no skipped value.
+    #[test]
+    fn final_allocation_lands_exactly_on_u64_max() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (contract_id, client) = init_vault(&env);
+        seed_counter(&env, &contract_id, u64::MAX - 1);
+        assert_eq!(client.get_current_proposal_id(), u64::MAX - 1);
+
+        let target = Address::generate(&env);
+        assert_eq!(submit(&client, &target, 5_000, 2_000), u64::MAX - 1);
+        assert_eq!(client.get_current_proposal_id(), u64::MAX);
+    }
+
+    /// `DataKey::NextProposalId` lives in instance storage, so two vaults must
+    /// track independent counters regardless of submission order.
+    #[test]
+    fn counter_is_isolated_per_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let (_, client_a) = init_vault(&env);
+        let (_, client_b) = init_vault(&env);
+        let target = Address::generate(&env);
+
+        assert_eq!(submit(&client_a, &target, 5_000, 2_000), 0);
+        assert_eq!(submit(&client_a, &target, 5_000, 2_000), 1);
+        assert_eq!(client_a.get_current_proposal_id(), 2);
+
+        // Contract B is untouched by A's activity.
+        assert_eq!(client_b.get_current_proposal_id(), 0);
+        assert_eq!(submit(&client_b, &target, 5_000, 2_000), 0);
+    }
+
+    /// The view is intentionally permissionless: it must succeed with auth
+    /// mocking disabled. The counter is public, non-sensitive metadata, so this
+    /// is a documentation test for the intended access-control surface.
+    #[test]
+    fn view_requires_no_authorization() {
+        let env = Env::default(); // deliberately no mock_all_auths()
+
+        let contract_id = env.register(SubscriptionVault, ());
+        let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+        assert_eq!(client.get_current_proposal_id(), 0);
+    }
+}
