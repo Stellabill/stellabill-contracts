@@ -3591,3 +3591,6 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+mod test_admin_sub_account_label_migration;
+#[cfg(test)]
+mod test_admin_sub_account_label_scan_bound;
