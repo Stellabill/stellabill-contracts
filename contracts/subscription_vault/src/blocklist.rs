@@ -151,3 +151,45 @@ pub fn do_remove_from_blocklist(
 
     Ok(())
 }
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::types::{DataKey, Error};
+    use crate::SubscriptionVault;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
+
+    #[test]
+    fn test_require_not_blocklisted_valid() {
+        let env = Env::default();
+        let subscriber = Address::generate(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+
+        env.as_contract(&contract_id, || {
+            let result = require_not_blocklisted(&env, &subscriber);
+            assert_eq!(result, Ok(()));
+        });
+    }
+
+    #[test]
+    fn test_require_not_blocklisted_invalid() {
+        let env = Env::default();
+        let subscriber = Address::generate(&env);
+        let contract_id = env.register(crate::SubscriptionVault, ());
+
+        env.as_contract(&contract_id, || {
+            let key = DataKey::Blocklist(subscriber.clone());
+            let entry = crate::types::BlocklistEntry {
+                subscriber: subscriber.clone(),
+                added_by: Address::generate(&env),
+                added_at: 123456789,
+                reason: None,
+            };
+            env.storage().instance().set(&key, &entry);
+
+            let result = require_not_blocklisted(&env, &subscriber);
+            assert_eq!(result, Err(Error::SubscriberBlocklisted));
+
+            assert!(env.storage().instance().has(&key));
+        });
+    }
+}

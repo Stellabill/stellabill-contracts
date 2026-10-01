@@ -289,6 +289,10 @@ pub enum DataKey {
     EmergencyWithdrawIntent(u32),
     /// Merchant vacation window storing (start_ts, end_ts) (instance). Discriminant 85.
     MerchantVacation(Address),
+    /// Per-entrypoint reentrancy lock flag (instance). Discriminant 86.
+    ReentrancyLock(Symbol),
+    /// Multi-beneficiary treasury split configuration. Discriminant 87.
+    TreasurySplit,
 }
 
 impl DataKey {
@@ -381,6 +385,8 @@ impl DataKey {
             DataKey::MerchantSubAccountList(_) => 83,
             DataKey::EmergencyWithdrawIntent(_) => 84,
             DataKey::MerchantVacation(_) => 85,
+            DataKey::ReentrancyLock(_) => 86,
+            DataKey::TreasurySplit => 87,
         }
     }
 
@@ -452,6 +458,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     82, // MerchantSubAccount(Address, Symbol)
     83, // MerchantSubAccountList(Address)
     85, // MerchantVacation(Address)
+    86, // ReentrancyLock(Symbol)
+    87, // TreasurySplit
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1287,19 +1295,6 @@ pub enum Error {
     /// The cancellation escrow release window has not elapsed yet.
     EscrowNotReleased = 15002,
 
-    // --- Emergency Withdraw (16000-16099) ---
-    /// Emergency withdraw cooldown is still active.
-    EmergencyWithdrawCooldownActive = 16001,
-    /// Emergency withdraw state is invalid for the requested operation.
-    EmergencyWithdrawInvalidState = 16002,
-    /// No emergency withdraw has been requested for this subscription.
-    EmergencyWithdrawNotRequested = 16003,
-    /// Subscription state changed since the emergency withdraw was requested.
-    EmergencyWithdrawStateChanged = 16004,
-
-    // --- Referral (17000-17099) ---
-    /// Self-referral is not allowed.
-    SelfReferralNotAllowed = 17001,
 }
 
 impl Error {
@@ -1548,7 +1543,7 @@ pub struct BillingStatement {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BillingStatementsPage {
     pub statements: Vec<BillingStatement>,
     pub next_cursor: Option<u32>,
@@ -3164,14 +3159,17 @@ pub struct PrepaidQueryResult {
 pub struct AcceptedToken {
     pub token: Address,
     pub decimals: u32,
+    pub added_at: u64,
 }
 
 /// Event emitted when the fee-token override is configured.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeTokenConfiguredEvent {
     pub admin: Address,
     pub fee_token: Option<Address>,
+    pub old_token: Option<Address>,
+    pub new_token: Option<Address>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -3213,14 +3211,16 @@ pub struct SubscriptionPausedEvent {
 
 /// Cancellation escrow record for a subscription.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CancellationEscrow {
     pub subscription_id: u32,
     pub amount: i128,
     pub token: Address,
     pub subscriber: Address,
     pub merchant: Address,
+    pub opened_at: u64,
     pub released_at: u64,
+    pub released: bool,
 }
 
 /// Event emitted when a cancellation escrow is opened.
@@ -3304,12 +3304,15 @@ pub struct SubscriptionTransferredEvent {
 
 /// Transfer intent for subscription transfer flow.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferIntent {
     pub subscription_id: u32,
+    pub from_subscriber: Address,
     pub from: Address,
     pub to: Address,
+    pub created_at: u64,
     pub expires_at: u64,
+    pub executed: bool,
 }
 
 /// Event emitted when a transfer intent is created.
@@ -3340,391 +3343,7 @@ pub struct TransferVetoedEvent {
 /// Cancellation escrow window in seconds (7 days).
 pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
-/// Normalize a token amount from its native decimals to a target scale.
-/// Returns `None` if the conversion would underflow.
-pub fn normalize_amount(_env: &soroban_sdk::Env, _token: &Address, _amount: i128) -> Option<i128> {
-    Some(_amount)
-}
 
-/// Accepted token record returned by `list_accepted_tokens`.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
-/// Event emitted when the fee-token override is configured.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a protocol fee is converted to the fee-token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
-    pub subscription_id: u32,
-    pub source_token: Address,
-    pub target_token: Address,
-    pub original_fee_amount: i128,
-    pub converted_fee_amount: i128,
-    pub rate: u128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is auto-paused after consecutive charge failures.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Cancellation escrow record held for a cancelled subscription.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-impl PartialEq for CancellationEscrow {
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription_id == other.subscription_id
-            && self.amount == other.amount
-            && self.token == other.token
-            && self.subscriber == other.subscriber
-            && self.merchant == other.merchant
-            && self.released_at == other.released_at
-    }
-}
-
-/// Event emitted when a cancellation escrow is opened.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is disputed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Per-token oracle price history ring-buffer metadata.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OraclePriceHistoryMeta {
-    pub count: u32,
-    pub cursor: u32,
-}
-
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Transfer intent for subscription ownership transfer.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is transferred.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer is vetoed by the merchant.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a sub-account is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when funds are withdrawn from a sub-account.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Window in seconds for cancellation escrow disputes.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
-
-/// Accepted token record returned by `list_accepted_tokens`.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
-/// Event emitted when the fee-token override is configured.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a protocol fee is converted to the fee-token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
-    pub subscription_id: u32,
-    pub source_token: Address,
-    pub target_token: Address,
-    pub original_fee_amount: i128,
-    pub converted_fee_amount: i128,
-    pub rate: u128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is auto-paused after consecutive charge failures.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Cancellation escrow record held for a cancelled subscription.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-impl PartialEq for CancellationEscrow {
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription_id == other.subscription_id
-            && self.amount == other.amount
-            && self.token == other.token
-            && self.subscriber == other.subscriber
-            && self.merchant == other.merchant
-            && self.released_at == other.released_at
-    }
-}
-
-/// Event emitted when a cancellation escrow is opened.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is disputed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Per-token oracle price history ring-buffer metadata.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OraclePriceHistoryMeta {
-    pub count: u32,
-    pub cursor: u32,
-}
-
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Transfer intent for subscription ownership transfer.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is transferred.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer is vetoed by the merchant.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a sub-account is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when funds are withdrawn from a sub-account.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Window in seconds for cancellation escrow disputes.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
 
 #[cfg(test)]
 mod event_topic_tests {
@@ -3791,261 +3410,3 @@ mod event_topic_tests {
     }
 }
 
-// ── Restored definitions (botched-merge repair) ───────────────────────────────
-// The items below were dropped from `types.rs` by a bad merge and are restored
-// from the last commit that contained them so the crate compiles again.
-
-/// Token accepted by the vault, with its registered decimal precision.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
-/// Pending transfer of a subscription to a new subscriber (dual consent).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Default window (in seconds) for the cancellation refund escrow hold.
-/// The subscriber cannot claim the refund until this window elapses,
-/// giving the merchant time to dispute the cancellation.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
-
-/// Escrow record created when a subscription is cancelled.
-///
-/// The remaining prepaid balance is held in escrow for
-/// [`CANCELLATION_ESCROW_WINDOW_SECS`] before the subscriber can claim it.
-/// The merchant can lodge a dispute during this window to convert the escrow
-/// into a live Dispute record.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-/// Event emitted when a cancellation refund is placed into escrow.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released to the subscriber.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a merchant lodges a dispute against a cancellation escrow,
-/// converting it into a live Dispute record.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when the protocol fee token override is configured.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a protocol fee is converted to the fee-token override
-/// through the oracle at charge time.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
-    pub subscription_id: u32,
-    /// The subscription's settlement token (source).
-    pub source_token: Address,
-    /// The fee-token override (destination).
-    pub target_token: Address,
-    /// Original fee amount in `source_token` before conversion.
-    pub original_fee_amount: i128,
-    /// Converted fee amount in `target_token`.
-    pub converted_fee_amount: i128,
-    /// Oracle price used for conversion (quote per base, scaled by 10^7).
-    pub rate: u128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is auto-paused after consecutive
-/// insufficient-balance charge failures.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Metadata for a per-token oracle price history ring buffer.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OraclePriceHistoryMeta {
-    /// Current write index in the ring buffer.
-    pub head: u32,
-    /// Total samples written (capped for read semantics).
-    pub count: u32,
-}
-
-/// Event emitted when a merchant registers a labelled sub-account (#575).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a merchant withdraws funds from a sub-account (#575).
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Common scale used to compare amounts across tokens with differing decimal
-/// precision in cross-token reconciliation reports (see `queries::get_token_reconciliation`).
-pub const RECONCILIATION_DECIMALS: u32 = 9;
-
-/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
-/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
-///
-/// # Errors
-/// - `Error::InvalidToken` if the token has no registered decimals.
-/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
-/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
-/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
-///   decimals and `raw` carries precision that cannot be represented exactly
-///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
-pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        raw.checked_mul(scale).ok_or(Error::Overflow)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        if raw % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(raw / scale)
-    }
-}
-
-/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
-/// amount back to the token's own base-unit precision.
-///
-/// # Errors
-/// Same error conditions as [`normalize_amount`], mirrored for the reverse
-/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
-/// the common scale and `normalized` cannot be represented exactly).
-pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
-    let decimals: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::TokenDecimals(token.clone()))
-        .ok_or(Error::InvalidToken)?;
-    if decimals == 0 {
-        return Err(Error::InvalidTokenDecimals);
-    }
-    if decimals <= RECONCILIATION_DECIMALS {
-        let scale = 10i128.pow(RECONCILIATION_DECIMALS - decimals);
-        if normalized % scale != 0 {
-            return Err(Error::InvalidInput);
-        }
-        Ok(normalized / scale)
-    } else {
-        let scale = 10i128.pow(decimals - RECONCILIATION_DECIMALS);
-        normalized.checked_mul(scale).ok_or(Error::Overflow)
-    }
-}
