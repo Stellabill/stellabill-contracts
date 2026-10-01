@@ -110,6 +110,8 @@ fn test_datakey_discriminants_snapshot() {
         (83, DataKey::MerchantSubAccountList(addr.clone())),
         (84, DataKey::EmergencyWithdrawIntent(0)),
         (85, DataKey::MerchantVacation(addr.clone())),
+        (86, DataKey::ReentrancyLock(Symbol::new(&env, "l"))),
+        (87, DataKey::TreasurySplit),
     ];
 
     for (expected, key) in cases {
@@ -217,6 +219,8 @@ fn test_datakey_no_duplicate_discriminants() {
         DataKey::MerchantSubAccountList(addr.clone()),
         DataKey::EmergencyWithdrawIntent(0),
         DataKey::MerchantVacation(addr.clone()),
+        DataKey::ReentrancyLock(Symbol::new(&env, "l")),
+        DataKey::TreasurySplit,
     ];
 
     let mut seen = std::collections::HashSet::new();
