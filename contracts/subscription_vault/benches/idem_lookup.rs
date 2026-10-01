@@ -218,7 +218,10 @@ fn bench_ring_position_cost() {
 
     std::println!(
         "[bench_ring_position_cost] head={} mid={} tail={} absent={}",
-        cost_head, cost_mid, cost_tail, cost_absent
+        cost_head,
+        cost_mid,
+        cost_tail,
+        cost_absent
     );
 
     // â”€â”€ Step 3: assert constant-time property across hit positions.
@@ -394,14 +397,8 @@ fn bench_duplicate_hash_query() {
     );
 
     // Neither replay should alter the balance.
-    assert_eq!(
-        bal_before, bal_mid,
-        "First replay must not change balance."
-    );
-    assert_eq!(
-        bal_mid, bal_after,
-        "Second replay must not change balance."
-    );
+    assert_eq!(bal_before, bal_mid, "First replay must not change balance.");
+    assert_eq!(bal_mid, bal_after, "Second replay must not change balance.");
 
     // The two consecutive replays should have comparable cost (within tolerance).
     let lo = cost_first_replay.min(cost_second_replay);

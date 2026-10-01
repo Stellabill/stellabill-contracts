@@ -5,8 +5,7 @@
 #[cfg(test)]
 mod tests;
 
-#![allow(dead_code)]
-
+#[allow(dead_code)]
 use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,

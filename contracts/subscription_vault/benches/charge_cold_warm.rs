@@ -29,8 +29,7 @@ use soroban_sdk::{
     token, Address, BytesN, Env, String,
 };
 use subscription_vault::{
-    SubscriptionStatus, UsageLimits, MAX_METADATA_KEYS,
-    SubscriptionVault, SubscriptionVaultClient,
+    SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, UsageLimits, MAX_METADATA_KEYS,
 };
 
 // â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -93,7 +92,10 @@ fn get_scenario_budget(scenario_name: &str) -> ScenarioBudget {
             _expected_delta_pct: expected_delta_pct,
         }
     } else {
-        panic!("Scenario {} not found in fixture budget file", scenario_name);
+        panic!(
+            "Scenario {} not found in fixture budget file",
+            scenario_name
+        );
     }
 }
 
@@ -172,11 +174,7 @@ struct ChargeMetrics {
 // â”€â”€ Measurement Logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Measures cold path cost: Subscription and related keys are read from persistent storage.
-fn measure_cold_charge(
-    env: &Env,
-    client: &SubscriptionVaultClient,
-    sub_id: u32,
-) -> ChargeMetrics {
+fn measure_cold_charge(env: &Env, client: &SubscriptionVaultClient, sub_id: u32) -> ChargeMetrics {
     env.cost_estimate().budget().reset_unlimited();
     client.charge_subscription(&sub_id, &None);
 
@@ -189,11 +187,7 @@ fn measure_cold_charge(
 }
 
 /// Measures warm path cost: Subscription key was freshly written / updated immediately before charge.
-fn measure_warm_charge(
-    env: &Env,
-    client: &SubscriptionVaultClient,
-    sub_id: u32,
-) -> ChargeMetrics {
+fn measure_warm_charge(env: &Env, client: &SubscriptionVaultClient, sub_id: u32) -> ChargeMetrics {
     // Touch / warm the storage cache right before measuring charge_subscription
     let _sub = client.get_subscription(&sub_id);
 
@@ -209,11 +203,7 @@ fn measure_warm_charge(
 }
 
 /// Validate cost metrics against fixture and ensure cold vs warm delta <= 10%.
-fn assert_cold_warm_metrics(
-    scenario_name: &str,
-    cold: ChargeMetrics,
-    warm: ChargeMetrics,
-) {
+fn assert_cold_warm_metrics(scenario_name: &str, cold: ChargeMetrics, warm: ChargeMetrics) {
     let fixture = get_scenario_budget(scenario_name);
 
     std::println!(
@@ -233,9 +223,11 @@ fn assert_cold_warm_metrics(
 
     // 1. Delta between cold vs warm execution paths
     let delta_pct = if cold.cpu_instructions >= warm.cpu_instructions {
-        ((cold.cpu_instructions - warm.cpu_instructions) as f64 / cold.cpu_instructions as f64) * 100.0
+        ((cold.cpu_instructions - warm.cpu_instructions) as f64 / cold.cpu_instructions as f64)
+            * 100.0
     } else {
-        ((warm.cpu_instructions - cold.cpu_instructions) as f64 / cold.cpu_instructions as f64) * 100.0
+        ((warm.cpu_instructions - cold.cpu_instructions) as f64 / cold.cpu_instructions as f64)
+            * 100.0
     };
 
     std::println!(
@@ -459,7 +451,6 @@ fn bench_charge_cold_vs_warm_grace_period() {
     let subscriber = Address::generate(&env_cold);
     let merchant = Address::generate(&env_cold);
     setup_merchant(&env_cold, &client_cold, &merchant);
-
 
     let sub_id_cold = client_cold.create_subscription(
         &subscriber,

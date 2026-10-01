@@ -208,12 +208,7 @@ fn measure_open_dispute(
     sub_id: u32,
 ) -> (u64, DisputeMetrics) {
     env.cost_estimate().budget().reset_unlimited();
-    let dispute_id = client.open_dispute(
-        subscriber,
-        &sub_id,
-        &DISPUTE_AMOUNT,
-        &None::<BytesN<32>>,
-    );
+    let dispute_id = client.open_dispute(subscriber, &sub_id, &DISPUTE_AMOUNT, &None::<BytesN<32>>);
     (dispute_id, capture_metrics(env))
 }
 
@@ -286,13 +281,14 @@ fn assert_phase_metrics(
 fn assert_total_cpu(scenario_name: &str, total_cpu: u64, budget_total: u64) {
     std::println!(
         "[bench_dispute_lifecycle] {}::total  CPU={}  FixtureBudget={}",
-        scenario_name, total_cpu, budget_total,
+        scenario_name,
+        total_cpu,
+        budget_total,
     );
 
     if budget_total > 0 {
-        let variance_pct = ((total_cpu as f64 - budget_total as f64).abs()
-            / budget_total as f64)
-            * 100.0;
+        let variance_pct =
+            ((total_cpu as f64 - budget_total as f64).abs() / budget_total as f64) * 100.0;
         assert!(
             variance_pct <= MAX_DELTA_TOLERANCE_PCT,
             "[{}] Total CPU ({}) deviates by {:.2}% from fixture budget ({}) (> {:.1}% limit)",
@@ -311,13 +307,11 @@ fn assert_total_cpu(scenario_name: &str, total_cpu: u64, budget_total: u64) {
 #[test]
 fn bench_dispute_lifecycle_standard() {
     let (env, client, _token, _contract_id, admin) = setup_env();
-    let (subscriber, merchant, sub_id, token) =
-        setup_merchant_and_sub(&env, &client);
+    let (subscriber, merchant, sub_id, token) = setup_merchant_and_sub(&env, &client);
     seed_merchant_balance_for_dispute(&env, &client, &merchant, &token);
 
     // Phase 1: Open
-    let (dispute_id, open_metrics) =
-        measure_open_dispute(&env, &client, &subscriber, sub_id);
+    let (dispute_id, open_metrics) = measure_open_dispute(&env, &client, &subscriber, sub_id);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::Open);
@@ -330,8 +324,7 @@ fn bench_dispute_lifecycle_standard() {
     assert_eq!(dispute.status, DisputeStatus::Responded);
 
     // Phase 3: Resolve to subscriber
-    let resolve_metrics =
-        measure_resolve_dispute(&env, &client, &admin, dispute_id, true);
+    let resolve_metrics = measure_resolve_dispute(&env, &client, &admin, dispute_id, true);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
@@ -352,8 +345,7 @@ fn bench_dispute_lifecycle_standard() {
 #[test]
 fn bench_dispute_lifecycle_max_evidence() {
     let (env, client, _token, _contract_id, admin) = setup_env();
-    let (subscriber, merchant, sub_id, token) =
-        setup_merchant_and_sub(&env, &client);
+    let (subscriber, merchant, sub_id, token) = setup_merchant_and_sub(&env, &client);
     seed_merchant_balance_for_dispute(&env, &client, &merchant, &token);
 
     // Create max-size evidence hash (all 0xFF)
@@ -364,12 +356,7 @@ fn bench_dispute_lifecycle_max_evidence() {
 
     // Phase 1: Open with max evidence
     env.cost_estimate().budget().reset_unlimited();
-    let dispute_id = client.open_dispute(
-        &subscriber,
-        &sub_id,
-        &DISPUTE_AMOUNT,
-        &max_evidence,
-    );
+    let dispute_id = client.open_dispute(&subscriber, &sub_id, &DISPUTE_AMOUNT, &max_evidence);
     let open_metrics = capture_metrics(&env);
 
     let dispute = client.get_dispute(&dispute_id);
@@ -377,24 +364,32 @@ fn bench_dispute_lifecycle_max_evidence() {
     assert_eq!(dispute.evidence_hash, max_evidence);
 
     // Phase 2: Respond with max evidence
-    let respond_metrics =
-        measure_respond_dispute(&env, &client, &admin, dispute_id, &max_evidence);
+    let respond_metrics = measure_respond_dispute(&env, &client, &admin, dispute_id, &max_evidence);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::Responded);
     assert_eq!(dispute.admin_evidence_hash, max_evidence);
 
     // Phase 3: Resolve to merchant
-    let resolve_metrics =
-        measure_resolve_dispute(&env, &client, &admin, dispute_id, false);
+    let resolve_metrics = measure_resolve_dispute(&env, &client, &admin, dispute_id, false);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::ResolvedToMerchant);
 
     let scenario = get_scenario_budget("max_evidence");
     assert_phase_metrics("max_evidence", "open", open_metrics, scenario.open_cpu);
-    assert_phase_metrics("max_evidence", "respond", respond_metrics, scenario.respond_cpu);
-    assert_phase_metrics("max_evidence", "resolve", resolve_metrics, scenario.resolve_cpu);
+    assert_phase_metrics(
+        "max_evidence",
+        "respond",
+        respond_metrics,
+        scenario.respond_cpu,
+    );
+    assert_phase_metrics(
+        "max_evidence",
+        "resolve",
+        resolve_metrics,
+        scenario.resolve_cpu,
+    );
 
     let total_cpu = open_metrics.cpu_instructions
         + respond_metrics.cpu_instructions
@@ -407,13 +402,11 @@ fn bench_dispute_lifecycle_max_evidence() {
 #[test]
 fn bench_dispute_lifecycle_auto_close() {
     let (env, client, _token, _contract_id, admin) = setup_env();
-    let (subscriber, merchant, sub_id, token) =
-        setup_merchant_and_sub(&env, &client);
+    let (subscriber, merchant, sub_id, token) = setup_merchant_and_sub(&env, &client);
     seed_merchant_balance_for_dispute(&env, &client, &merchant, &token);
 
     // Phase 1: Open
-    let (dispute_id, open_metrics) =
-        measure_open_dispute(&env, &client, &subscriber, sub_id);
+    let (dispute_id, open_metrics) = measure_open_dispute(&env, &client, &subscriber, sub_id);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::Open);
@@ -433,7 +426,12 @@ fn bench_dispute_lifecycle_auto_close() {
 
     let scenario = get_scenario_budget("auto_close");
     assert_phase_metrics("auto_close", "open", open_metrics, scenario.open_cpu);
-    assert_phase_metrics("auto_close", "resolve", resolve_metrics, scenario.resolve_cpu);
+    assert_phase_metrics(
+        "auto_close",
+        "resolve",
+        resolve_metrics,
+        scenario.resolve_cpu,
+    );
 
     let total_cpu = open_metrics.cpu_instructions + resolve_metrics.cpu_instructions;
     assert_total_cpu("auto_close", total_cpu, scenario.total_cpu);
@@ -444,29 +442,41 @@ fn bench_dispute_lifecycle_auto_close() {
 #[test]
 fn bench_dispute_lifecycle_resolve_to_merchant() {
     let (env, client, _token, _contract_id, admin) = setup_env();
-    let (subscriber, merchant, sub_id, token) =
-        setup_merchant_and_sub(&env, &client);
+    let (subscriber, merchant, sub_id, token) = setup_merchant_and_sub(&env, &client);
     seed_merchant_balance_for_dispute(&env, &client, &merchant, &token);
 
     // Phase 1: Open
-    let (dispute_id, open_metrics) =
-        measure_open_dispute(&env, &client, &subscriber, sub_id);
+    let (dispute_id, open_metrics) = measure_open_dispute(&env, &client, &subscriber, sub_id);
 
     // Phase 2: Respond
     let respond_metrics =
         measure_respond_dispute(&env, &client, &admin, dispute_id, &None::<BytesN<32>>);
 
     // Phase 3: Resolve to merchant
-    let resolve_metrics =
-        measure_resolve_dispute(&env, &client, &admin, dispute_id, false);
+    let resolve_metrics = measure_resolve_dispute(&env, &client, &admin, dispute_id, false);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::ResolvedToMerchant);
 
     let scenario = get_scenario_budget("resolve_to_merchant");
-    assert_phase_metrics("resolve_to_merchant", "open", open_metrics, scenario.open_cpu);
-    assert_phase_metrics("resolve_to_merchant", "respond", respond_metrics, scenario.respond_cpu);
-    assert_phase_metrics("resolve_to_merchant", "resolve", resolve_metrics, scenario.resolve_cpu);
+    assert_phase_metrics(
+        "resolve_to_merchant",
+        "open",
+        open_metrics,
+        scenario.open_cpu,
+    );
+    assert_phase_metrics(
+        "resolve_to_merchant",
+        "respond",
+        respond_metrics,
+        scenario.respond_cpu,
+    );
+    assert_phase_metrics(
+        "resolve_to_merchant",
+        "resolve",
+        resolve_metrics,
+        scenario.resolve_cpu,
+    );
 
     let total_cpu = open_metrics.cpu_instructions
         + respond_metrics.cpu_instructions
@@ -479,12 +489,10 @@ fn bench_dispute_lifecycle_resolve_to_merchant() {
 #[test]
 fn bench_dispute_lifecycle_zero_evidence() {
     let (env, client, _token, _contract_id, admin) = setup_env();
-    let (subscriber, merchant, sub_id, token) =
-        setup_merchant_and_sub(&env, &client);
+    let (subscriber, merchant, sub_id, token) = setup_merchant_and_sub(&env, &client);
     seed_merchant_balance_for_dispute(&env, &client, &merchant, &token);
 
-    let (dispute_id, _open_metrics) =
-        measure_open_dispute(&env, &client, &subscriber, sub_id);
+    let (dispute_id, _open_metrics) = measure_open_dispute(&env, &client, &subscriber, sub_id);
 
     let dispute = client.get_dispute(&dispute_id);
     assert!(dispute.evidence_hash.is_none());
@@ -495,8 +503,7 @@ fn bench_dispute_lifecycle_zero_evidence() {
     let dispute = client.get_dispute(&dispute_id);
     assert!(dispute.admin_evidence_hash.is_none());
 
-    let _resolve_metrics =
-        measure_resolve_dispute(&env, &client, &admin, dispute_id, true);
+    let _resolve_metrics = measure_resolve_dispute(&env, &client, &admin, dispute_id, true);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::ResolvedToSubscriber);
