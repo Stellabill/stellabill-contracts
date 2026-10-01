@@ -3460,6 +3460,8 @@ mod test_remove_guardian;
 mod test_coupon;
 #[cfg(test)]
 mod test_compute_discount_adversarial;
+#[cfg(test)]
+mod test_apply_discount_at_charge_adversarial;
 
 #[cfg(test)]
 mod test_admin_rotation_two_step;
