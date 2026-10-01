@@ -878,3 +878,322 @@ mod tests {
         });
     }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Adversarial coverage for `create_coupon`
+//
+//  The happy path, same-merchant duplicate rejection and `revoke_coupon` are
+//  covered by `test_coupon.rs`.  This module pins the *validation boundaries*
+//  around `create_coupon` instead: the inclusive/exclusive edges of each
+//  range check, the global (not per-merchant) coupon-code namespace, the fact
+//  that revocation does not free a code, and the guarantee that a rejected
+//  call leaves no coupon behind.
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod create_coupon_adversarial_tests {
+    use super::*;
+    use crate::test_utils::{advance_ledger_by, create_test_client, setup_env};
+    use crate::SubscriptionVaultClient;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Address;
+
+    fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
+        let env = setup_env();
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let client = create_test_client(&env, &admin, &token);
+        (env, client, admin, token)
+    }
+
+    fn sym(env: &Env, text: &str) -> Symbol {
+        Symbol::new(env, text)
+    }
+
+    // ── percent_off_bps boundary: 0..=10_000 inclusive ──────────────────────
+
+    #[test]
+    fn percent_off_accepts_the_inclusive_upper_bound_and_rejects_one_more() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+
+        let at_max = sym(&env, "PCT_MAX");
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &at_max, &token, &10_000, &0, &0, &0);
+        assert_eq!(client.get_coupon(&at_max).unwrap().percent_off_bps, 10_000);
+
+        let over_max = sym(&env, "PCT_OVER");
+        let res =
+            client.try_create_coupon(&merchant, &over_max, &token, &10_001, &0, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+        assert!(
+            client.get_coupon(&over_max).is_none(),
+            "a rejected percentage must not persist a coupon"
+        );
+
+        // u32::MAX is also out of range and must not wrap into validity.
+        let wrapped = sym(&env, "PCT_U32MAX");
+        let res = client.try_create_coupon(&merchant, &wrapped, &token, &u32::MAX, &0, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+        assert!(client.get_coupon(&wrapped).is_none());
+    }
+
+    #[test]
+    fn percent_off_zero_is_accepted_as_no_percentage_discount() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "PCT_ZERO");
+
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+        assert_eq!(client.get_coupon(&code).unwrap().percent_off_bps, 0);
+    }
+
+    // ── fixed_off boundary: >= 0 ────────────────────────────────────────────
+
+    #[test]
+    fn fixed_off_accepts_zero_and_rejects_any_negative_value() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+
+        let zero = sym(&env, "FIX_ZERO");
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &zero, &token, &0, &0, &0, &0);
+        assert_eq!(client.get_coupon(&zero).unwrap().fixed_off, 0);
+
+        // -1 is the closest negative value to the boundary.
+        let minus_one = sym(&env, "FIX_NEG1");
+        let res = client.try_create_coupon(&merchant, &minus_one, &token, &0, &-1, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+        assert!(client.get_coupon(&minus_one).is_none());
+
+        // i128::MIN must also be rejected without overflowing the check.
+        let min = sym(&env, "FIX_MIN");
+        let res =
+            client.try_create_coupon(&merchant, &min, &token, &0, &i128::MIN, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+        assert!(client.get_coupon(&min).is_none());
+    }
+
+    // ── expires_at boundary: 0 == never, otherwise strictly in the future ────
+
+    #[test]
+    fn expires_at_zero_means_no_expiry_and_is_accepted_at_any_ledger_time() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "EXP_NEVER");
+
+        advance_ledger_by(&env, 1_000_000);
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+        assert_eq!(client.get_coupon(&code).unwrap().expires_at, 0);
+    }
+
+    #[test]
+    fn expires_at_must_be_strictly_after_the_current_ledger_time() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        advance_ledger_by(&env, 1_000);
+        // `setup_env` starts at ledger timestamp 0, so the advance above puts
+        // `now` exactly at 1_000.
+        let now = 1_000u64;
+
+        // Exactly `now` is rejected: the guard is `expires_at <= now`.
+        let at_now = sym(&env, "EXP_NOW");
+        let res = client.try_create_coupon(&merchant, &at_now, &token, &0, &0, &0, &now);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+        assert!(client.get_coupon(&at_now).is_none());
+
+        // One second in the past is rejected as well.
+        let past = sym(&env, "EXP_PAST");
+        let res = client.try_create_coupon(&merchant, &past, &token, &0, &0, &0, &(now - 1));
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::InvalidInput.to_code()
+        );
+
+        // One second in the future is the first accepted value.
+        let future = sym(&env, "EXP_NEXT");
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &future, &token, &0, &0, &0, &(now + 1));
+        assert_eq!(client.get_coupon(&future).unwrap().expires_at, now + 1);
+
+        // u64::MAX is in the future for any realistic ledger and is accepted.
+        let far = sym(&env, "EXP_MAX");
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &far, &token, &0, &0, &0, &u64::MAX);
+        assert_eq!(client.get_coupon(&far).unwrap().expires_at, u64::MAX);
+    }
+
+    // ── max_redemptions: 0 == unlimited ─────────────────────────────────────
+
+    #[test]
+    fn max_redemptions_zero_is_accepted_as_unlimited() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "MAX_RED0");
+
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+        assert_eq!(client.get_coupon(&code).unwrap().max_redemptions, 0);
+    }
+
+    #[test]
+    fn all_fields_round_trip_through_storage_for_a_boundary_heavy_coupon() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "ALL_MAX");
+        advance_ledger_by(&env, 500);
+
+        client.mock_all_auths().create_coupon(
+            &merchant,
+            &code,
+            &token,
+            &10_000,
+            &i128::MAX,
+            &u32::MAX,
+            &u64::MAX,
+        );
+
+        let stored = client.get_coupon(&code).unwrap();
+        assert_eq!(stored.code, code);
+        assert_eq!(stored.merchant, merchant);
+        assert_eq!(stored.token, token);
+        assert_eq!(stored.percent_off_bps, 10_000);
+        assert_eq!(stored.fixed_off, i128::MAX);
+        assert_eq!(stored.max_redemptions, u32::MAX);
+        assert_eq!(stored.expires_at, u64::MAX);
+        assert!(!stored.revoked);
+    }
+
+    // ── code namespace is global, not per-merchant ──────────────────────────
+
+    #[test]
+    fn coupon_codes_are_global_so_a_second_merchant_cannot_reuse_one() {
+        let (env, client, _admin, token) = setup();
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+        let code = sym(&env, "SHARED");
+
+        client
+            .mock_all_auths()
+            .create_coupon(&first, &code, &token, &1_000, &0, &0, &0);
+
+        let res = client.try_create_coupon(&second, &code, &token, &2_000, &0, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::CouponAlreadyExists.to_code()
+        );
+
+        // The original record must be untouched by the rejected second create.
+        let stored = client.get_coupon(&code).unwrap();
+        assert_eq!(stored.merchant, first);
+        assert_eq!(stored.percent_off_bps, 1_000);
+    }
+
+    #[test]
+    fn a_revoked_code_still_occupies_the_namespace() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "REVOKED");
+
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &code, &token, &1_000, &0, &0, &0);
+        client.mock_all_auths().revoke_coupon(&merchant, &code);
+        assert!(client.get_coupon(&code).unwrap().revoked);
+
+        // Revocation flips a flag; it does not delete the record, so the code
+        // cannot be recycled by the same or another merchant.
+        let res = client.try_create_coupon(&merchant, &code, &token, &1_000, &0, &0, &0);
+        assert_eq!(
+            res.err().unwrap().unwrap().to_code(),
+            Error::CouponAlreadyExists.to_code()
+        );
+        assert!(client.get_coupon(&code).unwrap().revoked);
+    }
+
+    // ── discount arithmetic at the validated extremes ────────────────────────
+
+    #[test]
+    fn a_full_percentage_discount_clamps_the_payable_amount_to_zero() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "FREEBIE");
+
+        // 100% off plus a positive fixed discount is accepted storage-wise;
+        // the payable amount must still clamp at zero rather than go negative.
+        client.mock_all_auths().create_coupon(
+            &merchant,
+            &code,
+            &token,
+            &10_000,
+            &1_000,
+            &0,
+            &0,
+        );
+        let coupon = client.get_coupon(&code).unwrap();
+
+        let gross = 7_777i128;
+        let discount = compute_discount(gross, &coupon);
+        assert_eq!(discount, gross);
+        assert_eq!(gross - discount, 0);
+    }
+
+    #[test]
+    fn a_zero_discount_coupon_leaves_the_gross_untouched() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "NOOP");
+
+        client
+            .mock_all_auths()
+            .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+        let coupon = client.get_coupon(&code).unwrap();
+
+        assert_eq!(compute_discount(1_234i128, &coupon), 0);
+    }
+
+    #[test]
+    fn a_fixed_discount_larger_than_the_gross_is_clamped_to_the_gross() {
+        let (env, client, _admin, token) = setup();
+        let merchant = Address::generate(&env);
+        let code = sym(&env, "HUGE_FIX");
+
+        client.mock_all_auths().create_coupon(
+            &merchant,
+            &code,
+            &token,
+            &0,
+            &1_000_000,
+            &0,
+            &0,
+        );
+        let coupon = client.get_coupon(&code).unwrap();
+
+        let gross = 25i128;
+        assert_eq!(compute_discount(gross, &coupon), gross);
+    }
+}
