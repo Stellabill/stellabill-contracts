@@ -33,7 +33,10 @@ jobs:
         run: python scripts/generate_error_table.py
 
       - name: Commit regenerated table if changed
-        if: github.event_name == 'pull_request'
+        # Only auto-commit on PRs from the same repo (not forks).
+        # The GITHUB_TOKEN only has write access to the repo it belongs to,
+        # so pushing to a fork's branch from the upstream token is denied.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           # If PR head repo is a fork (different full_name), we cannot push back from the workflow.
           if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
