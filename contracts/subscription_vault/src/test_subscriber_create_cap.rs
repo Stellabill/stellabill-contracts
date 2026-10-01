@@ -1,4 +1,4 @@
-//! Adversarial tests for `get_subscriber_create_cap` / `set_subscriber_create_cap` (#988).
+//! Adversarial coverage for the subscriber creation-rate cap (#987).
 //!
 //! # What is being tested
 //!
@@ -391,4 +391,106 @@ fn rate_limit_windows_are_per_subscriber() {
 
     // Bob's window is independent — his first create still succeeds.
     create_sub(&client, &bob, &merchant);
+}
+
+// ── PR coverage: subscriber creation cap (#987) ───────────────────────────────
+
+const PR_INTERVAL: u64 = 60;
+const PR_AMOUNT: i128 = 1_000_000;
+
+fn pr_setup() -> (Env, Address, SubscriptionVaultClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    client.init(&token, &7, &admin, &PR_AMOUNT, &0);
+
+    (env, admin, client)
+}
+
+fn pr_create_subscription(
+    client: &SubscriptionVaultClient,
+    subscriber: &Address,
+    merchant: &Address,
+) -> u32 {
+    client.create_subscription(
+        subscriber,
+        merchant,
+        &PR_AMOUNT,
+        &PR_INTERVAL,
+        &false,
+        &None,
+        &None,
+        &None::<u32>,
+        &None::<Symbol>,
+    )
+}
+
+#[test]
+fn admin_cap_limits_creation_and_rejected_attempt_leaves_state_unchanged() {
+    let (env, admin, client) = pr_setup();
+    let subscriber = Address::generate(&env);
+
+    client.set_subscriber_create_cap(&admin, &1);
+    assert_eq!(client.get_subscriber_create_cap(), 1);
+    pr_create_subscription(&client, &subscriber, &Address::generate(&env));
+    assert_eq!(client.get_subscriber_active_count(&subscriber), 1);
+
+    let rejected = client.try_create_subscription(
+        &subscriber,
+        &Address::generate(&env),
+        &PR_AMOUNT,
+        &PR_INTERVAL,
+        &false,
+        &None,
+        &None,
+        &None::<u32>,
+        &None::<Symbol>,
+    );
+    assert_eq!(rejected, Err(Ok(Error::SubscriberRateLimited)));
+    assert_eq!(client.get_subscriber_active_count(&subscriber), 1);
+
+    // If the rejected call had incremented its rate-limit window, this retry
+    // would still fail after increasing the cap to two.
+    client.set_subscriber_create_cap(&admin, &2);
+    pr_create_subscription(&client, &subscriber, &Address::generate(&env));
+    assert_eq!(client.get_subscriber_active_count(&subscriber), 2);
+}
+
+#[test]
+fn zero_cap_blocks_creation_without_mutating_subscription_state() {
+    let (env, admin, client) = pr_setup();
+    let subscriber = Address::generate(&env);
+
+    client.set_subscriber_create_cap(&admin, &0);
+    assert_eq!(client.get_subscriber_create_cap(), 0);
+    let rejected = client.try_create_subscription(
+        &subscriber,
+        &Address::generate(&env),
+        &PR_AMOUNT,
+        &PR_INTERVAL,
+        &false,
+        &None,
+        &None,
+        &None::<u32>,
+        &None::<Symbol>,
+    );
+    assert_eq!(rejected, Err(Ok(Error::SubscriberRateLimited)));
+    assert_eq!(client.get_subscriber_active_count(&subscriber), 0);
+}
+
+#[test]
+fn only_admin_can_change_cap_and_rejection_preserves_prior_value() {
+    let (env, admin, client) = pr_setup();
+    let stranger = Address::generate(&env);
+
+    client.set_subscriber_create_cap(&admin, &u32::MAX);
+    let rejected = client.try_set_subscriber_create_cap(&stranger, &0);
+    assert_eq!(rejected, Err(Ok(Error::Unauthorized)));
+    assert_eq!(client.get_subscriber_create_cap(), u32::MAX);
 }

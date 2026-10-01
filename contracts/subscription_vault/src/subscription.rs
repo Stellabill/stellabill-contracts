@@ -135,7 +135,6 @@ const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 pub const MAX_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 31_536_000;
 
 const SECONDS_IN_DAY: u64 = 86400;
-const DEFAULT_CREATE_CAP: u32 = 50;
 
 /// Validates that `interval_seconds` is within the allowed `[MIN, MAX]` range.
 ///
@@ -529,11 +528,10 @@ fn enforce_creation_rate_limit(env: &Env, subscriber: &Address) -> Result<(), Er
         }
     }
 
-    let cap: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::SubscriberCreateCap)
-        .unwrap_or(DEFAULT_CREATE_CAP);
+    // Admin configuration is stored through `write_config`, which uses
+    // persistent storage for the current schema. Read it through the matching
+    // accessor so an updated creation cap actually governs new subscriptions.
+    let cap = crate::admin::get_subscriber_create_cap(env);
 
     let current_ts = env.ledger().timestamp();
 
