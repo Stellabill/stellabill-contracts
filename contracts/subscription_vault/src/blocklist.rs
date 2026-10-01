@@ -1,5 +1,5 @@
 use crate::admin::require_admin_auth;
-use crate::types::{DataKey, Error};
+use crate::types::{DataKey, Error, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD};
 use soroban_sdk::{contracttype, Address, Env, String, Symbol};
 
 #[contracttype]
@@ -97,6 +97,17 @@ pub fn do_add_to_blocklist(
     env.storage()
         .persistent()
         .set(&DataKey::Blocklist(subscriber.clone()), &entry);
+
+    // A block is a long-lived compliance decision: refresh the entry's live
+    // window so it cannot fall out of persistent storage (which would silently
+    // lift the block, and trap every read that consults it) while the address
+    // is still meant to be frozen.
+    crate::subscription::maybe_extend_ttl(
+        env,
+        &DataKey::Blocklist(subscriber.clone()),
+        SUB_TTL_THRESHOLD,
+        SUB_TTL_EXTEND_TO,
+    );
 
     env.events().publish(
         (Symbol::new(env, "blocklist_added"), subscriber.clone()),
