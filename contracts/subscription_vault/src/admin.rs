@@ -1385,7 +1385,7 @@ mod migrate_config_to_persistent_tests {
     use super::*;
     use crate::test_utils::setup::TestEnv;
     use crate::types::{DataKey, Error, SchemaMigratedEvent};
-    use soroban_sdk::{testutils::Events, Address, Env, IntoVal};
+    use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, IntoVal};
 
     #[test]
     fn rejects_uninitialized_contract() {
