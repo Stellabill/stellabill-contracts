@@ -15,8 +15,6 @@
 .deploy-state
 
 # Environment and secrets
-.env
-.env.*
 !.env.example
 *.key
 *.pem
@@ -68,3 +66,5 @@ branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
 .gitignore
+config.bat
+node_modules
