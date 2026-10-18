@@ -289,6 +289,10 @@ pub enum DataKey {
     EmergencyWithdrawIntent(u32),
     /// Merchant vacation window storing (start_ts, end_ts) (instance). Discriminant 85.
     MerchantVacation(Address),
+    /// Per-entrypoint reentrancy lock flag (instance). Discriminant 86.
+    ReentrancyLock(Symbol),
+    /// Multi-beneficiary treasury split configuration. Discriminant 87.
+    TreasurySplit,
 }
 
 impl DataKey {
@@ -381,6 +385,8 @@ impl DataKey {
             DataKey::MerchantSubAccountList(_) => 83,
             DataKey::EmergencyWithdrawIntent(_) => 84,
             DataKey::MerchantVacation(_) => 85,
+            DataKey::ReentrancyLock(_) => 86,
+            DataKey::TreasurySplit => 87,
         }
     }
 
@@ -452,6 +458,8 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     82, // MerchantSubAccount(Address, Symbol)
     83, // MerchantSubAccountList(Address)
     85, // MerchantVacation(Address)
+    86, // ReentrancyLock(Symbol)
+    87, // TreasurySplit
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1287,19 +1295,6 @@ pub enum Error {
     /// The cancellation escrow release window has not elapsed yet.
     EscrowNotReleased = 15002,
 
-    // --- Emergency Withdraw (16000-16099) ---
-    /// Emergency withdraw cooldown is still active.
-    EmergencyWithdrawCooldownActive = 16001,
-    /// Emergency withdraw state is invalid for the requested operation.
-    EmergencyWithdrawInvalidState = 16002,
-    /// No emergency withdraw has been requested for this subscription.
-    EmergencyWithdrawNotRequested = 16003,
-    /// Subscription state changed since the emergency withdraw was requested.
-    EmergencyWithdrawStateChanged = 16004,
-
-    // --- Referral (17000-17099) ---
-    /// Self-referral is not allowed.
-    SelfReferralNotAllowed = 17001,
 }
 
 impl Error {
@@ -1548,7 +1543,7 @@ pub struct BillingStatement {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BillingStatementsPage {
     pub statements: Vec<BillingStatement>,
     pub next_cursor: Option<u32>,
@@ -3164,14 +3159,17 @@ pub struct PrepaidQueryResult {
 pub struct AcceptedToken {
     pub token: Address,
     pub decimals: u32,
+    pub added_at: u64,
 }
 
 /// Event emitted when the fee-token override is configured.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeTokenConfiguredEvent {
     pub admin: Address,
     pub fee_token: Option<Address>,
+    pub old_token: Option<Address>,
+    pub new_token: Option<Address>,
     pub timestamp: u64,
     pub schema_version: u32,
 }
@@ -3213,14 +3211,16 @@ pub struct SubscriptionPausedEvent {
 
 /// Cancellation escrow record for a subscription.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CancellationEscrow {
     pub subscription_id: u32,
     pub amount: i128,
     pub token: Address,
     pub subscriber: Address,
     pub merchant: Address,
+    pub opened_at: u64,
     pub released_at: u64,
+    pub released: bool,
 }
 
 /// Event emitted when a cancellation escrow is opened.
@@ -3304,12 +3304,15 @@ pub struct SubscriptionTransferredEvent {
 
 /// Transfer intent for subscription transfer flow.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferIntent {
     pub subscription_id: u32,
+    pub from_subscriber: Address,
     pub from: Address,
     pub to: Address,
+    pub created_at: u64,
     pub expires_at: u64,
+    pub executed: bool,
 }
 
 /// Event emitted when a transfer intent is created.
@@ -3340,391 +3343,7 @@ pub struct TransferVetoedEvent {
 /// Cancellation escrow window in seconds (7 days).
 pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
-/// Normalize a token amount from its native decimals to a target scale.
-/// Returns `None` if the conversion would underflow.
-pub fn normalize_amount(_env: &soroban_sdk::Env, _token: &Address, _amount: i128) -> Option<i128> {
-    Some(_amount)
-}
 
-/// Accepted token record returned by `list_accepted_tokens`.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
-/// Event emitted when the fee-token override is configured.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a protocol fee is converted to the fee-token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
-    pub subscription_id: u32,
-    pub source_token: Address,
-    pub target_token: Address,
-    pub original_fee_amount: i128,
-    pub converted_fee_amount: i128,
-    pub rate: u128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is auto-paused after consecutive charge failures.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Cancellation escrow record held for a cancelled subscription.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-impl PartialEq for CancellationEscrow {
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription_id == other.subscription_id
-            && self.amount == other.amount
-            && self.token == other.token
-            && self.subscriber == other.subscriber
-            && self.merchant == other.merchant
-            && self.released_at == other.released_at
-    }
-}
-
-/// Event emitted when a cancellation escrow is opened.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is disputed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Per-token oracle price history ring-buffer metadata.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OraclePriceHistoryMeta {
-    pub count: u32,
-    pub cursor: u32,
-}
-
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Transfer intent for subscription ownership transfer.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is transferred.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer is vetoed by the merchant.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a sub-account is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when funds are withdrawn from a sub-account.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Window in seconds for cancellation escrow disputes.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
-
-/// Accepted token record returned by `list_accepted_tokens`.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AcceptedToken {
-    pub token: Address,
-    pub decimals: u32,
-}
-
-/// Event emitted when the fee-token override is configured.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeTokenConfiguredEvent {
-    pub admin: Address,
-    pub fee_token: Option<Address>,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a protocol fee is converted to the fee-token.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct FeeConvertedEvent {
-    pub subscription_id: u32,
-    pub source_token: Address,
-    pub target_token: Address,
-    pub original_fee_amount: i128,
-    pub converted_fee_amount: i128,
-    pub rate: u128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is auto-paused after consecutive charge failures.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionAutoPausedEvent {
-    pub subscription_id: u32,
-    pub consecutive_failures: u32,
-    pub threshold: u32,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Cancellation escrow record held for a cancelled subscription.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub released_at: u64,
-}
-
-impl PartialEq for CancellationEscrow {
-    fn eq(&self, other: &Self) -> bool {
-        self.subscription_id == other.subscription_id
-            && self.amount == other.amount
-            && self.token == other.token
-            && self.subscriber == other.subscriber
-            && self.merchant == other.merchant
-            && self.released_at == other.released_at
-    }
-}
-
-/// Event emitted when a cancellation escrow is opened.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is disputed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowDisputedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub dispute_id: u64,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a cancellation escrow is released.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowReleasedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Per-token oracle price history ring-buffer metadata.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OraclePriceHistoryMeta {
-    pub count: u32,
-    pub cursor: u32,
-}
-
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Transfer intent for subscription ownership transfer.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a subscription is transferred.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer is vetoed by the merchant.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
-    pub subscription_id: u32,
-    pub merchant: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a sub-account is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountCreatedEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when funds are withdrawn from a sub-account.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubAccountWithdrawEvent {
-    pub merchant: Address,
-    pub label: Symbol,
-    pub token: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Window in seconds for cancellation escrow disputes.
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
 
 #[cfg(test)]
 mod event_topic_tests {
