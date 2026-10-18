@@ -42,6 +42,48 @@ fn test_create_coupon_valid() {
 }
 
 #[test]
+fn test_create_coupon_zero_values() {
+    let (env, client, _admin, token) = setup();
+    let merchant = Address::generate(&env);
+    let code = Symbol::new(&env, "ZERO");
+
+    client
+        .mock_all_auths()
+        .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.percent_off_bps, 0);
+    assert_eq!(coupon.fixed_off, 0);
+    assert_eq!(coupon.max_redemptions, 0);
+    assert_eq!(coupon.expires_at, 0);
+    assert_eq!(coupon.revoked, false);
+}
+
+#[test]
+fn test_create_coupon_max_boundary_values() {
+    let (env, client, _admin, token) = setup();
+    let merchant = Address::generate(&env);
+    let code = Symbol::new(&env, "MAXBOUND");
+
+    client.mock_all_auths().create_coupon(
+        &merchant,
+        &code,
+        &token,
+        &10000,
+        &i128::MAX,
+        &u32::MAX,
+        &u64::MAX,
+    );
+
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.percent_off_bps, 10000);
+    assert_eq!(coupon.fixed_off, i128::MAX);
+    assert_eq!(coupon.max_redemptions, u32::MAX);
+    assert_eq!(coupon.expires_at, u64::MAX);
+    assert_eq!(coupon.revoked, false);
+}
+
+#[test]
 fn test_create_coupon_duplicate_rejected() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
@@ -56,6 +98,70 @@ fn test_create_coupon_duplicate_rejected() {
         res.err().unwrap().unwrap().to_code(),
         Error::CouponAlreadyExists.to_code()
     );
+
+    // State must be unchanged after the rejected duplicate creation.
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.merchant, merchant);
+    assert_eq!(coupon.code, code);
+    assert_eq!(coupon.token, token);
+    assert_eq!(coupon.percent_off_bps, 0);
+    assert_eq!(coupon.fixed_off, 0);
+    assert_eq!(coupon.max_redemptions, 0);
+    assert_eq!(coupon.expires_at, 0);
+    assert_eq!(coupon.revoked, false);
+}
+
+#[test]
+fn test_create_coupon_duplicate_does_not_overwrite() {
+    let (env, client, _admin, token) = setup();
+    let merchant = Address::generate(&env);
+    let other_merchant = Address::generate(&env);
+    let code = Symbol::new(&env, "NO_OVERWRITE");
+
+    client.mock_all_auths().create_coupon(
+        &merchant,
+        &code,
+        &token,
+        &2000,
+        &500,
+        &100,
+        &0,
+    );
+
+    let res = client.try_create_coupon(
+        &other_merchant,
+        &code,
+        &token,
+        &5000,
+        &999,
+        &1,
+        &12345,
+    );
+    assert_eq!(
+        res.err().unwrap().unwrap().to_code(),
+        Error::CouponAlreadyExists.to_code()
+    );
+
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.merchant, merchant);
+    assert_eq!(coupon.percent_off_bps, 2000);
+    assert_eq!(coupon.fixed_off, 500);
+    assert_eq!(coupon.max_redemptions, 100);
+    assert_eq!(coupon.expires_at, 0);
+}
+
+#[test]
+fn test_create_coupon_requires_merchant_auth() {
+    let (env, client, _admin, token) = setup();
+    let merchant = Address::generate(&env);
+    let code = Symbol::new(&env, "AUTH_REQ");
+
+    // Without mocking auths, the merchant authorization must be required.
+    let res = client.try_create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+    assert!(res.is_err());
+
+    // No coupon should have been persisted.
+    assert!(client.get_coupon(&code).is_none());
 }
 
 #[test]
