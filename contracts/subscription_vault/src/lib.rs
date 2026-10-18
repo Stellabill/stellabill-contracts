@@ -3489,6 +3489,9 @@ mod test_get_buyout_premium_bps;
 #[cfg(test)]
 mod test_subscription_transfer;
 
+#[cfg(test)]
+mod test_init_adversarial;
+
 /// ABI-hash regression guard.
 ///
 /// The hash is computed from the sorted, newline-joined list of all
@@ -3499,6 +3502,8 @@ mod test_subscription_transfer;
 ///
 /// **To update intentionally:** change only the `EXPECTED` constant below
 /// and document the ABI change in the PR description.
+#[cfg(test)]
+mod test_merchant_whitelist;
 #[cfg(test)]
 mod test_merchant_whitelist;
 
