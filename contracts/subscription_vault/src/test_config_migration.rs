@@ -353,3 +353,79 @@ fn test_migrate_from_version_zero_proceeds() {
         assert!(!env.storage().instance().has(&DataKey::SchemaVersion));
     });
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  migrate — adversarial / boundary coverage
+// ════════════════════════════════════════════════════════════════════
+//
+// The public `migrate` entry point has three boundaries the existing suite did
+// not pin: the no-op when the stored version already equals STORAGE_VERSION,
+// rejection of a caller who is authenticated but is not the stored admin, and
+// rejection before initialization (no Admin key to authenticate against).
+
+#[test]
+fn test_migrate_noop_at_current_version_emits_no_event() {
+    let te = TestEnv::default();
+
+    // Fresh init writes STORAGE_VERSION, so migrate must take the early-return
+    // branch: Ok(()) with no schema_migrated event and no version change.
+    let events_before = te.env.events().all().len();
+    te.client.migrate(&te.admin);
+    let events_after = te.env.events().all().len();
+    assert_eq!(events_before, events_after);
+
+    te.env.as_contract(&te.client.address, || {
+        assert_eq!(
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, u32>(&DataKey::SchemaVersion),
+            Some(crate::STORAGE_VERSION)
+        );
+    });
+}
+
+#[test]
+fn test_migrate_rejects_non_admin_caller_and_leaves_state_unchanged() {
+    let te = TestEnv::default();
+    let outsider = Address::generate(&te.env);
+
+    // Authenticated but not the stored admin -> Forbidden, with no writes.
+    let err = te.client.try_migrate(&outsider);
+    assert_eq!(err, Err(Ok(Error::Forbidden)));
+
+    te.env.as_contract(&te.client.address, || {
+        assert_eq!(
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, u32>(&DataKey::SchemaVersion),
+            Some(crate::STORAGE_VERSION)
+        );
+        assert_eq!(
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, Address>(&DataKey::Admin),
+            Some(te.admin.clone())
+        );
+    });
+}
+
+#[test]
+fn test_migrate_rejects_uninitialized_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::SubscriptionVault, ());
+    let client = crate::SubscriptionVaultClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    // No Admin key stored yet, so `require_admin` fails with NotInitialized.
+    let err = client.try_migrate(&admin);
+    assert_eq!(err, Err(Ok(Error::NotInitialized)));
+
+    env.as_contract(&contract_id, || {
+        assert!(!env.storage().persistent().has(&DataKey::SchemaVersion));
+        assert!(!env.storage().instance().has(&DataKey::SchemaVersion));
+    });
+}
