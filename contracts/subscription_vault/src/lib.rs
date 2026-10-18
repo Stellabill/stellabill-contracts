@@ -3520,6 +3520,8 @@ mod test_treasury_split;
 mod test_admin_treasury_change;
 #[cfg(test)]
 mod test_operator;
+#[cfg(test)]
+mod test_remove_accepted_token;
 
 #[cfg(test)]
 mod revoke_merchant_adversarial_tests {

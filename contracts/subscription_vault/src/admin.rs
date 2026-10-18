@@ -361,6 +361,126 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
+mod remove_accepted_token_tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    fn setup(env: &Env) -> (Address, Address, Address) {
+        let admin = Address::generate(env);
+        let default_token = Address::generate(env);
+        let other_token = Address::generate(env);
+        do_init(env, default_token.clone(), 7, admin.clone(), 1, 0).unwrap();
+        (admin, default_token, other_token)
+    }
+
+    #[test]
+    fn removes_non_default_token_and_updates_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _default_token, other_token) = setup(&env);
+
+        add_accepted_token(&env, admin.clone(), other_token.clone(), 6).unwrap();
+        assert!(is_token_accepted(&env, &other_token));
+
+        remove_accepted_token(&env, admin.clone(), other_token.clone()).unwrap();
+
+        assert!(!is_token_accepted(&env, &other_token));
+        assert_eq!(get_token_decimals(&env, &other_token), Err(Error::NotFound));
+        let listed = list_accepted_tokens(&env);
+        for entry in listed.iter() {
+            assert_ne!(entry.token, other_token);
+        }
+    }
+
+    #[test]
+    fn rejects_default_token_and_preserves_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, default_token, _other_token) = setup(&env);
+
+        let before = list_accepted_tokens(&env);
+        let result = remove_accepted_token(&env, admin, default_token.clone());
+
+        assert_eq!(result, Err(Error::InvalidInput));
+        assert!(is_token_accepted(&env, &default_token));
+        assert_eq!(get_token_decimals(&env, &default_token), Ok(7));
+        assert_eq!(list_accepted_tokens(&env).len(), before.len());
+    }
+
+    #[test]
+    fn rejects_unauthorized_caller_and_preserves_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _default_token, other_token) = setup(&env);
+        add_accepted_token(&env, admin, other_token.clone(), 6).unwrap();
+
+        let attacker = Address::generate(&env);
+        let result = remove_accepted_token(&env, attacker, other_token.clone());
+
+        assert_eq!(result, Err(Error::Forbidden));
+        assert!(is_token_accepted(&env, &other_token));
+        assert_eq!(get_token_decimals(&env, &other_token), Ok(6));
+    }
+
+    #[test]
+    fn rejects_when_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = remove_accepted_token(&env, admin, token.clone());
+
+        assert_eq!(result, Err(Error::NotInitialized));
+        assert!(!is_token_accepted(&env, &token));
+    }
+
+    #[test]
+    fn enforces_cooldown_and_preserves_state_on_rejection() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let (admin, _default_token, other_token) = setup(&env);
+
+        add_accepted_token(&env, admin.clone(), other_token.clone(), 6).unwrap();
+        assert!(is_token_accepted(&env, &other_token));
+
+        // Second mutation within the cooldown window must be rejected.
+        let result = remove_accepted_token(&env, admin.clone(), other_token.clone());
+        assert_eq!(result, Err(Error::CooldownActive));
+        assert!(is_token_accepted(&env, &other_token));
+        assert_eq!(get_token_decimals(&env, &other_token), Ok(6));
+
+        // After the cooldown elapses the removal succeeds.
+        env.ledger()
+            .set_timestamp(1_000_000 + CONFIG_COOLDOWN_SECS + 1);
+        remove_accepted_token(&env, admin, other_token.clone()).unwrap();
+        assert!(!is_token_accepted(&env, &other_token));
+    }
+
+    #[test]
+    fn removing_unknown_token_is_noop_after_cooldown() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let (admin, _default_token, other_token) = setup(&env);
+
+        // First mutation consumes the cooldown slot.
+        add_accepted_token(&env, admin.clone(), other_token.clone(), 6).unwrap();
+        env.ledger()
+            .set_timestamp(1_000_000 + CONFIG_COOLDOWN_SECS + 1);
+
+        let unknown = Address::generate(&env);
+        let before = list_accepted_tokens(&env).len();
+        remove_accepted_token(&env, admin, unknown.clone()).unwrap();
+
+        assert!(!is_token_accepted(&env, &unknown));
+        assert_eq!(list_accepted_tokens(&env).len(), before);
+        assert!(is_token_accepted(&env, &other_token));
+    }
+}
+
 pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     let storage = env.storage().instance();
     let tokens: Vec<Address> = storage.get(&accepted_tokens_key()).unwrap_or(Vec::new(env));
