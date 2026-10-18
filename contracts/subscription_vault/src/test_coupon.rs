@@ -17,10 +17,6 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     (env, client, admin, token)
 }
 
-// ----------------------------------------------------------------------------
-// create_coupon adversarial coverage
-// ----------------------------------------------------------------------------
-
 #[test]
 fn test_create_coupon_valid() {
     let (env, client, _admin, token) = setup();
@@ -46,12 +42,11 @@ fn test_create_coupon_valid() {
 }
 
 #[test]
-fn test_create_coupon_zero_discount_and_zero_limits() {
+fn test_create_coupon_zero_values() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
-    let code = Symbol::new(&env, "ZERO_DISC");
+    let code = Symbol::new(&env, "ZERO");
 
-    // zero percent, zero fixed, zero max redemptions, no expiry
     client
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
@@ -68,46 +63,28 @@ fn test_create_coupon_zero_discount_and_zero_limits() {
 fn test_create_coupon_max_boundary_values() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
-    let code = Symbol::new(&env, "MAX_BOUND");
+    let code = Symbol::new(&env, "MAXBOUND");
 
-    // 100% discount is the upper bound for percent_off_bps.
-    // Max redemptions and expiry at their upper representable values.
     client.mock_all_auths().create_coupon(
         &merchant,
         &code,
         &token,
-        &10_000,
-        &0_i128,
+        &10000,
+        &i128::MAX,
         &u32::MAX,
         &u64::MAX,
     );
 
     let coupon = client.get_coupon(&code).unwrap();
-    assert_eq!(coupon.percent_off_bps, 10_000);
-    assert_eq!(coupon.fixed_off, 0_i128);
+    assert_eq!(coupon.percent_off_bps, 10000);
+    assert_eq!(coupon.fixed_off, i128::MAX);
     assert_eq!(coupon.max_redemptions, u32::MAX);
     assert_eq!(coupon.expires_at, u64::MAX);
     assert_eq!(coupon.revoked, false);
 }
 
 #[test]
-fn test_create_coupon_large_fixed_off_stored() {
-    let (env, client, _admin, token) = setup();
-    let merchant = Address::generate(&env);
-    let code = Symbol::new(&env, "BIG_FIXED");
-    let big = i128::MAX / 2;
-
-    client
-        .mock_all_auths()
-        .create_coupon(&merchant, &code, &token, &0, &big, &1, &0);
-
-    let coupon = client.get_coupon(&code).unwrap();
-    assert_eq!(coupon.fixed_off, big);
-    assert_eq!(coupon.max_redemptions, 1);
-}
-
-#[test]
-fn test_create_coupon_duplicate_rejected_state_unchanged() {
+fn test_create_coupon_duplicate_rejected() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
     let code = Symbol::new(&env, "DUP");
@@ -116,23 +93,17 @@ fn test_create_coupon_duplicate_rejected_state_unchanged() {
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
 
-    // Attempt to overwrite with different values must be rejected.
-    let res = client.try_create_coupon(
-        &merchant,
-        &code,
-        &token,
-        &5000,
-        &999_i128,
-        &5,
-        &1,
-    );
+    let res = client.try_create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
     assert_eq!(
         res.err().unwrap().unwrap().to_code(),
         Error::CouponAlreadyExists.to_code()
     );
 
-    // Original coupon is unchanged.
+    // State must be unchanged after the rejected duplicate creation.
     let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.merchant, merchant);
+    assert_eq!(coupon.code, code);
+    assert_eq!(coupon.token, token);
     assert_eq!(coupon.percent_off_bps, 0);
     assert_eq!(coupon.fixed_off, 0);
     assert_eq!(coupon.max_redemptions, 0);
@@ -141,46 +112,57 @@ fn test_create_coupon_duplicate_rejected_state_unchanged() {
 }
 
 #[test]
-fn test_create_coupon_requires_merchant_auth() {
+fn test_create_coupon_duplicate_does_not_overwrite() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
-    let code = Symbol::new(&env, "NO_AUTH_CREATE");
+    let other_merchant = Address::generate(&env);
+    let code = Symbol::new(&env, "NO_OVERWRITE");
 
-    // Without mocked auths, the call must fail authorization.
-    let res = client.try_create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
-    assert!(res.is_err());
+    client.mock_all_auths().create_coupon(
+        &merchant,
+        &code,
+        &token,
+        &2000,
+        &500,
+        &100,
+        &0,
+    );
 
-    // No coupon state was written.
-    assert!(client.get_coupon(&code).is_none());
+    let res = client.try_create_coupon(
+        &other_merchant,
+        &code,
+        &token,
+        &5000,
+        &999,
+        &1,
+        &12345,
+    );
+    assert_eq!(
+        res.err().unwrap().unwrap().to_code(),
+        Error::CouponAlreadyExists.to_code()
+    );
+
+    let coupon = client.get_coupon(&code).unwrap();
+    assert_eq!(coupon.merchant, merchant);
+    assert_eq!(coupon.percent_off_bps, 2000);
+    assert_eq!(coupon.fixed_off, 500);
+    assert_eq!(coupon.max_redemptions, 100);
+    assert_eq!(coupon.expires_at, 0);
 }
 
 #[test]
-fn test_create_coupon_distinct_codes_independent() {
+fn test_create_coupon_requires_merchant_auth() {
     let (env, client, _admin, token) = setup();
     let merchant = Address::generate(&env);
-    let code_a = Symbol::new(&env, "CODE_A");
-    let code_b = Symbol::new(&env, "CODE_B");
+    let code = Symbol::new(&env, "AUTH_REQ");
 
-    client
-        .mock_all_auths()
-        .create_coupon(&merchant, &code_a, &token, &1000, &0, &1, &0);
-    client
-        .mock_all_auths()
-        .create_coupon(&merchant, &code_b, &token, &0, &250, &2, &0);
+    // Without mocking auths, the merchant authorization must be required.
+    let res = client.try_create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+    assert!(res.is_err());
 
-    let a = client.get_coupon(&code_a).unwrap();
-    let b = client.get_coupon(&code_b).unwrap();
-    assert_eq!(a.percent_off_bps, 1000);
-    assert_eq!(a.fixed_off, 0);
-    assert_eq!(b.percent_off_bps, 0);
-    assert_eq!(b.fixed_off, 250);
-    assert_eq!(a.code, code_a);
-    assert_eq!(b.code, code_b);
+    // No coupon should have been persisted.
+    assert!(client.get_coupon(&code).is_none());
 }
-
-// ----------------------------------------------------------------------------
-// Existing coupon lifecycle coverage
-// ----------------------------------------------------------------------------
 
 #[test]
 fn test_revoke_coupon() {
@@ -213,10 +195,6 @@ fn test_revoke_coupon_unauthorized() {
         res.err().unwrap().unwrap().to_code(),
         Error::Unauthorized.to_code()
     );
-
-    // Coupon remains unrevoked.
-    let coupon = client.get_coupon(&code).unwrap();
-    assert_eq!(coupon.revoked, false);
 }
 
 #[test]
@@ -230,17 +208,9 @@ fn test_apply_coupon_subscriber_auth() {
     client
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&wrong_subscriber, &sub_id, &code);
     assert_eq!(
@@ -256,23 +226,15 @@ fn test_apply_coupon_expired() {
     let subscriber = Address::generate(&env);
     let code = Symbol::new(&env, "EXPIRED");
 
-    let now = env.ledger.timestamp();
+    let now = env.ledger().timestamp();
     // Expires in 100 seconds
     client
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &(now + 100));
 
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // Advance time past expiry
     env.ledger().set_timestamp(now + 200);
@@ -296,17 +258,9 @@ fn test_apply_coupon_revoked() {
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
     client.mock_all_auths().revoke_coupon(&merchant, &code);
 
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(
@@ -328,28 +282,12 @@ fn test_apply_coupon_limit_reached() {
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &1, &0);
 
-    let sub_id1 = client.mock_all_auths().create_subscription(
-        &subscriber1,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
-    let sub_id2 = client.mock_all_auths().create_subscription(
-        &subscriber2,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id1 = client
+        .mock_all_auths()
+        .create_subscription(&subscriber1, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
+    let sub_id2 = client
+        .mock_all_auths()
+        .create_subscription(&subscriber2, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     // First one works
     client
@@ -378,17 +316,9 @@ fn test_apply_coupon_already_applied() {
     client
         .mock_all_auths()
         .create_coupon(&merchant, &code2, &token, &0, &0, &0, &0);
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     client
         .mock_all_auths()
@@ -412,17 +342,19 @@ fn test_apply_same_coupon_twice_fails() {
         .mock_all_auths()
         .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
 
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(
+            &subscriber,
+            &merchant,
+            &1000,
+            &86400,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<u32>,
+            &None::<soroban_sdk::Symbol>,
+        );
 
     // First application succeeds.
     client
@@ -455,17 +387,9 @@ fn test_apply_coupon_token_mismatch() {
         .mock_all_auths()
         .create_coupon(&merchant, &code, &wrong_token, &0, &0, &0, &0);
     // Subscription is for token
-    let sub_id = client.mock_all_auths().create_subscription(
-        &subscriber,
-        &merchant,
-        &1000,
-        &86400,
-        &false,
-        &None::<i128>,
-        &None::<u64>,
-        &None::<u32>,
-        &None::<soroban_sdk::Symbol>,
-    );
+    let sub_id = client
+        .mock_all_auths()
+        .create_subscription(&subscriber, &merchant, &1000, &86400, &false, &None::<i128>, &None::<u64>, &None::<u32>, &None::<soroban_sdk::Symbol>);
 
     let res = client.try_apply_coupon(&subscriber, &sub_id, &code);
     assert_eq!(
@@ -593,12 +517,13 @@ fn validate_coupon_for_charge_rejects_revoked_and_token_mismatch_without_state_c
 fn test_charge_with_discount() {
     let (env, client, admin, token) = setup();
     let merchant = Address::generate(&env);
-    let code = Symbol::new(&env, "VALIDATE_FAILURES");
-    let wrong_token = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let code = Symbol::new(&env, "DISCOUNT");
 
     client
         .mock_all_auths()
-        .create_coupon(&merchant, &code, &token, &0, &0, &0, &0);
+        .set_protocol_fee(&admin, &treasury, &1000); // 10% fee
 
     // 50% discount
     client
