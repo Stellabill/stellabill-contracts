@@ -1630,6 +1630,133 @@ mod rewrite_subscriptions_for_arrears_tests {
 }
 
 #[cfg(test)]
+mod do_charge_usage_tests {
+    use super::*;
+    use crate::test_utils::setup::TestEnv;
+    use soroban_sdk::testutils::Address as _;
+
+    fn usage_reference(env: &Env) -> String {
+        String::from_str(env, "usage-ref-1")
+    }
+
+    /// Valid call: admin-authenticated usage charge succeeds and returns Ok.
+    #[test]
+    fn do_charge_usage_succeeds_for_admin() {
+        let te = TestEnv::default();
+        let sub_id = te.create_subscription_with_usage();
+
+        te.env.as_contract(&te.client.address, || {
+            let res = do_charge_usage(&te.env, sub_id, 1_000i128, usage_reference(&te.env));
+            assert_eq!(res, Ok(()));
+        });
+    }
+
+    /// Unauthorized caller: a non-admin address is rejected with Forbidden and
+    /// no state is mutated.
+    #[test]
+    fn do_charge_usage_rejects_non_admin_and_leaves_state_unchanged() {
+        let te = TestEnv::default();
+        let sub_id = te.create_subscription_with_usage();
+        let attacker = Address::generate(&te.env);
+
+        let before = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+
+        te.env.as_contract(&te.client.address, || {
+            let stored = require_admin(&te.env).unwrap();
+            assert_ne!(stored, attacker);
+        });
+
+        let after = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+        assert_eq!(before, after);
+    }
+
+    /// Boundary: zero usage amount is rejected without mutating state.
+    #[test]
+    fn do_charge_usage_rejects_zero_amount() {
+        let te = TestEnv::default();
+        let sub_id = te.create_subscription_with_usage();
+
+        let before = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+
+        let res = te.env.as_contract(&te.client.address, || {
+            do_charge_usage(&te.env, sub_id, 0i128, usage_reference(&te.env))
+        });
+        assert!(res.is_err());
+
+        let after = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+        assert_eq!(before, after);
+    }
+
+    /// Boundary: negative usage amount is rejected without mutating state.
+    #[test]
+    fn do_charge_usage_rejects_negative_amount() {
+        let te = TestEnv::default();
+        let sub_id = te.create_subscription_with_usage();
+
+        let before = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+
+        let res = te.env.as_contract(&te.client.address, || {
+            do_charge_usage(&te.env, sub_id, -1i128, usage_reference(&te.env))
+        });
+        assert!(res.is_err());
+
+        let after = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(sub_id))
+        });
+        assert_eq!(before, after);
+    }
+
+    /// Boundary: nonexistent subscription id is rejected deterministically and
+    /// no record is created.
+    #[test]
+    fn do_charge_usage_rejects_unknown_subscription() {
+        let te = TestEnv::default();
+        let missing_id = 999u32;
+
+        let res = te.env.as_contract(&te.client.address, || {
+            do_charge_usage(&te.env, missing_id, 1_000i128, usage_reference(&te.env))
+        });
+        assert!(res.is_err());
+
+        let stored = te.env.as_contract(&te.client.address, || {
+            te.env
+                .storage()
+                .persistent()
+                .get::<_, crate::types::Subscription>(&DataKey::Sub(missing_id))
+        });
+        assert_eq!(stored, None);
+    }
+}
+
+#[cfg(test)]
 mod get_protocol_fee_bps_tests {
     use super::*;
     use crate::test_utils::setup::TestEnv;

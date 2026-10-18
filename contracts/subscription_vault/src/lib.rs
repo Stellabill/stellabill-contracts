@@ -175,6 +175,149 @@ pub mod admin_api;
 /// Billing statements: append-only ledger of charges per subscription.
 pub mod statements;
 
+#[cfg(test)]
+mod admin_charge_usage_tests {
+    use crate::admin::do_charge_usage;
+    use crate::types::{DataKey, Error, Subscription, SubscriptionStatus};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String};
+
+    fn setup(env: &Env) -> (Address, Address, u32) {
+        let admin = Address::generate(env);
+        let subscriber = Address::generate(env);
+        let token = Address::generate(env);
+        let merchant = Address::generate(env);
+        let subscription_id: u32 = 1;
+
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Token, &token);
+
+        let sub = Subscription {
+            subscriber: subscriber.clone(),
+            merchant: merchant.clone(),
+            token: token.clone(),
+            amount: 1000,
+            interval_secs: 60,
+            last_charged: 0,
+            status: SubscriptionStatus::Active,
+            balance: 10_000,
+            usage_enabled: true,
+            usage_amount: 0,
+            usage_limit: 5_000,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Subscription(subscription_id), &sub);
+
+        (admin, subscriber, subscription_id)
+    }
+
+    #[test]
+    fn charge_usage_valid_call_updates_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-1");
+
+        let result = do_charge_usage(&env, subscription_id, 500, reference.clone());
+        assert!(result.is_ok());
+
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(subscription_id))
+            .unwrap();
+        assert_eq!(sub.usage_amount, 500);
+        assert_eq!(sub.balance, 9_500);
+    }
+
+    #[test]
+    fn charge_usage_zero_amount_is_rejected_and_state_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-zero");
+
+        let result = do_charge_usage(&env, subscription_id, 0, reference);
+        assert_eq!(result, Err(Error::InvalidInput));
+
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(subscription_id))
+            .unwrap();
+        assert_eq!(sub.usage_amount, 0);
+        assert_eq!(sub.balance, 10_000);
+    }
+
+    #[test]
+    fn charge_usage_negative_amount_is_rejected_and_state_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-neg");
+
+        let result = do_charge_usage(&env, subscription_id, -100, reference);
+        assert_eq!(result, Err(Error::InvalidInput));
+
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(subscription_id))
+            .unwrap();
+        assert_eq!(sub.usage_amount, 0);
+        assert_eq!(sub.balance, 10_000);
+    }
+
+    #[test]
+    fn charge_usage_unknown_subscription_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, _subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-missing");
+
+        let result = do_charge_usage(&env, 999, 100, reference);
+        assert_eq!(result, Err(Error::NotFound));
+    }
+
+    #[test]
+    fn charge_usage_exceeding_limit_is_rejected_and_state_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-limit");
+
+        let result = do_charge_usage(&env, subscription_id, 6_000, reference);
+        assert_eq!(result, Err(Error::UsageLimitExceeded));
+
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(subscription_id))
+            .unwrap();
+        assert_eq!(sub.usage_amount, 0);
+        assert_eq!(sub.balance, 10_000);
+    }
+
+    #[test]
+    fn charge_usage_insufficient_balance_is_rejected_and_state_unchanged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _subscriber, subscription_id) = setup(&env);
+        let reference = String::from_str(&env, "ref-balance");
+
+        let result = do_charge_usage(&env, subscription_id, 20_000, reference);
+        assert_eq!(result, Err(Error::InsufficientBalance));
+
+        let sub: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Subscription(subscription_id))
+            .unwrap();
+        assert_eq!(sub.usage_amount, 0);
+        assert_eq!(sub.balance, 10_000);
+    }
+}
+
 
 /// Accounting: tracks total tokens accounted for across all subscriptions.
 pub mod accounting {

@@ -1,3 +1,4 @@
+
 #![cfg(test)]
 
 //! Adversarial coverage for the metered usage path,
@@ -709,3 +710,4 @@ fn the_operator_entry_point_mirrors_the_same_guards_as_the_admin_one() {
     );
     assert_eq!(balance(&f), DEPOSIT - 1_000_000);
 }
+
