@@ -246,6 +246,7 @@ fn test_split_payees_paused_or_blocklisted() {
         &None,
         &None,
         &Some(true), // Pause
+        &None,
     );
 
     let res_paused = client.try_charge_subscription(&sub_id, &None);

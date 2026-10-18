@@ -4,7 +4,8 @@ extern crate alloc;
 
 use soroban_sdk::{
     testutils::{Address as _, Events},
-    Address, Env, FromVal, TryFromVal,
+    token::StellarAssetClient,
+    Address, Env, FromVal,
 };
 use subscription_vault::{
     AdminRotatedEvent, SubscriptionCreatedEvent, SubscriptionVault, SubscriptionVaultClient,
