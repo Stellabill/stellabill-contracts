@@ -103,6 +103,7 @@ fn subscription_for(
         sub_account_label: None,
         auto_renew: true,
         auto_renew_disabled_at: None,
+        arrears: 0,
     }
 }
 
