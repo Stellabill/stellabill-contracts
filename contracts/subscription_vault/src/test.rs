@@ -6277,6 +6277,39 @@ fn test_get_admin_returns_init_admin() {
 }
 
 #[test]
+fn test_get_admin_before_init_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_get_admin(), Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn test_get_admin_after_rejected_rotation_stays_stable() {
+    let test_env = TestEnv::default();
+    let stranger = Address::generate(&test_env.env);
+    let new_admin = Address::generate(&test_env.env);
+
+    let unauthorized = test_env.client.try_rotate_admin(&stranger, &new_admin, &0u64);
+    assert_eq!(unauthorized, Err(Ok(Error::Unauthorized)));
+    assert_eq!(test_env.client.get_admin(), test_env.admin);
+
+    let self_rotation = test_env
+        .client
+        .try_rotate_admin(&test_env.admin, &test_env.admin, &0u64);
+    assert_eq!(self_rotation, Err(Ok(Error::SelfRotation)));
+    assert_eq!(test_env.client.get_admin(), test_env.admin);
+
+    let invalid_new_admin = test_env
+        .client
+        .try_rotate_admin(&test_env.admin, &test_env.client.address, &0u64);
+    assert_eq!(invalid_new_admin, Err(Ok(Error::InvalidNewAdmin)));
+    assert_eq!(test_env.client.get_admin(), test_env.admin);
+}
+
+#[test]
 fn test_rotate_admin_successful() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);

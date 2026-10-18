@@ -101,3 +101,69 @@ pub fn push_key(env: &Env, subscription_id: u32, hashed: &BytesN<32>) {
     buf.cursor = buf.cursor.wrapping_add(1) % IDEM_HISTORY;
     save_buffer(env, subscription_id, &buf);
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{BytesN, Env};
+
+    fn make_hash(env: &Env, val: u8) -> BytesN<32> {
+        let mut arr = [0u8; 32];
+        arr[31] = val;
+        BytesN::from_array(env, &arr)
+    }
+
+    #[test]
+    fn test_check_key_empty_buffer() {
+        let env = Env::default();
+        let sub_id = 1;
+        let hashed = make_hash(&env, 1);
+
+        assert!(!check_key(&env, sub_id, &hashed));
+    }
+
+    #[test]
+    fn test_check_key_existing_key() {
+        let env = Env::default();
+        let sub_id = 2;
+        let hashed = make_hash(&env, 2);
+
+        push_key(&env, sub_id, &hashed);
+
+        assert!(check_key(&env, sub_id, &hashed));
+    }
+
+    #[test]
+    fn test_check_key_missing_key_in_populated_buffer() {
+        let env = Env::default();
+        let sub_id = 3;
+        let hashed1 = make_hash(&env, 1);
+        let hashed2 = make_hash(&env, 2);
+
+        push_key(&env, sub_id, &hashed1);
+
+        assert!(!check_key(&env, sub_id, &hashed2));
+    }
+
+    #[test]
+    fn test_check_key_state_unchanged() {
+        let env = Env::default();
+        let sub_id = 4;
+        let hashed1 = make_hash(&env, 1);
+        let hashed2 = make_hash(&env, 2);
+
+        push_key(&env, sub_id, &hashed1);
+        
+        let buf_before = load_buffer(&env, sub_id);
+
+        let _ = check_key(&env, sub_id, &hashed2);
+        
+        let buf_after = load_buffer(&env, sub_id);
+        
+        assert_eq!(buf_before.cursor, buf_after.cursor);
+        assert_eq!(buf_before.entries.len(), buf_after.entries.len());
+        for i in 0..buf_before.entries.len() {
+            assert_eq!(buf_before.entries.get(i), buf_after.entries.get(i));
+        }
+    }
+}

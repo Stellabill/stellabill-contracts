@@ -23,8 +23,8 @@
 
 use crate::admin::CONFIG_COOLDOWN_SECS;
 use crate::test_utils::setup::TestEnv;
-use crate::types:{DataKey, Error, PendingTreasuryChange};
-use soroban_sdk:{testutils::Address as _, testutils::Events as _, Address, Env};
+use crate::types::{DataKey, Error, PendingTreasuryChange};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, Env};
 
 const TREASURY_CHANGE_DELAY_SECS: u64 = 48 * 24 * 60 * 60;
 
@@ -74,7 +74,7 @@ fn execute_applies_pending_change_and_clears_slot() {
 
 ///-----------------------------------------------------------------------------
 /// Execute: authorization
-///----------------------------------------------------------------------------
+///-----------------------------------------------------------------------------
 
 #[test]
 fn non_admin_cannot_execute_and_pending_survives() {
@@ -122,11 +122,11 @@ fn authorization_is_checked_before_pending_state_on_execute() {
     // Forbidden (auth runs first) rather than leaking the NotFound state.
     assert_eq!(
         t.client.try_execute_treasury_change(&attacker),
-        Err(9k(Error::Forbidden))
+        Err(Ok(Error::Forbidden))
     );
     assert!(read_pending(&t.env, &t.client.address).is_none());
-    assert_eq(t.client.get_treasury(), None);
-    assert_eq(t.client.get_protocol_fee_bps(), 0u32);
+    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 }
 
 ///----------------------------------------------------------------------------
@@ -137,21 +137,21 @@ fn authorization_is_checked_before_pending_state_on_execute() {
 fn execute_without_pending_is_not_found_and_idempotent() {
     let t = TestEnv::default();
 
-    assert_eq(t.client.get_treasury(), None);
-    assert_eq(t.client.get_protocol_fee_bps(), 0u32);
+    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 
     assert_eq!(
         t.client.try_execute_treasury_change(&t.admin),
-        Err(9k(Error::NotFound))
+        Err(Ok(Error::NotFound))
     );
     // Repeating the rejected call must not mutate any state.
     assert_eq!(
         t.client.try_execute_treasury_change(&t.admin),
-        Err(9k(Error::NotFound))
+        Err(Ok(Error::NotFound))
     );
     assert!(read_pending(&t.env, &t.client.address).is_none());
-    assert_eq(t.client.get_treasury(), None);
-    assert_eq(t.client.get_protocol_fee_bps(), 0u32);
+    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 }
 
 ///----------------------------------------------------------------------------
@@ -179,16 +179,16 @@ fn execute_before_timelock_is_rejected_and_pending_survives() {
     // Rejected execute leaves the pending change intact and the config untouched.
     let pending_after =
         read_pending(&t.env, &t.client.address).expect("pending survives rejection");
-    assert_eq(pending_after, pending_before);
-    assert_eq(t.client.get_treasury(), treasury_before);
-    assert_eq(t.client.get_protocol_fee_bps(), fee_before);
+    assert_eq!(pending_after, pending_before);
+    assert_eq!(t.client.get_treasury(), treasury_before);
+    assert_eq!(t.client.get_protocol_fee_bps(), fee_before);
 
     // Once the timelock elapses the same change becomes executable.
     t.jump(2);
     t.client.execute_treasury_change(&t.admin);
     assert!(read_pending(&t.env, &t.client.address).is_none());
-    assert_eq(t.client.get_protocol_fee_bps(), 500u32);
-    assert_eq(t.client.get_treasury(), Some(new_treasury));
+    assert_eq!(t.client.get_protocol_fee_bps(), 500u32);
+    assert_eq!(t.client.get_treasury(), Some(new_treasury));
 }
 
 ///----------------------------------------------------------------------------
@@ -210,10 +210,10 @@ fn cancelled_change_cannot_be_executed() {
     t.jump(TREASURY_CHANGE_DELAY_SECS + 1);
     assert_eq!(
         t.client.try_execute_treasury_change(&t.admin),
-        Err(9k(Error::NotFound))
+        Err(Ok(Error::NotFound))
     );
-    assert_eq(t.client.get_treasury(), None);
-    assert_eq(t.client.get_protocol_fee_bps(), 0u32);
+    assert_eq!(t.client.get_treasury(), None);
+    assert_eq!(t.client.get_protocol_fee_bps(), 0u32);
 }
 
 ///----------------------------------------------------------------------------
@@ -236,13 +236,13 @@ fn execute_frees_pending_slot_for_a_new_change() {
     t.client
         .queue_treasury_change(&t.admin, &second, &200u32);
     let pending = read_pending(&t.env, &t.client.address).expect("second change queued");
-    assert_eq(pending.new_fee_bps, 200u32);
-    assert_eq(pending.new_treasury, second);
+    assert_eq!(pending.new_fee_bps, 200u32);
+    assert_eq!(pending.new_treasury, second);
 
     // The fresh change is executable once its own timelock elapses.
     t.jump(TREASURY_CHANGE_DELAY_SECS + 1);
     t.client.execute_treasury_change(&t.admin);
     assert!(read_pending(&t.env, &t.client.address).is_none());
-    assert_eq(t.client.get_protocol_fee_bps(), 200u32);
-    assert_eq(t.client.get_treasury(), Some(second));
+    assert_eq!(t.client.get_protocol_fee_bps(), 200u32);
+    assert_eq!(t.client.get_treasury(), Some(second));
 }
