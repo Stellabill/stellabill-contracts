@@ -3522,6 +3522,9 @@ mod test_admin_treasury_change;
 mod test_operator;
 
 #[cfg(test)]
+mod test_adversarial_issue_1113_1095;
+
+#[cfg(test)]
 mod revoke_merchant_adversarial_tests {
     use super::{Error, SubscriptionVault, SubscriptionVaultClient};
     use soroban_sdk::testutils::Address as _;
