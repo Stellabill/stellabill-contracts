@@ -465,6 +465,31 @@ mod tests {
     }
 
     #[test]
+    fn test_increment_redemptions_defaults_increments_isolates_and_saturates() {
+        let f = setup_fixture();
+        let code = Symbol::new(&f.env, "INCREMENT");
+        let other_code = Symbol::new(&f.env, "OTHER");
+        let key = DataKey::CouponRedemptions(code.clone());
+
+        f.env.as_contract(&f.contract_id, || {
+            assert_eq!(read_redemptions(&f.env, &code), 0);
+            assert!(!f.env.storage().persistent().has(&key));
+
+            increment_redemptions(&f.env, &code);
+            assert!(f.env.storage().persistent().has(&key));
+            assert_eq!(read_redemptions(&f.env, &code), 1);
+
+            increment_redemptions(&f.env, &code);
+            assert_eq!(read_redemptions(&f.env, &code), 2);
+            assert_eq!(read_redemptions(&f.env, &other_code), 0);
+
+            write_redemptions(&f.env, &code, u32::MAX);
+            increment_redemptions(&f.env, &code);
+            assert_eq!(read_redemptions(&f.env, &code), u32::MAX);
+        });
+    }
+
+    #[test]
     fn test_apply_coupon_success_updates_state_and_emits_event() {
         let f = setup_fixture();
         let code = Symbol::new(&f.env, "PROMO10");
