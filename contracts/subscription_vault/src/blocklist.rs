@@ -178,18 +178,20 @@ mod test {
 
         env.as_contract(&contract_id, || {
             let key = DataKey::Blocklist(subscriber.clone());
-            let entry = crate::types::BlocklistEntry {
+            // `BlocklistEntry` is defined in this module, not in `types`, and
+            // the blocklist lives in *persistent* storage (see `is_blocklisted`).
+            let entry = BlocklistEntry {
                 subscriber: subscriber.clone(),
                 added_by: Address::generate(&env),
                 added_at: 123456789,
                 reason: None,
             };
-            env.storage().instance().set(&key, &entry);
+            env.storage().persistent().set(&key, &entry);
 
             let result = require_not_blocklisted(&env, &subscriber);
             assert_eq!(result, Err(Error::SubscriberBlocklisted));
 
-            assert!(env.storage().instance().has(&key));
+            assert!(env.storage().persistent().has(&key));
         });
     }
 }

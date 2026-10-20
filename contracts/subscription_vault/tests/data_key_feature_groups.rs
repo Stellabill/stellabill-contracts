@@ -54,13 +54,13 @@ enum SubscriptionKey {
     Blocklist = 34,
     Metadata = 39,
     MetadataKeys = 40,
-    SubscriberCreateCap = 60,
-    SubscriberCreateWindow = 61,
-    ChargeSalt = 64,
-    SubCoupon = 68,
-    SubscriberActiveCount = 70,
-    SubscriberActiveCapOverride = 71,
-    CancellationEscrow = 75,
+    SubscriberCreateCap = 61,
+    SubscriberCreateWindow = 62,
+    ChargeSalt = 65,
+    SubCoupon = 69,
+    SubscriberActiveCount = 71,
+    SubscriberActiveCapOverride = 72,
+    CancellationEscrow = 76,
 }
 
 impl SubscriptionKey {
@@ -129,10 +129,10 @@ enum MerchantKey {
     MerchantBalance = 33,
     MerchantMaxSubs = 45,
     PayoutSchedule = 53,
-    MerchantMultiSig = 69,
-    TagAllowlist = 72,
-    MerchantTags = 73,
-    MerchantFeeBps = 76,
+    MerchantMultiSig = 70,
+    TagAllowlist = 73,
+    MerchantTags = 74,
+    MerchantFeeBps = 77,
 }
 
 impl MerchantKey {
@@ -232,7 +232,7 @@ impl GovernanceKey {
 /// rather than an invisible renumbering.
 const GROUPED_DISCRIMINANT_SNAPSHOT: [u32; 40] = [
     0, 2, 5, 6, 7, 8, 9, 10, 16, 17, 18, 19, 20, 22, 23, 28, 30, 32, 33, 34, 39, 40, 41, 45, 46,
-    47, 48, 53, 54, 60, 61, 64, 68, 69, 70, 71, 72, 73, 75, 76,
+    47, 48, 53, 54, 61, 62, 65, 69, 70, 71, 72, 73, 74, 76, 77,
 ];
 
 fn all_grouped_discriminants() -> Vec<u32> {
@@ -327,8 +327,10 @@ fn merchant_group_keys_are_all_instance_tier() {
 #[test]
 fn per_subscription_record_keys_stay_off_the_instance_allowlist() {
     // These are persistent-tier by design; if one appears in the instance
-    // allowlist, a storage tier changed under us.
-    for discriminant in [6u32, 7, 8, 39, 40, 68, 75] {
+    // allowlist, a storage tier changed under us. (Renumbered to the canonical
+    // discriminants of Metadata(39), MetadataKeys(40), SubCoupon(69) and
+    // CancellationEscrow(76) after the later DataKey additions shifted arms.)
+    for discriminant in [6u32, 7, 8, 39, 40, 69, 76] {
         assert!(
             !is_known_instance_discriminant(discriminant),
             "discriminant {discriminant} unexpectedly became an instance key"

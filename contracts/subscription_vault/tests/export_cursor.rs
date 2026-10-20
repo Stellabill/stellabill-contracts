@@ -101,6 +101,9 @@ fn multi_page_export_covers_all_ids() {
     let merchant = Address::generate(&_env);
 
     let n = 15u32;
+    // The per-subscriber active cap (#578) defaults to 10; lift it so the
+    // export pagination — not the cap — is what's under test.
+    client.set_subscriber_active_cap(&admin, &subscriber, &Some(n));
     let created = create_subs(&client, &token_admin, &subscriber, &merchant, n);
     let mut all_exported: Vec<u32> = Vec::new();
 

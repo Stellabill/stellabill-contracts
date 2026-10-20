@@ -1,11 +1,7 @@
+#![allow(dead_code)]
 //! Admin and config: init, min_topup, batch_charge, single charge.
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
-
-#[cfg(test)]
-mod tests;
-
-#![allow(dead_code)]
 
 use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
@@ -963,6 +959,9 @@ pub fn get_auto_pause_threshold(env: &Env) -> u32 {
 
 #[cfg(test)]
 mod rotate_admin_adversarial_tests {
+    // `super::*` is intentionally not glob-imported here; pull the cooldown
+    // constant in explicitly so the boundary test stays self-contained.
+    use super::CONFIG_COOLDOWN_SECS;
     use crate::{types::DataKey, Error, SubscriptionVault, SubscriptionVaultClient};
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},

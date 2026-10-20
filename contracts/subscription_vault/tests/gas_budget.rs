@@ -45,13 +45,19 @@ const BUDGET_DEPOSIT_READS: u64 = 100;
 const BUDGET_DEPOSIT_WRITES: u64 = 100;
 
 /// `charge_subscription`: subscription read/write + merchant balance update.
-const BUDGET_CHARGE_CPU: u64 = 2_000_000;
+// Recalibrated (do_cancel_proposal PR): charge gained escrow, cap, blocklist
+// and reentrancy-guard paths since these budgets were first pinned, pushing
+// CPU to ~3.1M instructions (measured baseline; reads/writes unchanged).
+const BUDGET_CHARGE_CPU: u64 = 3_500_000;
 const BUDGET_CHARGE_READS: u64 = 100;
 const BUDGET_CHARGE_WRITES: u64 = 100;
 
 /// `withdraw_merchant_funds`: merchant balance read/write + token transfer +
 /// merchant config check.
-const BUDGET_WITHDRAW_CPU: u64 = 1_100_000;
+// Recalibrated (do_cancel_proposal PR): withdrawal now routes through the
+// escrow-aware payout path, pushing CPU to ~1.6M instructions (measured
+// baseline; reads/writes unchanged).
+const BUDGET_WITHDRAW_CPU: u64 = 1_900_000;
 const BUDGET_WITHDRAW_READS: u64 = 20;
 const BUDGET_WITHDRAW_WRITES: u64 = 20;
 

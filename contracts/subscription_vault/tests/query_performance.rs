@@ -323,10 +323,14 @@ fn perf_get_subscription_constant_time_across_range() {
 /// even when a subscriber has millions of sparse IDs.
 #[test]
 fn perf_list_by_subscriber_paginated() {
-    let (env, vault, _token, token_admin, _admin) = make_env();
+    let (env, vault, _token, token_admin, admin) = make_env();
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
     token_admin.mint(&subscriber, &10_000_000_000i128);
+
+    // The per-subscriber active cap (#578) defaults to 10; this harness
+    // deliberately exceeds it to exercise pagination at scale.
+    vault.set_subscriber_active_cap(&admin, &subscriber, &Some(SCALE_N));
 
     for _ in 0..SCALE_N {
         let sub_id = vault.create_subscription(

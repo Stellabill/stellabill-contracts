@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient as TokenAdminClient},
     Address, Env,
 };
@@ -203,7 +203,20 @@ fn test_cancel_refunds_prepaid_balance() {
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.prepaid_balance, 0);
 
-    // Subscriber got their refund
+    // The refund is not paid immediately: it sits in the time-locked
+    // cancellation escrow (#569) until the dispute window elapses.
+    assert_eq!(token_client.balance(&subscriber), subscriber_balance_before);
+    let escrow = client.get_cancellation_escrow(&sub_id);
+    assert_eq!(escrow.amount, deposit);
+    assert_eq!(escrow.released, false);
+
+    // After the escrow window the subscriber claims and receives the refund.
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + 7 * 24 * 60 * 60 + 1,
+    );
+    let claimed = client.claim_cancellation_escrow(&subscriber, &sub_id);
+    assert_eq!(claimed, deposit);
+
     let subscriber_balance_after = token_client.balance(&subscriber);
     assert_eq!(
         subscriber_balance_after,

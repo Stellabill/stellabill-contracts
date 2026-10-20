@@ -25,10 +25,13 @@ fn do_propose_admin_stores_the_new_admin_and_expiry() {
     let (env, client, current_admin) = setup();
     let new_admin = Address::generate(&env);
 
-    assert_eq!(
-        admin::do_propose_admin(&env, current_admin.clone(), new_admin.clone()),
-        Ok(())
-    );
+    // Storage writes require a contract context.
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            admin::do_propose_admin(&env, current_admin.clone(), new_admin.clone()),
+            Ok(())
+        );
+    });
 
     let proposal = client
         .get_admin_proposal()
@@ -45,7 +48,8 @@ fn do_propose_admin_rejects_a_non_admin_without_mutating_state() {
     let stranger = Address::generate(&env);
     let new_admin = Address::generate(&env);
 
-    let result = admin::do_propose_admin(&env, stranger, new_admin);
+    let result =
+        env.as_contract(&client.address, || admin::do_propose_admin(&env, stranger, new_admin));
 
     assert_eq!(result, Err(Error::Unauthorized));
     assert!(client.get_admin_proposal().is_none());
@@ -56,7 +60,9 @@ fn do_propose_admin_rejects_a_non_admin_without_mutating_state() {
 fn do_propose_admin_rejects_the_contract_address_without_mutating_state() {
     let (env, client, current_admin) = setup();
 
-    let result = admin::do_propose_admin(&env, current_admin.clone(), client.address.clone());
+    let result = env.as_contract(&client.address, || {
+        admin::do_propose_admin(&env, current_admin.clone(), client.address.clone())
+    });
 
     assert_eq!(result, Err(Error::InvalidNewAdmin));
     assert!(client.get_admin_proposal().is_none());
@@ -69,10 +75,14 @@ fn do_propose_admin_rejects_a_second_proposal_and_preserves_the_first() {
     let first_admin = Address::generate(&env);
     let second_admin = Address::generate(&env);
 
-    admin::do_propose_admin(&env, current_admin.clone(), first_admin.clone()).unwrap();
+    env.as_contract(&client.address, || {
+        admin::do_propose_admin(&env, current_admin.clone(), first_admin.clone()).unwrap();
+    });
     let before = client.get_admin_proposal();
 
-    let result = admin::do_propose_admin(&env, current_admin, second_admin);
+    let result = env.as_contract(&client.address, || {
+        admin::do_propose_admin(&env, current_admin, second_admin)
+    });
 
     assert_eq!(result, Err(Error::ProposalAlreadyExists));
     assert_eq!(client.get_admin_proposal(), before);
@@ -84,10 +94,12 @@ fn do_propose_admin_saturates_expiry_at_the_timestamp_boundary() {
     env.ledger().set_timestamp(u64::MAX - 1);
     let new_admin = Address::generate(&env);
 
-    assert_eq!(
-        admin::do_propose_admin(&env, current_admin, new_admin),
-        Ok(())
-    );
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            admin::do_propose_admin(&env, current_admin, new_admin),
+            Ok(())
+        );
+    });
 
     let proposal = client
         .get_admin_proposal()
