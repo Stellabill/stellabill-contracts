@@ -17,7 +17,7 @@
 //! bookkeeping it protects) is read through the internal helpers inside the
 //! vault's storage context.
 
-use crate::admin::{get_token, get_token_decimals, is_token_accepted};
+use crate::admin::{get_token, get_token_decimals, is_token_accepted, list_accepted_tokens};
 use crate::test_utils::setup::TestEnv;
 use crate::types::{DataKey, Error};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
@@ -32,6 +32,14 @@ fn default_token(env: &Env, client: &SubscriptionVaultClient) -> Result<Address,
 
 fn accepted(env: &Env, client: &SubscriptionVaultClient, token: &Address) -> bool {
     env.as_contract(&client.address, || is_token_accepted(env, token))
+}
+
+fn accepted_count(env: &Env, client: &SubscriptionVaultClient) -> u32 {
+    env.as_contract(&client.address, || list_accepted_tokens(env).len())
+}
+
+fn decimals(env: &Env, client: &SubscriptionVaultClient, token: &Address) -> Result<u32, Error> {
+    env.as_contract(&client.address, || get_token_decimals(env, token))
 }
 
 #[test]
@@ -71,20 +79,26 @@ fn removing_a_non_default_accepted_token_leaves_the_default_token_intact() {
     te.client.add_accepted_token(&te.admin, &other, &7u32);
     // add/remove share the "AcceptedTokens" cooldown key, so space them out.
     te.jump(6 * 60 * 60 + 1);
+    assert_eq!(accepted_count(&te.env, &te.client), 2);
     te.client.remove_accepted_token(&te.admin, &other);
 
     assert!(!accepted(&te.env, &te.client, &other));
+    assert_eq!(decimals(&te.env, &te.client, &other), Err(Error::NotFound));
+    assert_eq!(accepted_count(&te.env, &te.client), 1);
     assert_eq!(default_token(&te.env, &te.client), Ok(te.token.clone()));
 }
 
 #[test]
 fn the_default_token_cannot_be_removed() {
     let te = TestEnv::default();
+    let accepted_before = accepted_count(&te.env, &te.client);
 
     let res = te.client.try_remove_accepted_token(&te.admin, &te.token);
 
     assert_eq!(res, Err(Ok(Error::InvalidInput)));
     assert!(accepted(&te.env, &te.client, &te.token));
+    assert_eq!(decimals(&te.env, &te.client, &te.token), Ok(6));
+    assert_eq!(accepted_count(&te.env, &te.client), accepted_before);
     assert_eq!(default_token(&te.env, &te.client), Ok(te.token.clone()));
 }
 
@@ -136,6 +150,7 @@ fn get_token_is_not_affected_by_a_rejected_remove_call() {
     let te = TestEnv::default();
     let other = Address::generate(&te.env);
     te.client.add_accepted_token(&te.admin, &other, &7u32);
+    let accepted_before = accepted_count(&te.env, &te.client);
 
     // A non-admin caller must be rejected before any state changes.
     let stranger = Address::generate(&te.env);
@@ -143,5 +158,7 @@ fn get_token_is_not_affected_by_a_rejected_remove_call() {
 
     assert_eq!(res, Err(Ok(Error::Forbidden)));
     assert!(accepted(&te.env, &te.client, &other));
+    assert_eq!(decimals(&te.env, &te.client, &other), Ok(7));
+    assert_eq!(accepted_count(&te.env, &te.client), accepted_before);
     assert_eq!(default_token(&te.env, &te.client), Ok(te.token.clone()));
 }
