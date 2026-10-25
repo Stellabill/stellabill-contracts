@@ -1380,6 +1380,123 @@ pub fn do_migrate(
     Ok(())
 }
 
+#[cfg(test)]
+mod migrate_config_to_persistent_tests {
+    use super::*;
+    use crate::test_utils::setup::TestEnv;
+    use crate::types::{DataKey, Error, SchemaMigratedEvent};
+    use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, IntoVal};
+
+    #[test]
+    fn rejects_uninitialized_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+
+        let err = env.as_contract(&Address::generate(&env), || {
+            migrate_config_to_persistent(&env, admin)
+        }).unwrap_err();
+        assert_eq!(err, Error::NotInitialized);
+    }
+
+    #[test]
+    fn rejects_non_admin_caller_and_leaves_state_unchanged() {
+        let te = TestEnv::default();
+        let outsider = Address::generate(&te.env);
+
+        let err = te.env.as_contract(&te.client.address, || {
+            migrate_config_to_persistent(&te.env, outsider)
+        }).unwrap_err();
+        assert_eq!(err, Error::Forbidden);
+
+        te.env.as_contract(&te.client.address, || {
+            assert_eq!(
+                te.env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+                Some(crate::STORAGE_VERSION)
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_downgrade_when_version_greater_than_3() {
+        let te = TestEnv::default();
+        
+        te.env.as_contract(&te.client.address, || {
+            te.env.storage().persistent().set(&DataKey::SchemaVersion, &4u32);
+        });
+
+        let err = te.env.as_contract(&te.client.address, || {
+            migrate_config_to_persistent(&te.env, te.admin.clone())
+        }).unwrap_err();
+        assert_eq!(err, Error::SchemaMigrationDowngrade);
+
+        te.env.as_contract(&te.client.address, || {
+            assert_eq!(
+                te.env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion),
+                Some(4u32)
+            );
+        });
+    }
+
+    #[test]
+    fn migrates_state_when_version_is_less_than_3() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let token = Address::generate(&env);
+        let min_topup = 1_000_000i128;
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::SchemaVersion, &2u32);
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage().instance().set(&DataKey::Token, &token);
+            env.storage().instance().set(&DataKey::MinTopup, &min_topup);
+
+            let res = migrate_config_to_persistent(&env, admin.clone());
+            assert_eq!(res, Ok(()));
+
+            assert_eq!(env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(3));
+            assert_eq!(env.storage().persistent().get::<_, Address>(&DataKey::Admin), Some(admin.clone()));
+            assert_eq!(env.storage().persistent().get::<_, Address>(&DataKey::Token), Some(token));
+            assert_eq!(env.storage().persistent().get::<_, i128>(&DataKey::MinTopup), Some(min_topup));
+
+            assert!(!env.storage().instance().has(&DataKey::SchemaVersion));
+            assert!(!env.storage().instance().has(&DataKey::Admin));
+            assert!(!env.storage().instance().has(&DataKey::Token));
+            assert!(!env.storage().instance().has(&DataKey::MinTopup));
+            
+            let events = env.events().all();
+            let last = events.last().expect("no events");
+            let payload: SchemaMigratedEvent = last.2.into_val(&env);
+            assert_eq!(payload.admin, admin);
+            assert_eq!(payload.from_version, 2);
+            assert_eq!(payload.to_version, 3);
+        });
+    }
+
+    #[test]
+    fn succeeds_when_version_is_3() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(&DataKey::SchemaVersion, &3u32);
+            env.storage().persistent().set(&DataKey::Admin, &admin);
+
+            let events_before = env.events().all().len();
+            let res = migrate_config_to_persistent(&env, admin.clone());
+            assert_eq!(res, Ok(()));
+            let events_after = env.events().all().len();
+            assert_eq!(events_after, events_before + 1);
+
+            assert_eq!(env.storage().persistent().get::<_, u32>(&DataKey::SchemaVersion), Some(3));
+        });
+    }
+}
+
 /// Adversarial coverage for [`rewrite_subscriptions_for_arrears`].
 ///
 /// The migration helper is a pure read-write round-trip over every
