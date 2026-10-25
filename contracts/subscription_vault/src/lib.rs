@@ -3591,3 +3591,6 @@ mod test_blocklist_is_blocklisted;
 
 #[cfg(test)]
 mod test_do_propose_admin;
+
+#[cfg(test)]
+mod test_add_total_accounted;
