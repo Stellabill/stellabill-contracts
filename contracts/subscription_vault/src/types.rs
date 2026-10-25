@@ -4,8 +4,7 @@
 //! or contract entrypoints.
 
 use soroban_sdk::{
-    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol,
-    Vec,
+    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 /// Current schema version for contract events.
@@ -160,6 +159,8 @@ pub enum DataKey {
     FeeBps,
     /// Treasury address for protocol fee collection. Discriminant 23.
     Treasury,
+    /// Multi-beneficiary treasury split config (persistent). Discriminant 86.
+    TreasurySplit,
     /// List of all token addresses accepted by the vault. Discriminant 24.
     AcceptedTokens,
     /// Decimals for a specific accepted token. Discriminant 25.
@@ -249,43 +250,45 @@ pub enum DataKey {
     ChargeFailureCounter(u32),
     /// Auto-pause threshold (consecutive failures before auto-pause). Discriminant 66.
     AutoPauseThreshold,
-    /// Buyout premium in basis points for grace-period recovery. Discriminant 68.
+    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 79.
+    DelegatedPayerGrant(Address, Address),
+    /// Split payees details for split-billing. Discriminant 80.
+    SplitPayees(u32),
+    /// Buyout premium in basis points for grace-period recovery. Discriminant 67.
     BuyoutPremiumBps,
-    /// Coupon code bound to a subscription (persistent). Discriminant 69.
+    /// Merchant vacation window storing (start_ts, end_ts). Discriminant 62.
+    MerchantVacation(Address),
+    /// Coupon code bound to a subscription (persistent). Discriminant 68.
     SubCoupon(u32),
-    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 70.
+    /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 69.
     MerchantMultiSig(Address),
-    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 71.
+    /// Count of a subscriber's currently-`Active` subscriptions (instance). Discriminant 70.
     SubscriberActiveCount(Address),
-    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 72.
+    /// Admin override of a subscriber's active-subscription cap (instance). Discriminant 71.
     SubscriberActiveCapOverride(Address),
     /// Admin-controlled allowlist of valid merchant compliance-category tags (instance,
-    /// global). Discriminant 73.
+    /// global). Discriminant 72.
     TagAllowlist,
     /// Compliance-category tags assigned to a merchant, capped at `MAX_MERCHANT_TAGS`
-    /// (instance). Discriminant 74.
+    /// (instance). Discriminant 73.
     MerchantTags(Address),
     /// Optional fee-token override: when set, protocol fees are paid in this
     /// token instead of the subscription's settlement token, converted through
-    /// the oracle at charge time. Discriminant 75.
+    /// the oracle at charge time. Discriminant 74.
     FeeToken,
-    /// Cancellation refund escrow record keyed by subscription ID. Discriminant 76.
+    /// Cancellation refund escrow record keyed by subscription ID. Discriminant 75.
     CancellationEscrow(u32),
-    /// Per-merchant protocol-fee override in basis points (instance). Discriminant 77.
+    /// Per-merchant protocol-fee override in basis points (instance). Discriminant 76.
     MerchantFeeBps(Address),
-    /// Per-token oracle price history ring-buffer metadata (instance). Discriminant 78.
+    /// Per-token oracle price history ring-buffer metadata (instance). Discriminant 77.
     OraclePriceHistoryMeta(Address),
-    /// Per-token oracle price history ring-buffer entry (instance). Discriminant 79.
+    /// Per-token oracle price history ring-buffer entry (instance). Discriminant 78.
     OraclePriceHistoryEntry(Address, u32),
-    /// Delegated payer grant keyed by (subscriber, payer). Discriminant 80.
-    DelegatedPayerGrant(Address, Address),
-    /// Split payees details for split-billing. Discriminant 81.
-    SplitPayees(u32),
-    /// Merchant sub-account balance keyed by (merchant, label) (instance). Discriminant 82.
+    /// Merchant sub-account balance keyed by (merchant, label). Discriminant 81.
     MerchantSubAccount(Address, Symbol),
-    /// List of registered sub-account labels for a merchant (instance). Discriminant 83.
+    /// List of sub-account labels for a merchant. Discriminant 82.
     MerchantSubAccountList(Address),
-    /// Subscriber emergency-withdrawal intent keyed by subscription ID (persistent). Discriminant 84.
+    /// Emergency withdraw intent keyed by subscription ID. Discriminant 83.
     EmergencyWithdrawIntent(u32),
     /// Merchant vacation window storing (start_ts, end_ts) (instance). Discriminant 85.
     MerchantVacation(Address),
@@ -323,6 +326,7 @@ impl DataKey {
             DataKey::GracePeriod => 21,
             DataKey::FeeBps => 22,
             DataKey::Treasury => 23,
+            DataKey::TreasurySplit => 86,
             DataKey::AcceptedTokens => 24,
             DataKey::TokenDecimals(_) => 25,
             DataKey::NextPlanId => 26,
@@ -1137,16 +1141,6 @@ pub enum Error {
     CooldownActive = 4012,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
-    /// Subscriber requested an emergency withdrawal while one is already in progress.
-    EmergencyWithdrawCooldownActive = 4015,
-    /// No emergency-withdrawal intent exists for this subscription.
-    EmergencyWithdrawNotRequested = 4016,
-    /// The emergency-withdrawal intent state was changed concurrently.
-    EmergencyWithdrawStateChanged = 4017,
-    /// Emergency withdrawal is not allowed from the current subscription state.
-    EmergencyWithdrawInvalidState = 4018,
-    /// A referral/rebate cannot target the subscriber themselves.
-    SelfReferralNotAllowed = 4019,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -3210,6 +3204,9 @@ pub struct SubscriptionPausedEvent {
 }
 
 /// Cancellation escrow record for a subscription.
+/// Window in seconds for cancellation escrow disputes (7 days).
+pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CancellationEscrow {
