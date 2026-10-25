@@ -1,0 +1,19 @@
+warning: failed to save last-use data
+This may prevent cargo from accurately tracking what is being used in its global cache. This information is used for automatically removing unused data in the cache.
+
+database or disk is full
+
+Caused by:
+  Error code 13: database or disk is full
+   Compiling subscription_vault v0.1.0 (C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\contracts\subscription_vault)
+warning: unused import: `Subscription`
+  --> contracts\subscription_vault\src\charge_core.rs:39:30
+   |
+39 |error: There is not enough space on the disk. (os error 112)
+warningerror: could not compile `subscription_vault` (lib test); 1 warning emitted
+
+Caused by:
+  There is not enough space on the disk. (os error 112)
+
+Caused by:
+  failed to parse process output: `C:\Users\ADMIN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name subscription_vault --edition=2021 contracts\subscription_vault\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --cfg "feature=\"default\"" --cfg "feature=\"oracle-pricing\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"default\", \"oracle-pricing\"))" -C metadata=f997d6bbca913be6 -C extra-filename=-eff681d659df35c1 --out-dir C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\target\debug\deps -C incremental=C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\target\debug\incremental -L dependency=C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\target\debug\deps --extern soroban_sdk=C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\target\debug\deps\libsoroban_sdk-37fdd656268f2faa.rlib` (exit code: 1)

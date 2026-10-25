@@ -724,7 +724,7 @@ pub fn charge_one(
                             merchant: sub.merchant.clone(),
                             token: sub.token.clone(),
                             fee_amount,
-                            treasury: treasury.clone(),
+                            merchant: sub.merchant.clone(),
                             timestamp: now,
                             schema_version: crate::types::EVENT_SCHEMA_VERSION,
                         },

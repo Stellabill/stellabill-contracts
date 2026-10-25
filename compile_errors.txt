@@ -1,0 +1,1106 @@
+   Compiling serde_core v1.0.228
+    Checking cfg-if v1.0.4
+    Checking typenum v1.19.0
+   Compiling itoa v1.0.17
+    Checking zeroize v1.8.2
+   Compiling zmij v1.0.21
+   Compiling memchr v2.8.0
+    Checking subtle v2.6.1
+    Checking const-oid v0.9.6
+    Checking getrandom v0.2.17
+   Compiling semver v1.0.27
+    Checking rand_core v0.6.4
+    Checking generic-array v0.14.9
+    Checking num-traits v0.2.19
+    Checking zerocopy v0.8.39
+   Compiling thiserror v1.0.69
+   Compiling data-encoding v2.10.0
+   Compiling rustc_version v0.4.1
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.6
+   Compiling escape-bytes v0.1.1
+    Checking digest v0.10.7
+    Checking num-integer v0.1.46
+    Checking ff v0.13.1
+    Checking der v0.7.10
+    Checking base16ct v0.2.0
+    Checking signature v2.2.0
+    Checking group v0.13.0
+    Checking num-bigint v0.4.6
+    Checking crypto-bigint v0.5.5
+    Checking once_cell v1.21.3
+    Checking cpufeatures v0.2.17
+    Checking either v1.15.0
+    Checking sec1 v0.7.3
+    Checking itertools v0.10.5
+    Checking hmac v0.12.1
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling serde_with v3.16.1
+    Checking elliptic-curve v0.13.8
+    Checking rfc6979 v0.4.0
+   Compiling hex v0.4.3
+    Checking libm v0.2.16
+    Checking sha2 v0.10.9
+   Compiling curve25519-dalek v4.1.3
+   Compiling hashbrown v0.16.1
+   Compiling crate-git-revision v0.0.6
+   Compiling equivalent v1.0.2
+    Checking ppv-lite86 v0.2.21
+    Checking ahash v0.8.12
+    Checking hashbrown v0.13.2
+    Checking indexmap-nostd v0.4.0
+   Compiling stellar-strkey v0.0.9
+   Compiling stellar-xdr v22.1.0
+    Checking rand_chacha v0.3.1
+    Checking rand v0.8.5
+    Checking downcast-rs v1.2.1
+    Checking wasmparser-nostd v0.100.2
+   Compiling indexmap v2.13.0
+   Compiling soroban-env-common v22.1.3
+    Checking ark-std v0.4.0
+    Checking ecdsa v0.16.9
+    Checking arbitrary v1.3.2
+    Checking ark-serialize v0.4.2
+    Checking spin v0.9.8
+    Checking ark-ff v0.4.2
+    Checking smallvec v1.15.1
+    Checking base64 v0.13.1
+    Checking wasmi_core v0.13.0
+    Checking wasmi_arena v0.4.1
+    Checking wasmparser v0.116.1
+    Checking primeorder v0.13.6
+    Checking ed25519 v2.2.3
+    Checking soroban-wasmi v0.31.1-soroban.20.0.1
+    Checking keccak v0.1.6
+    Checking ethnum v1.5.3
+    Checking static_assertions v1.1.0
+    Checking sha3 v0.10.8
+    Checking ed25519-dalek v2.2.0
+    Checking p256 v0.13.2
+    Checking k256 v0.13.4
+   Compiling soroban-sdk-macros v22.0.10
+    Checking hex-literal v0.4.1
+    Checking ark-poly v0.4.2
+   Compiling soroban-sdk v22.0.10
+    Checking ark-ec v0.4.2
+    Checking ark-bls12-381 v0.4.0
+   Compiling soroban-spec v22.0.10
+   Compiling soroban-spec-rust v22.0.10
+   Compiling soroban-env-macros v22.1.3
+    Checking soroban-env-host v22.1.3
+    Checking soroban-ledger-snapshot v22.0.10
+    Checking subscription_vault v0.1.0 (C:\Users\ADMIN\Desktop\midea-drips\stellabill-contracts\contracts\subscription_vault)
+error[E0432]: unresolved imports `types::ProtocolFeeChargedEvent`, `types::ProtocolFeeConfiguredEvent`
+   --> contracts\subscription_vault\src\lib.rs:134:78
+    |
+134 |     OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
+    |                                                                              ^^^^^^^^^^^^^^^^^^^^^^^ no `ProtocolFeeChargedEvent` in `types`
+135 |     ProtocolFeeConfiguredEvent, RecoveryEvent,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ProtocolFeeConfiguredEvent` in `types`
+
+error[E0422]: cannot find struct, variant or union type `ProtocolFeeConfiguredEvent` in module `crate::types`
+   --> contracts\subscription_vault\src\admin.rs:334:23
+    |
+334 |         crate::types::ProtocolFeeConfiguredEvent {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::types`
+
+error[E0422]: cannot find struct, variant or union type `ProtocolFeeChargedEvent` in module `crate::types`
+   --> contracts\subscription_vault\src\charge_core.rs:181:39
+    |
+181 |                         crate::types::ProtocolFeeChargedEvent {
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::types`
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts\subscription_vault\src\test.rs:4391:5
+     |
+4391 |     client.deposit_funds(&id, &subscriber, &200_000_000i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts\subscription_vault\src\test.rs:4435:5
+     |
+4435 |     client.deposit_funds(&id, &subscriber, &200_000_000i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts\subscription_vault\src\test.rs:4486:5
+     |
+4486 |     client.deposit_funds(&id, &subscriber, &500_000_000i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts\subscription_vault\src\test.rs:4755:5
+     |
+4755 |     client.deposit_funds(&id, &subscriber, &100_000_000i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts\subscription_vault\src\test.rs:4783:5
+     |
+4783 |     client.deposit_funds(&id, &subscriber, &100_000_000i128);
+     |     ^^^^^^ not found in this scope
+
+warning: unused import: `Subscription`
+  --> contracts\subscription_vault\src\charge_core.rs:39:30
+   |
+39 |     LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+   |                              ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias` and `UsageState`
+  --> contracts\subscription_vault\src\subscription.rs:50:5
+   |
+50 |     SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+51 |     UsageLimits, UsageState,
+   |                  ^^^^^^^^^^
+
+warning: unused import: `Symbol`
+ --> contracts\subscription_vault\src\test_admin.rs:4:58
+  |
+4 | use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+  |                                                          ^^^^^^
+
+warning: unused import: `Val`
+ --> contracts\subscription_vault\src\test_auth_fuzz.rs:8:47
+  |
+8 |     Address, Env, Vec as SorobanVec, IntoVal, Val,
+  |                                               ^^^
+
+warning: unused import: `Ledger as _`
+ --> contracts\subscription_vault\src\test_recovery.rs:6:57
+  |
+6 | use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+  |                                                         ^^^^^^^^^^^
+
+warning: unused imports: `IntoVal` and `Symbol`
+ --> contracts\subscription_vault\src\test_recovery.rs:7:48
+  |
+7 | use soroban_sdk::{token, Address, Env, String, Symbol, IntoVal};
+  |                                                ^^^^^^  ^^^^^^^
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+   --> contracts\subscription_vault\src\test.rs:873:15
+    |
+873 |     let sub = Subscription {
+    |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+   --> contracts\subscription_vault\src\test.rs:895:15
+    |
+895 |     let sub = Subscription {
+    |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0061]: this method takes 6 arguments but 7 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:1371:35
+     |
+1371 |     let plan_v2 = test_env.client.update_plan_template(
+     |                                   ^^^^^^^^^^^^^^^^^^^^
+...
+1378 |         &None::<u64>,
+     |         ------------ unexpected argument #7 of type `&core::option::Option<u64>`
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:917:12
+     |
+ 917 |     pub fn update_plan_template(
+     |            ^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+1377 -         &None::<i128>,
+1378 -         &None::<u64>,
+1377 +         &None::<i128>,
+     |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:1391:25
+     |
+1391 |           test_env.client.try_create_subscription(
+     |  _________________________^^^^^^^^^^^^^^^^^^^^^^^-
+1392 | |             &subscriber,
+1393 | |             &merchant,
+1394 | |             &AMOUNT,
+...    |
+1397 | |             &None::<i128>,
+1398 | |         ),
+     | |_________- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+1391 |         test_env.client.try_create_subscription(
+ ...
+1397 |             &None::<i128>,
+1398 ~             /* &core::option::Option<u64> */,
+1399 ~         ),
+     |
+
+error[E0061]: this method takes 8 arguments but 7 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:1402:25
+     |
+1402 |           test_env.client.try_create_subscription_with_token(
+     |  _________________________^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+1403 | |             &subscriber,
+1404 | |             &merchant,
+1405 | |             &test_env.token,
+...    |
+1409 | |             &None::<i128>,
+1410 | |         ),
+     | |_________- argument #8 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:678:12
+     |
+ 678 |     pub fn create_subscription_with_token(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 687 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+1402 |         test_env.client.try_create_subscription_with_token(
+ ...
+1409 |             &None::<i128>,
+1410 ~             /* &core::option::Option<u64> */,
+1411 ~         ),
+     |
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:2177:15
+     |
+2177 |     let sub = Subscription {
+     |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:2198:15
+     |
+2198 |     let sub = Subscription {
+     |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:2219:15
+     |
+2219 |     let sub = Subscription {
+     |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:2239:15
+     |
+2239 |     let sub = Subscription {
+     |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:2366:15
+     |
+2366 |     let sub = Subscription {
+     |               ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0061]: this method takes 5 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:3051:41
+     |
+3051 |     let plan_family_b = test_env.client.create_plan_template(
+     |                                         ^^^^^^^^^^^^^^^^^^^^
+...
+3057 |         &None::<u64>,
+     |         ------------ unexpected argument #6 of type `&core::option::Option<u64>`
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:781:12
+     |
+ 781 |     pub fn create_plan_template(
+     |            ^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+3056 -         &None::<i128>,
+3057 -         &None::<u64>,
+3056 +         &None::<i128>,
+     |
+
+error[E0308]: mismatched types
+    --> contracts\subscription_vault\src\test.rs:3206:9
+     |
+3204 |     let plan_id = test_env.client.create_plan_template(
+     |                                   -------------------- arguments to this method are incorrect
+3205 |         &merchant,
+3206 |         &AMOUNT * 2,
+     |         ^^^^^^^^^^^ expected `&i128`, found `i128`
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:781:12
+     |
+ 781 |     pub fn create_plan_template(
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+ 784 |         amount: i128,
+     |         ------------
+help: consider borrowing here
+     |
+3206 |         &(&AMOUNT * 2),
+     |         ++           +
+
+error[E0609]: no field `has_next` on type `SubscriptionsPage`
+    --> contracts\subscription_vault\src\test.rs:3217:19
+     |
+3217 |     assert!(!page.has_next);
+     |                   ^^^^^^^^ unknown field
+     |
+     = note: available fields are: `subscription_ids`, `next_start_id`
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:4848:34
+     |
+4848 |       let result = test_env.client.try_create_subscription(
+     |  __________________________________^^^^^^^^^^^^^^^^^^^^^^^-
+4849 | |         &subscriber,
+4850 | |         &merchant,
+4851 | |         &10i128,
+...    |
+4854 | |         &Some(9i128),
+4855 | |     );
+     | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+4848 |     let result = test_env.client.try_create_subscription(
+ ...
+4854 |         &Some(9i128),
+4855 ~         /* &core::option::Option<u64> */,
+4856 ~     );
+     |
+
+error[E0061]: this method takes 8 arguments but 7 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:4921:34
+     |
+4921 |       let result = test_env.client.try_create_subscription_with_token(
+     |  __________________________________^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+4922 | |         &subscriber,
+4923 | |         &merchant,
+4924 | |         &test_env.token,
+...    |
+4928 | |         &Some(9i128),
+4929 | |     );
+     | |_____- argument #8 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:678:12
+     |
+ 678 |     pub fn create_subscription_with_token(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 687 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+4921 |     let result = test_env.client.try_create_subscription_with_token(
+ ...
+4928 |         &Some(9i128),
+4929 ~         /* &core::option::Option<u64> */,
+4930 ~     );
+     |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:4960:30
+     |
+4960 |       let id = test_env.client.create_subscription(
+     |  ______________________________^^^^^^^^^^^^^^^^^^^-
+4961 | |         &subscriber,
+4962 | |         &merchant,
+4963 | |         &i128::MAX,
+...    |
+4966 | |         &Some(i128::MAX),
+4967 | |     );
+     | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+4960 |     let id = test_env.client.create_subscription(
+ ...
+4966 |         &Some(i128::MAX),
+4967 ~         /* &core::option::Option<u64> */,
+4968 ~     );
+     |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:4978:34
+     |
+4978 |       let result = test_env.client.try_create_subscription(
+     |  __________________________________^^^^^^^^^^^^^^^^^^^^^^^-
+4979 | |         &subscriber,
+4980 | |         &merchant,
+4981 | |         &i128::MAX,
+...    |
+4984 | |         &Some(i128::MAX - 1),
+4985 | |     );
+     | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+4978 |     let result = test_env.client.try_create_subscription(
+ ...
+4984 |         &Some(i128::MAX - 1),
+4985 ~         /* &core::option::Option<u64> */,
+4986 ~     );
+     |
+
+error[E0599]: no variant, associated function, or constant named `AccidentalTransfer` found for enum `RecoveryReason` in the current scope
+    --> contracts\subscription_vault\src\test.rs:5130:26
+     |
+5130 |         &RecoveryReason::AccidentalTransfer,
+     |                          ^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `RecoveryReason`
+     |
+    ::: contracts\subscription_vault\src\types.rs:631:1
+     |
+ 631 | pub enum RecoveryReason {
+     | ----------------------- variant, associated function, or constant `AccidentalTransfer` not found for this enum
+
+error[E0061]: this method takes 6 arguments but 4 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:5126:21
+     |
+5126 |       test_env.client.recover_stranded_funds(
+     |  _____________________^^^^^^^^^^^^^^^^^^^^^^-
+5127 | |         &test_env.admin,
+5128 | |         &recipient,
+5129 | |         &1_000_000i128,
+     | |         -------------- expected `&Address`, found `&i128`
+5130 | |         &RecoveryReason::AccidentalTransfer,
+5131 | |     );
+     | |_____- two arguments of type `&soroban_sdk::String` and `&RecoveryReason` are missing
+     |
+     = note: expected reference `&soroban_sdk::Address`
+                found reference `&i128`
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:291:12
+     |
+ 291 |     pub fn recover_stranded_funds(
+     |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+ 295 |         recipient: Address,
+     |         ------------------
+ 296 |         amount: i128,
+ 297 |         recovery_id: String,
+     |         -------------------
+ 298 |         reason: RecoveryReason,
+     |         ----------------------
+help: provide the arguments
+     |
+5126 ~     test_env.client.recover_stranded_funds(
+5127 +         &test_env.admin,
+5128 +         &recipient,
+5129 +         /* &soroban_sdk::Address */,
+5130 +         &RecoveryReason::AccidentalTransfer,
+5131 +         /* &soroban_sdk::String */,
+5132 +         /* &RecoveryReason */,
+5133 ~     );
+     |
+
+error[E0599]: no variant, associated function, or constant named `AccidentalTransfer` found for enum `RecoveryReason` in the current scope
+    --> contracts\subscription_vault\src\test.rs:5173:26
+     |
+5173 |         &RecoveryReason::AccidentalTransfer,
+     |                          ^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `RecoveryReason`
+     |
+    ::: contracts\subscription_vault\src\types.rs:631:1
+     |
+ 631 | pub enum RecoveryReason {
+     | ----------------------- variant, associated function, or constant `AccidentalTransfer` not found for this enum
+
+error[E0061]: this method takes 6 arguments but 4 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:5169:21
+     |
+5169 |       test_env.client.recover_stranded_funds(
+     |  _____________________^^^^^^^^^^^^^^^^^^^^^^-
+5170 | |         &new_admin,
+5171 | |         &recipient,
+5172 | |         &1_000_000i128,
+     | |         -------------- expected `&Address`, found `&i128`
+5173 | |         &RecoveryReason::AccidentalTransfer,
+5174 | |     );
+     | |_____- two arguments of type `&soroban_sdk::String` and `&RecoveryReason` are missing
+     |
+     = note: expected reference `&soroban_sdk::Address`
+                found reference `&i128`
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:291:12
+     |
+ 291 |     pub fn recover_stranded_funds(
+     |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+ 295 |         recipient: Address,
+     |         ------------------
+ 296 |         amount: i128,
+ 297 |         recovery_id: String,
+     |         -------------------
+ 298 |         reason: RecoveryReason,
+     |         ----------------------
+help: provide the arguments
+     |
+5169 ~     test_env.client.recover_stranded_funds(
+5170 +         &new_admin,
+5171 +         &recipient,
+5172 +         /* &soroban_sdk::Address */,
+5173 +         &RecoveryReason::AccidentalTransfer,
+5174 +         /* &soroban_sdk::String */,
+5175 +         /* &RecoveryReason */,
+5176 ~     );
+     |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:6463:10
+     |
+6463 |         .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>);
+     |          ^^^^^^^^^^^^^^^^^^^------------------------------------------------- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+6463 |         .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, /* &core::option::Option<u64> */);
+     |                                                                             ++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:6466:10
+     |
+6466 |         .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>);
+     |          ^^^^^^^^^^^^^^^^^^^-------------------------------------------------- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+6466 |         .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, /* &core::option::Option<u64> */);
+     |                                                                              ++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:6470:14
+     |
+6470 |             .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>);
+     |              ^^^^^^^^^^^^^^^^^^^--------------------------------------------------- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+6470 |             .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, /* &core::option::Option<u64> */);
+     |                                                                                   ++++++++++++++++++++++++++++++++++
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:7093:24
+     |
+7093 |         let original = Subscription {
+     |                        ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0063]: missing field `grace_start_timestamp` in initializer of `types::Subscription`
+    --> contracts\subscription_vault\src\test.rs:7197:22
+     |
+7197 |         let legacy = Subscription {
+     |                      ^^^^^^^^^^^^ missing `grace_start_timestamp`
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+    --> contracts\subscription_vault\src\test.rs:7979:21
+     |
+7979 |       let id = client.create_subscription(
+     |  _____________________^^^^^^^^^^^^^^^^^^^-
+7980 | |         &subscriber,
+7981 | |         &merchant,
+7982 | |         &AMOUNT,
+...    |
+7985 | |         &Some(20_000_000i128),
+7986 | |     );
+     | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+     |
+note: method defined here
+    --> contracts\subscription_vault\src\lib.rs:639:12
+     |
+ 639 |     pub fn create_subscription(
+     |            ^^^^^^^^^^^^^^^^^^^
+...
+ 647 |         expires_at: Option<u64>,
+     |         -----------------------
+help: provide the argument
+     |
+7979 |     let id = client.create_subscription(
+ ...
+7985 |         &Some(20_000_000i128),
+7986 ~         /* &core::option::Option<u64> */,
+7987 ~     );
+     |
+
+error[E0061]: this method takes 5 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_auth_fuzz.rs:372:26
+    |
+372 |     let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None, &None::<u64>);
+    |                          ^^^^^^^^^^^^^^^^^^^^                                                ------------ unexpected argument #6 of type `&core::option::Option<u64>`
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:781:12
+    |
+781 |     pub fn create_plan_template(
+    |            ^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+372 -     let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None, &None::<u64>);
+372 +     let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None);
+    |
+
+error[E0061]: this enum variant takes 1 argument but 2 arguments were supplied
+   --> contracts\subscription_vault\src\test_expiration.rs:56:140
+    |
+ 56 | ...&false, &None::<i128>, &Some(expires_at, &None));
+    |                            ^^^^             ----- unexpected argument #2 of type `&core::option::Option<_>`
+    |
+note: tuple variant defined here
+   --> C:\Users\ADMIN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:605:5
+    |
+605 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: remove the extra argument
+    |
+ 56 -     let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &amount, &interval, &false, &None::<i128>, &Some(expires_at, &None));
+ 56 +     let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &amount, &interval, &false, &None::<i128>, &Some(expires_at));
+    |
+
+error[E0061]: this enum variant takes 1 argument but 2 arguments were supplied
+   --> contracts\subscription_vault\src\test_expiration.rs:96:131
+    |
+ 96 | ...0, &false, &None::<i128>, &Some(1050, &None));
+    |                               ^^^^       ----- unexpected argument #2 of type `&core::option::Option<_>`
+    |
+note: tuple variant defined here
+   --> C:\Users\ADMIN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:605:5
+    |
+605 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: remove the extra argument
+    |
+ 96 -     let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050, &None));
+ 96 +     let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+    |
+
+error[E0061]: this enum variant takes 1 argument but 2 arguments were supplied
+   --> contracts\subscription_vault\src\test_expiration.rs:136:132
+    |
+136 | ...0, &false, &None::<i128>, &Some(1050, &None));
+    |                               ^^^^       ----- unexpected argument #2 of type `&core::option::Option<_>`
+    |
+note: tuple variant defined here
+   --> C:\Users\ADMIN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:605:5
+    |
+605 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: remove the extra argument
+    |
+136 -     let sub_id1 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050, &None));
+136 +     let sub_id1 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+    |
+
+error[E0061]: this enum variant takes 1 argument but 2 arguments were supplied
+   --> contracts\subscription_vault\src\test_expiration.rs:158:132
+    |
+158 | ...0, &false, &None::<i128>, &Some(1050, &None));
+    |                               ^^^^       ----- unexpected argument #2 of type `&core::option::Option<_>`
+    |
+note: tuple variant defined here
+   --> C:\Users\ADMIN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\option.rs:605:5
+    |
+605 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: remove the extra argument
+    |
+158 -     let sub_id2 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050, &None));
+158 +     let sub_id2 = client.create_subscription_with_token(&subscriber, &merchant, &token.address, &100, &10, &false, &None::<i128>, &Some(1050));
+    |
+
+error[E0308]: mismatched types
+   --> contracts\subscription_vault\src\test_expiration.rs:182:80
+    |
+182 |     let sub_id = client.create_subscription_with_token(&subscriber, &merchant, &token, &100, &10, &false, &None::<i128>, &Some(1050));
+    |                         ------------------------------                         ^^^^^^ expected `&Address`, found `&TokenClient<'_>`
+    |                         |
+    |                         arguments to this method are incorrect
+    |
+    = note: expected reference `&soroban_sdk::Address`
+               found reference `&Client<'_>`
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:678:12
+    |
+678 |     pub fn create_subscription_with_token(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+682 |         token: Address,
+    |         --------------
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:40:25
+    |
+ 40 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+ 41 | |         &subscriber,
+ 42 | |         &merchant,
+ 43 | |         &1_000_000i128,
+...   |
+ 46 | |         &None::<i128>,
+ 47 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+ 40 |     let sub_id = client.create_subscription(
+...
+ 46 |         &None::<i128>,
+ 47 ~         /* &core::option::Option<u64> */,
+ 48 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:62:16
+    |
+ 62 |           client.try_create_subscription(
+    |  ________________^^^^^^^^^^^^^^^^^^^^^^^-
+ 63 | |             &subscriber,
+ 64 | |             &merchant,
+ 65 | |             &1_000_000i128,
+...   |
+ 68 | |             &None::<i128>
+ 69 | |         ),
+    | |_________- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+ 62 |         client.try_create_subscription(
+...
+ 67 |             &false,
+ 68 ~             &None::<i128>,
+ 69 +             /* &core::option::Option<u64> */,
+    |
+
+error[E0061]: this method takes 8 arguments but 7 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:73:16
+    |
+ 73 |           client.try_create_subscription_with_token(
+    |  ________________^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+ 74 | |             &subscriber,
+ 75 | |             &merchant,
+ 76 | |             &token,
+...   |
+ 80 | |             &None::<i128>
+ 81 | |         ),
+    | |_________- argument #8 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:678:12
+    |
+678 |     pub fn create_subscription_with_token(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+687 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+ 73 |         client.try_create_subscription_with_token(
+...
+ 79 |             &false,
+ 80 ~             &None::<i128>,
+ 81 +             /* &core::option::Option<u64> */,
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:162:25
+    |
+162 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+163 | |         &subscriber,
+164 | |         &merchant,
+165 | |         &1_000_000i128,
+...   |
+168 | |         &None::<i128>,
+169 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+162 |     let sub_id = client.create_subscription(
+...
+168 |         &None::<i128>,
+169 ~         /* &core::option::Option<u64> */,
+170 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:185:25
+    |
+185 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+186 | |         &subscriber,
+187 | |         &merchant,
+188 | |         &1_000_000i128,
+...   |
+191 | |         &None::<i128>,
+192 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+185 |     let sub_id = client.create_subscription(
+...
+191 |         &None::<i128>,
+192 ~         /* &core::option::Option<u64> */,
+193 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:214:25
+    |
+214 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+215 | |         &subscriber,
+216 | |         &merchant,
+217 | |         &amount,
+...   |
+220 | |         &Some(cap),
+221 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+214 |     let sub_id = client.create_subscription(
+...
+220 |         &Some(cap),
+221 ~         /* &core::option::Option<u64> */,
+222 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:253:25
+    |
+253 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+254 | |         &subscriber,
+255 | |         &merchant,
+256 | |         &1i128,
+...   |
+259 | |         &Some(cap),
+260 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+253 |     let sub_id = client.create_subscription(
+...
+259 |         &Some(cap),
+260 ~         /* &core::option::Option<u64> */,
+261 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:283:25
+    |
+283 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+284 | |         &subscriber,
+285 | |         &merchant,
+286 | |         &1i128,
+...   |
+289 | |         &Some(cap),
+290 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+283 |     let sub_id = client.create_subscription(
+...
+289 |         &Some(cap),
+290 ~         /* &core::option::Option<u64> */,
+291 ~     );
+    |
+
+error[E0061]: this method takes 7 arguments but 6 arguments were supplied
+   --> contracts\subscription_vault\src\test_emergency_stop_lifetime_caps.rs:321:25
+    |
+321 |       let sub_id = client.create_subscription(
+    |  _________________________^^^^^^^^^^^^^^^^^^^-
+322 | |         &subscriber,
+323 | |         &merchant,
+324 | |         &1_000_000i128,
+...   |
+327 | |         &Some(cap),
+328 | |     );
+    | |_____- argument #7 of type `&core::option::Option<u64>` is missing
+    |
+note: method defined here
+   --> contracts\subscription_vault\src\lib.rs:639:12
+    |
+639 |     pub fn create_subscription(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+647 |         expires_at: Option<u64>,
+    |         -----------------------
+help: provide the argument
+    |
+321 |     let sub_id = client.create_subscription(
+...
+327 |         &Some(cap),
+328 ~         /* &core::option::Option<u64> */,
+329 ~     );
+    |
+
+warning: unused variable: `token_addr`
+   --> contracts\subscription_vault\src\subscription.rs:829:9
+    |
+829 |     let token_addr = sub.token.clone();
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_addr`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tracked_batch`
+    --> contracts\subscription_vault\src\test.rs:1836:9
+     |
+1836 |     let tracked_batch = [valid_batch, low_batch, paused_batch];
+     |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tracked_batch`
+
+warning: unused variable: `tracked_single`
+    --> contracts\subscription_vault\src\test.rs:1837:9
+     |
+1837 |     let tracked_single = [valid_single, low_single, paused_single];
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tracked_single`
+
+warning: unused variable: `id1`
+    --> contracts\subscription_vault\src\test.rs:3080:9
+     |
+3080 |     let id1 = test_env.client.create_subscription(
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_id1`
+
+warning: unused variable: `cap`
+    --> contracts\subscription_vault\src\test.rs:3230:9
+     |
+3230 |     let cap = 2 * AMOUNT;
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_cap`
+
+warning: unused variable: `admin`
+  --> contracts\subscription_vault\src\test_admin.rs:64:31
+   |
+64 |     let (env, contract_id, _, admin) = setup_admin_env();
+   |                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_admin`
+
+warning: unused variable: `token_admin`
+  --> contracts\subscription_vault\src\test_recovery.rs:35:9
+   |
+35 |     let token_admin = admin.clone();
+   |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_token_admin`
+
+warning: unused variable: `admin`
+  --> contracts\subscription_vault\src\test_recovery.rs:72:30
+   |
+72 |     let (env, client, token, admin) = setup_env();
+   |                              ^^^^^ help: if this is intentional, prefix it with an underscore: `_admin`
+
+Some errors have detailed explanations: E0061, E0063, E0308, E0422, E0425, E0432, E0599, E0609.
+For more information about an error, try `rustc --explain E0061`.
+warning: `subscription_vault` (lib test) generated 14 warnings
+error: could not compile `subscription_vault` (lib test) due to 50 previous errors; 14 warnings emitted

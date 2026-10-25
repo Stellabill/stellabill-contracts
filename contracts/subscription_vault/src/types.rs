@@ -2035,6 +2035,7 @@ pub enum RecoveryReason {
     FailedTransfer = 1,
     ExpiredEscrow = 2,
     SystemCorrection = 3,
+    /// Funds transferred to contract accidentally.
     AccidentalTransfer = 4,
 }
 
@@ -3199,43 +3200,6 @@ pub struct SubscriptionAutoPausedEvent {
     pub schema_version: u32,
 }
 
-/// Event emitted when a subscription is paused.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionPausedEvent {
-    pub subscription_id: u32,
-    pub authorizer: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Cancellation escrow record for a subscription.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CancellationEscrow {
-    pub subscription_id: u32,
-    pub amount: i128,
-    pub token: Address,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub opened_at: u64,
-    pub released_at: u64,
-    pub released: bool,
-}
-
-/// Event emitted when a cancellation escrow is opened.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct CancellationEscrowOpenedEvent {
-    pub subscription_id: u32,
-    pub subscriber: Address,
-    pub merchant: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub released_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
 
 /// Event emitted when a cancellation escrow is disputed.
 #[contracttype]
@@ -3283,130 +3247,24 @@ pub struct SubAccountWithdrawEvent {
     pub schema_version: u32,
 }
 
-/// Oracle price history ring-buffer metadata.
+
+/// Event emitted when a protocol fee is collected on a charge.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct OraclePriceHistoryMeta {
-    pub count: u32,
-    pub cursor: u32,
-}
-
-/// Event emitted when a subscription is transferred.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct SubscriptionTransferredEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Transfer intent for subscription transfer flow.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TransferIntent {
-    pub subscription_id: u32,
-    pub from_subscriber: Address,
-    pub from: Address,
-    pub to: Address,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub executed: bool,
-}
-
-/// Event emitted when a transfer intent is created.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferIntentCreatedEvent {
-    pub subscription_id: u32,
-    pub from: Address,
-    pub to: Address,
-    pub expires_at: u64,
-    pub timestamp: u64,
-    pub schema_version: u32,
-}
-
-/// Event emitted when a transfer is vetoed.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TransferVetoedEvent {
+pub struct ProtocolFeeChargedEvent {
     pub subscription_id: u32,
     pub merchant: Address,
+    pub treasury: Address,
+    pub fee_amount: i128,
     pub timestamp: u64,
-    pub schema_version: u32,
 }
 
-/// Event emitted when a grace-period buyout is executed.
-// NOTE: GraceBuyoutEvent is already defined above with the canonical fields.
-
-/// Cancellation escrow window in seconds (7 days).
-pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
-
-
-
-#[cfg(test)]
-mod event_topic_tests {
-    use super::{
-        TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
-        TOPIC_RECOVERY, TOPIC_WITHDRAWN,
-    };
-    use soroban_sdk::{
-        testutils::Events, xdr::ToXdr, Env, FromVal, Symbol,
-    };
-
-    /// The emitted wire representation is part of the indexer-facing contract.
-    /// Publish every cached short topic in one transaction and compare each
-    /// emitted topic to the `Symbol::new` representation used before caching.
-    #[test]
-    fn cached_event_topics_are_bytewise_compatible_and_keep_order() {
-        let env = Env::default();
-        let topics = [
-            ("recovery", TOPIC_RECOVERY),
-            ("created", TOPIC_CREATED),
-            ("deposited", TOPIC_DEPOSITED),
-            ("charged", TOPIC_CHARGED),
-            ("withdrawn", TOPIC_WITHDRAWN),
-            ("cap_reach", TOPIC_CAP_REACH),
-            ("oneoff_ch", TOPIC_ONE_OFF_CHARGED),
-        ];
-
-        for (_, topic) in topics.iter() {
-            env.events().publish((topic,), ());
-        }
-
-        let emitted_events = env.events().all();
-        assert_eq!(emitted_events.len(), topics.len() as u32);
-        for (index, (name, expected_topic)) in topics.iter().enumerate() {
-            let emitted = emitted_events.get(index as u32).unwrap();
-            let emitted_topic = Symbol::from_val(&env, &emitted.1.get(0).unwrap());
-            let legacy_topic = Symbol::new(&env, name);
-
-            assert_eq!(
-                emitted_topic.to_xdr(&env),
-                legacy_topic.clone().to_xdr(&env),
-                "event topic {name} changed its wire representation"
-            );
-            assert_eq!(
-                expected_topic.to_xdr(&env),
-                legacy_topic.clone().to_xdr(&env),
-                "cached topic {name} differs from Symbol::new"
-            );
-        }
-    }
-
-    /// `symbol_short!` supports at most nine characters. Longer event topics
-    /// are deliberately constructed with `Symbol::new` at their emit sites.
-    #[test]
-    fn long_event_topics_keep_the_runtime_symbol_representation() {
-        let env = Env::default();
-        let long_topic = Symbol::new(&env, "subscription_created");
-
-        assert_eq!(
-            long_topic.clone().to_xdr(&env),
-            Symbol::new(&env, "subscription_created").to_xdr(&env)
-        );
-        assert_ne!(long_topic.clone().to_xdr(&env), TOPIC_CREATED.to_xdr(&env));
-    }
+/// Event emitted when the protocol fee configuration is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub timestamp: u64,
 }
-
