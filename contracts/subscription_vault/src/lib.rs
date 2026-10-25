@@ -3520,6 +3520,10 @@ mod test_treasury_split;
 mod test_admin_treasury_change;
 #[cfg(test)]
 mod test_operator;
+#[cfg(test)]
+mod test_governance;
+#[cfg(test)]
+mod test_calculate_quorum;
 
 #[cfg(test)]
 mod revoke_merchant_adversarial_tests {
